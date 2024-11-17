@@ -7,6 +7,7 @@ import scipy.sparse.linalg as sla
 import pylops as lo
 
 from diffqcp.proj_exp_cone import project_exp_cone
+from diffqcp.utils import Scalar
 
 # need to check for alternative to distutils, which was deprecated starting in Python 3.12 
 
@@ -70,7 +71,10 @@ def vec_symm(X):
     return X[(row_idx, col_idx)]
 
 
-def _proj(x: np.ndarray, cone, dual=False) -> np.ndarray:
+def _proj(x: np.ndarray,
+          cone,
+          dual=False
+) -> np.ndarray:
     if cone == EXP_DUAL:
         cone = EXP
         dual = not dual
@@ -110,7 +114,10 @@ def _proj(x: np.ndarray, cone, dual=False) -> np.ndarray:
         raise NotImplementedError("%s not implemented" % cone)
 
 
-def proj(x, cones, dual=False):
+def proj(x,
+         cones,
+         dual=False
+) -> np.ndarray:
     projection = np.zeros(x.shape)
     offset = 0
     for cone, sz in cones:
@@ -123,8 +130,11 @@ def proj(x, cones, dual=False):
             elif cone == EXP or cone == EXP_DUAL:
                 dim *= 3
             
-            projection[offset:offset+dim] = _proj(
-                x[offset:offset+dim], cone, dual=dual)
+            projection[offset:offset+dim] = _proj(x[offset:offset+dim],
+                                                  cone,
+                                                  dual=dual)
+            offset += dim
+    return projection
 
 def pi(z: Tuple[np.ndarray,
                 np.ndarray,
@@ -144,7 +154,7 @@ def pi(z: Tuple[np.ndarray,
 
 # ======= DERIVATIVES =======
 
-def _dprojection_soc(x: np.ndarray) -> sla.LinearOperator:
+def _dprojection_soc(x: np.ndarray) -> lo.LinearOperator:
     n = x.size
     t, z = x[0], x[1:]
     norm_z = la.norm(z)
@@ -163,7 +173,7 @@ def _dprojection_soc(x: np.ndarray) -> sla.LinearOperator:
             output = np.concatenate(([first_entry], second_chunk))
             return (1.0 / (2 * norm_z)) * output
         
-        return sla.LinearOperator((n, n), matvec=mv, rmatvec=mv)
+        return lo.aslinearoperator(sla.LinearOperator((n, n), matvec=mv, rmatvec=mv))
 
 def _dprojection_pos(x: np.ndarray) -> lo.LinearOperator:
     return lo.Diagonal(0.5 * (np.sign(x) + 1))
@@ -173,29 +183,49 @@ def _dprojection_zero(x: np.ndarray, dual: bool) -> lo.LinearOperator:
     n = x.size
     return lo.Identity(n) if dual else lo.Zero(n)
 
-def dprojection(x, cones, dual=False) -> lo.LinearOperator:
-    pass
-
-
-class Scalar(lo.LinearOperator):
-    """see documentation for how to test the operator
+def _dprojection(x: np.ndarray,
+                 cone,
+                 dual: bool=False
+) -> lo.LinearOperator:
+    if cone == EXP_DUAL:
+        cone = EXP
+        dual = not dual
     
-    version in diffcp cpp file can take in a vector for _matvec
-    
-    this successfully ran in a Jupyter notebook
-    """
+    if cone == ZERO:
+        return _dprojection_zero(x, dual)
+    elif cone == POS:
+        return _dprojection_pos(x)
+    elif cone == SOC:
+        return _dprojection(x)
+    elif cone == PSD:
+        raise NotImplementedError("%s not implemented" % cone)
+    elif cone == EXP:
+        raise NotImplementedError("%s not implemented" % cone)
 
-    def __init__(self, num: float):
-        self.num = num
-        self.shape = (1, 1)
-        self.dtype = float
+def dprojection(x: np.ndarray,
+                cones: List[Tuple[str,
+                                  Union[int, List[int]]
+                                 ]
+                           ],
+                dual=False
+) -> lo.LinearOperator:
+    ops = []
+    offset = 0
+    # TODO: create a cone iterator or something to consolidate?
+    for cone, sz in cones:
+        sz = sz if isinstance(sz, (tuple, list)) else (sz,)
+        if sum(sz) == 0:
+            continue
+        for dim in sz:
+            if cone == PSD:
+                dim = vec_psd_dim(dim)
+            elif cone == EXP or cone == EXP_DUAL:
+                dim *= 3
+            
+            ops.append(_dprojection(x[offset:offset + dim], cone, dual=dual))
+            offset += dim
 
-    def _matvec(self, x: float):
-        return self.num*x
-
-    def _rmatvec(self, x: np.ndarray):
-        return self._matvec(x)
-
+    return lo.BlockDiag(ops)
 
 def dpi(u: np.ndarray,
         v: np.ndarray,
@@ -208,7 +238,8 @@ def dpi(u: np.ndarray,
     """Derivative of the projection of z onto R^n x K^* x R_+
     """
 
-    gt_0 = lambda t : 1 if t >= 0.0 else 0.0
+    def gt_0(t):
+        return 1.0 if t >= 0.0 else 0.0
 
     ops = [lo.Identity(u.size),
            dprojection(v, cones, dual=True),

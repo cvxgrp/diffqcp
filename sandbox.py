@@ -6,6 +6,7 @@ import pylops as lo
 import cvxpy as cp
 import clarabel
 
+from diffqcp import ZERO
 from diffqcp.cones import parse_cone_dict, pi
 from diffqcp.qcp import compute_derivative
 
@@ -32,7 +33,6 @@ b = np.random.randn(m)
 # Compute analytical solution and derivative
 
 Dx_b = la.solve(A.T @ A, A.T)
-absDx_b = sla.aslinearoperator(Dx_b)
 x_ls = Dx_b @ b
 f0_ls = la.norm(A @ x_ls - b)**2
 
@@ -60,7 +60,7 @@ solver = clarabel.DefaultSolver(P_can, q_can,
 solution = solver.solve()
 
 cone_dict = {
-    'z' : cone_dims.zero
+    ZERO : cone_dims.zero
 }
 cones = parse_cone_dict(cone_dict)
 
@@ -76,7 +76,7 @@ data = np.zeros(A_can.size)
 dA = sparse.csc_matrix((data, nonzeros), shape=A_can.shape)
 # dq = 1e-4 * np.random.randn(q_can.size)
 db = 1e-4 * np.random.randn(b_can.size)
-dx, dy, ds = DS(dP, dA, np.zeros(q_can.size), db)
+dx, dy, ds = DS(dP, dA, np.zeros(q_can.size), -db) # since b_can = -b
 
 print(dx)
 print(dy)

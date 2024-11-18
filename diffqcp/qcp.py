@@ -31,7 +31,7 @@ def compute_derivative(P: csc_matrix,
     Given a solution (x, y, s) to a quadratic convex cone program
     with primal-dual problems
         
-        (P) minimize    x^T P x + q^T x        
+        (P) minimize    (1/2)x^T P x + q^T x        
             subject to  Ax + s = b             
                         s in K                            
     
@@ -112,16 +112,13 @@ def compute_derivative(P: csc_matrix,
         if np.allclose(dQ_D, 0):
             dz = np.zeros(dQ_D.size)
         else:
-            dz = lo.lsqr(M, -dQ_D)
-            dz = dz[0]
-
-        print("dz type: ", type(dz))
-        print("dz shape ", dz.shape)
+            dz = lo.lsqr(M, dQ_D)[0]
 
         du, dv, dw = np.split(dz, [n, n + m])
         dx = du - x * dw
         dy = D_Pi_Kstar_v._matvec(dv) - y * dw
         ds = D_Pi_Kstar_v._matvec(dv) - dv - s * dw
+        #(important) TODO: need to ensure these are negative
         return -dx, -dy, -ds
 
     return derivative

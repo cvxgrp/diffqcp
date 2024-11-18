@@ -17,7 +17,7 @@ def Du_Q(u: np.ndarray,
     n = P.shape[0]
     m = A.shape[0]
     N = n + m + 1
-    x, _, tau = u[:n], u[n:-1], u[-1]
+    x, tau = u[:n], u[-1]
     
     Px = P @ x
     xT_P_x = x @ Px
@@ -71,10 +71,10 @@ def form_M(u: np.ndarray,
                             ]
                        ]
 ) -> lo.LinearOperator:
-    DPi_z = dpi(u, v, w, cones)
+    Dz_Pi_z = dpi(u, v, w, cones)
     # M = Dz_Q_Pi_z.__matmul__(DPi_z).__sub__(DPi_z).__add__()
-    M = Dz_Q_Pi_z @ DPi_z - DPi_z + lo.Identity(u.size + v.size + 1)
-    return (1/w)*M
+    M = Dz_Q_Pi_z @ Dz_Pi_z - Dz_Pi_z + lo.Identity(u.size + v.size + 1)
+    return M
     
 
 class _qcpDerivative(lo.LinearOperator):

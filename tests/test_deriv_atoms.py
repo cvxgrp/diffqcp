@@ -3,17 +3,19 @@ Testing qcp derivative atom computations.
 
 Notes
 -----
-The `atol` parameters in the testing assertions
+- The `atol` parameters in the testing assertions
 have been raised to the largest value that still
 allows that respective test to pass.
+
+- Setting u[-1] equal to 1 (which will always be tue at the solution),
+yields more accurate derivative approximations (this makes sense when looking
+at the nonlinear transform Q).
 """
 
 import numpy as np
 import scipy.sparse as sparse
-from scipy.sparse import csc_matrix
-import scipy.sparse.linalg as sla
 from pylops.utils import dottest
-import pylops as lo
+from pylops.optimization.cls_leastsquares import lsqr
 
 from diffqcp.qcp_deriv import Du_Q, dData_Q
 import tests.utils as utils
@@ -81,10 +83,11 @@ def test_Du_Q_is_approximation():
                                                  np.random.randn)
 
         u = np.random.randn(N)
+        u[-1] = 1 # always the case when differentiating at soln.
         x, y, tau = u[:n], u[n: -1], u[-1]
         z = Q(P, A, q, b, x, y, tau)
 
-        du = 1e-7*np.random.randn(N)
+        du = 1e-5*np.random.randn(N)
         dx, dy, dtau = du[:n], du[n: -1], du[-1]
         dQ = Q(P, A, q, b, x + dx, y + dy, tau + dtau) - z
 
@@ -92,7 +95,7 @@ def test_Du_Q_is_approximation():
 
         np.testing.assert_allclose(dQ,
                                    deriv_op._matvec(du),
-                                   atol=1e-5)
+                                   atol=1e-8)
 
 
 def test_Du_Q_T_is_approximation():
@@ -123,7 +126,7 @@ def test_Du_Q_T_is_approximation():
         x, y, tau = u[:n], u[n: -1], u[-1]
         z = Q(P, A, q, b, x, y, tau)
 
-        du = 1e-7*np.random.randn(N)
+        du = 1e-5*np.random.randn(N)
         dx, dy, dtau = du[:n], du[n: -1], du[-1]
         dQ = Q(P, A, q, b, x + dx, y + dy, tau + dtau) - z
 
@@ -131,7 +134,7 @@ def test_Du_Q_T_is_approximation():
 
         np.testing.assert_allclose(du,
                                    deriv_op._rmatvec(dQ),
-                                   atol=1e-4)
+                                   atol=1e-7)
 
 
 def test_Du_Q_is_linop():
@@ -185,10 +188,8 @@ def test_Du_Q_lsqr():
         u[-1] = 1 # always the case when differentiating at soln.
 
         deriv_op = Du_Q(u, P, A, q, b)
-        deriv_op_scipy = sla.aslinearoperator(deriv_op)
 
-        x = 1e-7*np.random.randn(N)
-        # xlsqr = lo.lsqr(deriv_op, deriv_op._matvec(x))[0]
-        xlsqr = sla.lsqr(deriv_op_scipy, deriv_op_scipy.matvec(x))[0]
+        x = 1e-2*np.random.randn(N)
+        xlsqr = lsqr(deriv_op, deriv_op._matvec(x))[0]
 
         np.testing.assert_allclose(x, xlsqr, atol=1e-4)

@@ -6,6 +6,7 @@ from typing import Dict, Union, List, Callable, Tuple
 import numpy as np
 from scipy.sparse import csc_matrix
 import pylops as lo
+from pylops.optimization.cls_leastsquares import lsqr
 from clarabel import DefaultSolution
 
 import diffqcp.cones as cone_utils
@@ -119,7 +120,7 @@ def compute_derivative(P: csc_matrix,
         if np.allclose(dQ_D, 0):
             dz = np.zeros(dQ_D.size)
         else:
-            dz = lo.optimization.cls_leastsquares.lsqr(M, dQ_D)[0]
+            dz = lsqr(M, dQ_D)[0]
 
         du, dv, dw = np.split(dz, [n, n + m])
         dx = du - x * dw

@@ -1,17 +1,28 @@
+# General
+(Update Dec. 20 2024 ~ 22:00 PT)
+
+**Derivative computations for least squares (approximation) problems and for least l2-norm problems are showing good results!** (Do see slight technicality below.)
+
+Next steps are probably some mix of
+1. Adding support for more cones.
+2. Adding adjoint (requires math. I did start tinkering with this some more today. I have a math question for you (Parth) that I'll send over when you have a moment. I think I have
+an approach to find adjoint of $Q_{Data}(u, Data)$, but I want to ensure it is valid before I start pulling the thread too hard. I'm also not sure how easy it will be.)
+
 # TODOS
 
-**Update Nov 17, 24 ~21:45 PST**:\
-So while the code is "compiling", the derivative (well, technically the differential $d_bx$) being computed by `diffqcp` is not equal to the analytical differential (the code for this is in `sandbox.py`). Specifically, I'm getting
+**Most immediate**
+- Need to understand if we need to return `-dx, -dy, -ds` from `diffqcp.qcp.compute_derivative.derivative`. This is what `diffcp` does, despite
+those negatives not being in the paper. I think it has something to do with canonicalization? The weird thing is that for the least squares tests I don't need to add a negative anywhere,
+but for the least l2-norm problem tests adding a negative to either `dx` or `db` is necessary. I think I'm tired and am just missing something obvious -- given computations I'm seeing
+and prioring on `diffcp`'s code, I'm not too concerned about this.
 
-*analytical differential value*: `[-1.94748359e-05 -5.07975508e-05  8.29038053e-05  6.33260728e-06 -2.69855966e-05]` versus *diffqcp computed differential value* `[-2.79150319e-05 -5.08845547e-05  9.49163482e-05  1.27703733e-05 -3.92128570e-05]`
-
-At this point I'm pretty sure it is a `diffqcp` error, and not some error in my analytical derivative + (super broadly) canonicalization extraction. This week I'll begin by tinkering with the first item on my todo list/revisiting the paper to check over derivations. I also might use the opportunity of looking through the paper to redefine some notation and rewrite some bits using more Stephen Boyd style.
-
-**New (immediate) TODOS** (not todos such as adding cone support)
-- Test the derivatives derived in paper (*e.g.*, $DQ(u)$) against finite differences
-- Revisit the asymptotic theory in the paper to ensure there isn't something critical being overlooked that could explain the incorrect calculations.
-- Explain my naming convention for derivative functions in the code.
-- I left some TODOS throughout the codebase. Some are for pondering, others are important to address
-- create an Examples folder and put the marimo notebook I was drafting with on how to extract the analytical $dx$ from the canonical $dx$ (so basically explain canonicalization for this LS problem). 
+**Other** (more broad / not as critical as the one above and not as much work as the next steps mentioned in "General")
+- Explain my naming convention for derivative functions in the code (and ensure consistency).
+- commented TODO throughout the codebase for some smaller things + some ideas for future implementation. (perhaps half of the functions throughout have a TODO on them to add documentation -- there are
+others that also need documenation, I just got tired of adding that stamp.)
+- create an Examples folder and put the marimo notebook I was drafting with on how to extract the analytical `dx` from the canonical `dx` (so basically explain canonicalization for this LS problem
+-- although, as suggested above, I'm still working through a few intricacies there).
+- test Scalar class (just for formality/thoroughness)
+- probably some more I'm not thinking of right now
 
 **Side Note** (to explain some of the unused code in the repo): I was planning on returning the derivative (and in the future, adjoint) as a `pylops.LinearOperator`, but this requires the input provided in the forward (and backward) computation to be a single `np.ndarray`. I was thinking about creating a wrapper class around the `qcpDerivative` subclass of `pylops.LinearOperator` to handle the transformation $\textbf{vec}\,(dP, dA, dq, db)$ , but then decided this wasn't a priority.

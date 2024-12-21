@@ -1,3 +1,8 @@
+"""
+All cone related objects and functionalty (including projections onto cones and their derivates).
+Some of the cone code related to the more advanced cones will probably be added in separate
+files, though.
+"""
 from typing import Tuple, List, Union
 
 import numpy as np
@@ -6,10 +11,9 @@ import scipy.linalg as la
 import scipy.sparse.linalg as sla
 import pylops as lo
 
-from diffqcp.proj_exp_cone import project_exp_cone
 from diffqcp.utils import Scalar
 
-# need to check for alternative to distutils, which was deprecated starting in Python 3.12 
+# need to check for alternative to distutils, which was deprecated starting in Python 3.12
 
 ZERO = "z"
 POS = "l"
@@ -21,10 +25,12 @@ EXP_DUAL = "ed"
 # The ordering of CONES matches SCS.
 CONES = [ZERO, POS, SOC, PSD, EXP, EXP_DUAL]
 
-# ------ The following taken from diffcp (but add type hints, etc.) ------
+# ------ The following taken from diffcp (TODO: but add type hints, etc.) ------
 
 def parse_cone_dict(cone_dict):
-    """Parses SCS-style cone dictionary."""
+    """Parses SCS-style cone dictionary.
+    TODO: add more.
+    """
     return [(cone, cone_dict[cone]) for cone in CONES if cone in cone_dict]
 
 
@@ -47,6 +53,8 @@ def unvec_symm(x, dim):
           Xk1 Xk2 ... Xkk ],
     where
     vec(X) = (X11, sqrt(2)*X21, ..., sqrt(2)*Xk1, X22, sqrt(2)*X32, ..., Xkk)
+
+    TODO: add more
     """
     X = np.zeros((dim, dim))
     # triu_indices gets indices of upper triangular matrix in row-major order
@@ -75,10 +83,12 @@ def _proj(x: np.ndarray,
           cone,
           dual=False
 ) -> np.ndarray:
+    """TODO: add docstring and cite
+    """
     if cone == EXP_DUAL:
         cone = EXP
         dual = not dual
-    
+
     if cone == ZERO:
         return x if dual else np.zeros(x.shape)
     elif cone == POS:
@@ -98,18 +108,18 @@ def _proj(x: np.ndarray,
         X = unvec_symm(x, dim)
         lambd, Q = np.linalg.eigh(X)
         return vec_symm(Q @ sparse.diags(np.maximum(lambd, 0)) @ Q.T)
-    elif cone == EXP:
-        num_cones = int(x.size / 3)
-        out = np.zeros(x.size)
-        offset = 0
-        for _ in range(num_cones):
-            x_i = x[offset:offset + 3]
-            if dual:
-                x_i = x_i * -1
-            out[offset:offset + 3] = project_exp_cone(x_i);
-            offset += 3
-        # via Moreau: Pi_K*(x) = x + Pi_K(-x)
-        return x + out if dual else out
+    # elif cone == EXP:
+    #     num_cones = int(x.size / 3)
+    #     out = np.zeros(x.size)
+    #     offset = 0
+    #     for _ in range(num_cones):
+    #         x_i = x[offset:offset + 3]
+    #         if dual:
+    #             x_i = x_i * -1
+    #         out[offset:offset + 3] = project_exp_cone(x_i)
+    #         offset += 3
+    #     # via Moreau: Pi_K*(x) = x + Pi_K(-x)
+    #     return x + out if dual else out
     else:
         raise NotImplementedError("%s not implemented" % cone)
 
@@ -118,6 +128,16 @@ def proj(x,
          cones,
          dual=False
 ) -> np.ndarray:
+    """Projects x onto a (convex) cone, or its dual cone.
+
+    TODO: add more
+
+    Parameters
+    ----------
+    x : np.ndarray
+        The
+    cones : Dict
+    """
     projection = np.zeros(x.shape)
     offset = 0
     for cone, sz in cones:
@@ -129,7 +149,7 @@ def proj(x,
                 dim = vec_psd_dim(dim)
             elif cone == EXP or cone == EXP_DUAL:
                 dim *= 3
-            
+
             projection[offset:offset+dim] = _proj(x[offset:offset+dim],
                                                   cone,
                                                   dual=dual)
@@ -145,6 +165,7 @@ def pi(z: Tuple[np.ndarray,
                     ]
 ) -> np.ndarray:
     """Projection onto R^n x K^* x R_+
+    TODO: add more
     """
     u, v, w = z
     return np.concatenate(
@@ -155,6 +176,7 @@ def pi(z: Tuple[np.ndarray,
 # ======= DERIVATIVES =======
 
 def _dprojection_soc(x: np.ndarray) -> lo.LinearOperator:
+    """TODO: add more"""
     n = x.size
     t, z = x[0], x[1:]
     norm_z = la.norm(z)
@@ -164,7 +186,7 @@ def _dprojection_soc(x: np.ndarray) -> lo.LinearOperator:
         return lo.Zero(n)
     else:
         unit_z = z / norm_z
-        
+
         def mv(dx: np.ndarray) -> np.ndarray:
             dt, dz = dx[0], dx[1:dx.size]
             first_entry = dt*norm_z + z @ dz
@@ -172,7 +194,7 @@ def _dprojection_soc(x: np.ndarray) -> lo.LinearOperator:
                             - t * unit_z * (unit_z @ dz)
             output = np.concatenate(([first_entry], second_chunk))
             return (1.0 / (2 * norm_z)) * output
-        
+
         return lo.aslinearoperator(sla.LinearOperator((n, n), matvec=mv, rmatvec=mv))
 
 def _dprojection_pos(x: np.ndarray) -> lo.LinearOperator:
@@ -190,13 +212,13 @@ def _dprojection(x: np.ndarray,
     if cone == EXP_DUAL:
         cone = EXP
         dual = not dual
-    
+
     if cone == ZERO:
         return _dprojection_zero(x, dual)
     elif cone == POS:
         return _dprojection_pos(x)
     elif cone == SOC:
-        return _dprojection(x)
+        return _dprojection_soc(x)
     elif cone == PSD:
         raise NotImplementedError("%s not implemented" % cone)
     elif cone == EXP:
@@ -221,7 +243,7 @@ def dprojection(x: np.ndarray,
                 dim = vec_psd_dim(dim)
             elif cone == EXP or cone == EXP_DUAL:
                 dim *= 3
-            
+
             ops.append(_dprojection(x[offset:offset + dim], cone, dual=dual))
             offset += dim
 
@@ -245,4 +267,4 @@ def dpi(u: np.ndarray,
            dprojection(v, cones, dual=True),
            Scalar(gt_0(w))
            ]
-    return lo.BlockDiag(ops) # note this successfully ran in a jupyter notebook
+    return lo.BlockDiag(ops)

@@ -76,7 +76,7 @@ data = np.zeros(A_can.size)
 dA = sparse.csc_matrix((data, nonzeros), shape=A_can.shape)
 # dq = 1e-4 * np.random.randn(q_can.size)
 db = 1e-4 * np.random.randn(b_can.size)
-dx, dy, ds = DS(dP, dA, np.zeros(q_can.size), -db) # since b_can = -b
+dx, dy, ds = DS(dP, dA, np.zeros(q_can.size), db)
 
 print(dx)
 print(dy)
@@ -86,6 +86,8 @@ print("=== CHECK ===")
 
 print(Dx_b@db)
 print(dx[m:])
+
+print(np.allclose(Dx_b@db, dx[m:], atol=1e-6))
 
 # z = (np.array(solution.x),
 #      np.array(solution.z) - np.array(solution.s),

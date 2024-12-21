@@ -1,3 +1,6 @@
+"""
+Non-cone derivative atoms composing the QCP solution map derivative.
+"""
 from typing import List, Tuple, Union
 
 import numpy as np
@@ -14,11 +17,14 @@ def Du_Q(u: np.ndarray,
          q: np.ndarray,
          b: np.ndarray
 ) -> lo.LinearOperator:
+    """Returns derivative of nonlinear homogeneous embedding map w.r.t. u.
+    TODO: add more.
+    """
     n = P.shape[0]
     m = A.shape[0]
     N = n + m + 1
     x, tau = u[:n], u[-1]
-    
+
     Px = P @ x
     xT_P_x = x @ Px
 
@@ -29,17 +35,17 @@ def Du_Q(u: np.ndarray,
         second_chunk = -A @ dx + dtau * b
         final_entry = -(2/tau) * x @ (P @ dx) - q @ dx - b @ dy \
                         + (1/tau**2) * dtau * xT_P_x
-        
+
         return np.concatenate((first_chunk, second_chunk, [final_entry]))
 
     def rv(dv: np.ndarray) -> np.ndarray:
         dv1, dv2, dv3 = dv[:n], dv[n:-1], dv[-1]
 
-        first_chunk = P @ dv1 -A.T @ dv2 - (2/tau) * dv3 * Px - q
+        first_chunk = P @ dv1 - A.T @ dv2 + ( -(2/tau)*Px - q )*dv3
         second_chunk = A @ dv1 - dv3 * b
         final_entry = q @ dv1 + b @ dv2 + (1/tau**2) * dv3 * xT_P_x
 
-        return np.concatenate((first_chunk, second_chunk, [final_entry])) 
+        return np.concatenate((first_chunk, second_chunk, [final_entry]))
 
     return lo.aslinearoperator(sla.LinearOperator((N, N), matvec=mv, rmatvec=rv))
 
@@ -50,6 +56,15 @@ def dData_Q(u: np.ndarray,
             dq: np.ndarray,
             db: np.ndarray
 ) -> np.ndarray:
+    """
+    Returns application of derivative of nonlinear homogeneous embedding w.r.t. the data
+    to a data perturbation.
+    TODO: add more.
+
+    Notes
+    -----
+    Potentially refactor into lo.LinearOperator once we have the adjoint.
+    """
     n = dP.shape[0]
     x, y, tau = u[:n], u[n:-1], u[-1]
 
@@ -71,15 +86,30 @@ def form_M(u: np.ndarray,
                             ]
                        ]
 ) -> lo.LinearOperator:
+    """Form the derivative composition M as given in diffqcp implementation section.
+
+    TODO: add more.
+
+    Notes
+    -----
+    According to the PyLops docs
+    (https://pylops.readthedocs.io/en/stable/tutorials/linearoperator.html#sphx-glr-tutorials-linearoperator-py),
+    performing computations by invoking the methods on instances of the `LinearOperator`
+    class is faster than using the overloaded operators.
+    Anecdotally, the pytests did appear to run faster when I switched from the overloaded operators
+    to the below.
+    """
     Dz_Pi_z = dpi(u, v, w, cones)
-    # M = Dz_Q_Pi_z.__matmul__(DPi_z).__sub__(DPi_z).__add__()
-    M = Dz_Q_Pi_z @ Dz_Pi_z - Dz_Pi_z + lo.Identity(u.size + v.size + 1)
+    M = Dz_Q_Pi_z.__matmul__(Dz_Pi_z).__sub__(Dz_Pi_z).__add__(lo.Identity(u.size + v.size + 1))
     return M
-    
+
+
+
+# === Potentially re-incorporate the below once we have adjoints === #
 
 class _qcpDerivative(lo.LinearOperator):
-    """Applies derivative at (P, A, q, b) to perturbations dP, dA, dq, db 
-    
+    """Applies derivative at (P, A, q, b) to perturbations dP, dA, dq, db
+
     """
 
     def __init__(self,
@@ -93,11 +123,11 @@ class _qcpDerivative(lo.LinearOperator):
         self.D_Pi_Kstar_v = D_Pi_Kstar_v
         self.Pi_z = Pi_z
         self.x, self.y, self.s = x, y, s
-        
+
         self.dtype
         self.shape = ()
 
-    
+
     def _matvec(self,
                 dP: sparse.csc_matrix,
                 dA: sparse.csc_matrix,
@@ -111,7 +141,7 @@ class _qcpDerivative(lo.LinearOperator):
             SciPy sparse matrix in CSC format representing a perturbation
             to `P` in the cone program. For this reason, it must have the
             same sparsity pattern as `P`.
-        dA : 
+        dA :
             SciPy sparse matrix in CSC format representing a perturbation
             to `A` in the cone program. For this reason, it must have the
             same sparsity pattern as `A`.
@@ -155,6 +185,6 @@ class qcpDerivative():
         self.D_Pi_Kstar_v = D_Pi_Kstar_v
         self.Pi_z = Pi_z
         self.x, self.y, self.s = x, y, s
-        
+
         # self.dtype
         # self.shape = ()

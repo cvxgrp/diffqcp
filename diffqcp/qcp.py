@@ -1,13 +1,15 @@
+"""
+Exposes the function to be used to compute the derivative of a QCP.
+"""
 from typing import Dict, Union, List, Callable, Tuple
 
 import numpy as np
 from scipy.sparse import csc_matrix
-import scipy.sparse as sparse
 import pylops as lo
 from clarabel import DefaultSolution
 
 import diffqcp.cones as cone_utils
-from diffqcp.qcp_deriv import Du_Q, form_M, dData_Q, qcpDerivative
+from diffqcp.qcp_deriv import Du_Q, form_M, dData_Q
 
 
 def compute_derivative(P: csc_matrix,
@@ -25,20 +27,19 @@ def compute_derivative(P: csc_matrix,
                Tuple[np.ndarray,
                      np.ndarray,
                      np.ndarray]]:
-# ) -> lo.LinearOperator:
     """Returns the derivative of a cone program as an abstract linear map.
 
     Given a solution (x, y, s) to a quadratic convex cone program
     with primal-dual problems
-        
-        (P) minimize    (1/2)x^T P x + q^T x        
-            subject to  Ax + s = b             
-                        s in K                            
-    
+
+        (P) minimize    (1/2)x^T P x + q^T x
+            subject to  Ax + s = b
+                        s in K
+
         (D) minimize    -(1/2)x^T P x - b^T y
             subject to  A^T y + c = 0
                         y in K^*
-    
+
     with problem data P, A, q, b, this function returns a Linear Operator that represents
     the application of the derivative (at P, A, q, b).
 
@@ -46,7 +47,7 @@ def compute_derivative(P: csc_matrix,
     ---------
     P : A sparse SciPy matrix in CSC format. **Only the upper triangular part of P should be passed in.**
         Quadratic component of objective function.
-    A : 
+    A :
         A sparse SciPy matrix in CSC format. The first block of rows
         must correspond to the zero cone, the next block ot the positive
         orthant, then the second-order cone, the PSD cone, the exponential
@@ -78,30 +79,36 @@ def compute_derivative(P: csc_matrix,
 
     Returns
     -------
-
-    Notes
-    -----
-    Add functionality to compute partials. (In practice we usually don't care about
-    the derivative of the dual variable.)
+    Callable[[csc_matrix,
+              csc_matrix,
+              np.ndarray,
+              np.ndarray
+              ],
+              Tuple[np.ndarray,
+                    np.ndarray,
+                    np.ndarray]
+            ]
+        The derivative of a primal-dual conic problem at (P, A, q, b)
+        as an abstract linear operator.
     """
 
     x = np.array(solution.x)
     y = np.array(solution.z)
     s = np.array(solution.s)
-    
+
     cones = cone_utils.parse_cone_dict(cone_dict)
-    
+
     z = (x, y - s, np.array([1]))
     u, v, w, = z
     Pi_z = cone_utils.pi(z, cones)
 
     Dz_Q_Pi_z: lo.LinearOperator = Du_Q(Pi_z, P, A, q, b)
-    # somehow cache results for projecting onto cones -> most cones are self dual
+    # TODO?:somehow cache results for projecting onto cones -> most cones are self dual
     D_Pi_Kstar_v: lo.LinearOperator = cone_utils.dprojection(v, cones, dual=True)
     M: lo.LinearOperator = form_M(u, v, w[0], Dz_Q_Pi_z, cones)
 
-    def derivative(dP: sparse.csc_matrix,
-                   dA: sparse.csc_matrix,
+    def derivative(dP: csc_matrix,
+                   dA: csc_matrix,
                    dq: np.ndarray,
                    db: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -112,15 +119,12 @@ def compute_derivative(P: csc_matrix,
         if np.allclose(dQ_D, 0):
             dz = np.zeros(dQ_D.size)
         else:
-            dz = lo.lsqr(M, dQ_D)[0]
+            dz = lo.optimization.cls_leastsquares.lsqr(M, dQ_D)[0]
 
         du, dv, dw = np.split(dz, [n, n + m])
         dx = du - x * dw
         dy = D_Pi_Kstar_v._matvec(dv) - y * dw
         ds = D_Pi_Kstar_v._matvec(dv) - dv - s * dw
-        #(important) TODO: need to ensure these are negative
-        return -dx, -dy, -ds
+        return dx, dy, ds
 
     return derivative
-    
-    # return qcpDerivative(M, Pi_z, D_Pi_Kstar_v, x, y, s)

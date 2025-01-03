@@ -3,15 +3,10 @@ All cone related objects and functionalty (including projections onto cones and 
 Some of the cone code related to the more advanced cones will probably be added in separate
 files, though.
 """
-from typing import Tuple, List, Union
+import math
+from typing import Tuple, Dict
 
-import numpy as np
-import scipy.sparse as sparse
-import scipy.linalg as la
-import scipy.sparse.linalg as sla
-import pylops as lo
-
-from diffqcp.utils import Scalar
+import torch
 
 # need to check for alternative to distutils, which was deprecated starting in Python 3.12
 
@@ -25,27 +20,111 @@ EXP_DUAL = "ed"
 # The ordering of CONES matches SCS.
 CONES = [ZERO, POS, SOC, PSD, EXP, EXP_DUAL]
 
-# ------ The following taken from diffcp (TODO: but add type hints, etc.) ------
-
-def parse_cone_dict(cone_dict):
+def parse_cone_dict(cone_dict: Dict[str, int | list[int]]
+) -> list[Tuple[str, int | list[int]]]:
     """Parses SCS-style cone dictionary.
-    TODO: add more.
+
+    Parameters
+    ----------
+    cone_dict : Dict[str, int | list[int]]
+        A dictionary with keys corresponding to cones and values
+        corresponding to their dimension (either integers or lists of integers;
+        see the docstring for `compute_derivative`).
+
+    Returns
+    -------
+    list[Tuple[str, int | list[int]]]
+        A list of two-tuples where the first entry in a tuple is a
+        key from the provided dictionary and the second entry in
+        that tuple is the corresponding dictionary value.
     """
     return [(cone, cone_dict[cone]) for cone in CONES if cone in cone_dict]
 
 
-def vec_psd_dim(dim):
-    return int(dim * (dim + 1) / 2)
+def symm_size_to_dim(size: int) -> int:
+    """Returns dimension of a size-by-size symmetric matrix.
+
+    Equivalently
+    - returns the number of elements in the vectorization of a matrix in S^size
+    - returns the number of elements in the vectorization from a matrix in the
+    size-dimensional PSD cone.
+
+    Parameters
+    ----------
+    size : int
+        The number of columns (or equivalently, rows) of a symmetric matrix.
+
+    Returns
+    -------
+    int
+        The dimension of X in S^size.
+    """
+    return int(size * (size + 1) / 2)
 
 
-def psd_dim(size):
-    return int(np.sqrt(2 * size))
+def symm_dim_to_size(dim: int) -> int:
+    """Returns the number of columns in a symmetric matrix from its dimension.
+
+    Equivalently,
+    - returns the dimension of the PSD cone from the number of elements in the vectorization
+    of a matrix in that cone.
+
+    Parameters
+    ---------
+    dim : int
+        The dimension of a symmetric matrix. Or, equivalently,
+        the number of entries in the vectorization of a symmetric matrix.
+
+    Returns
+    -------
+    int
+        The number of columns (equivalently, rows) in a symmetric matrix with dimension dim.
+    """
+    return int((math.sqrt(8 * dim + 1) - 1) / 2)
 
 
-def unvec_symm(x, dim):
-    """Returns a dim-by-dim symmetric matrix corresponding to `x`.
+def vec_symm(X: torch.Tensor) -> torch.Tensor:
+    """Returns a vectorized representation of a symmetric `X`.
 
-    `x` is a vector of length dim*(dim + 1)/2, corresponding to a symmetric
+    Vectorization (including scaling) as per SCS.
+    vec(X) = (X11, sqrt(2)*X21, ..., sqrt(2)*Xk1, X22, sqrt(2)*X32, ..., Xkk)
+
+    Parameters
+    ----------
+    X : torch.Tensor
+        The k-by-k symmetric to compute vectorization of.
+
+    Returns
+    -------
+    torch.Tensor
+        The vectorized representation of the symmetric `X` per SCS.
+
+    Notes
+    -----
+    According to the SCS documentation, https://www.cvxgrp.org/scs/api/cones.html#sdcone,
+    the vectorized representation of `X` is constructed from the lower triangular elements
+    placed in column-major order.
+    `torch.triu_indices(size, size)` outputs the upper triangular indices of a size x size
+    matrix in row-major order. This is equivalent to extracting the lower triangular
+    indices of a dim x dim matrix in column-major order.
+    """
+    assert len(X.shape) == 2
+
+    sqrt2 = torch.sqrt(torch.tensor(2, device=X.device))
+    size = X.shape[0]
+
+    row_idx, col_idx = torch.triu_indices(size, size)
+    vec = X[row_idx, col_idx]
+    vec[row_idx != col_idx] *= sqrt2
+    return vec
+
+
+def unvec_symm(x: torch.Tensor,
+               size: int = 0
+) -> torch.Tensor:
+    """Returns the size-by-size symmetric matrix from its vectorized form `x`.
+
+    `x` is a vector of length size*(size + 1)/2, corresponding to a symmetric
     matrix; the correspondence is as in SCS.
     X = [ X11 X12 ... X1k
           X21 X22 ... X2k
@@ -54,60 +133,65 @@ def unvec_symm(x, dim):
     where
     vec(X) = (X11, sqrt(2)*X21, ..., sqrt(2)*Xk1, X22, sqrt(2)*X32, ..., Xkk)
 
-    TODO: add more
+    Parameters
+    ----------
+    x : torch.Tensor
+        A vectorized symmetric matrix of length size*(size + 1)/2.
+    size : int, optional
+        The dimension of the PSD-cone the symmetric matrix being reconstructed
+        belongs to. Equivalently, the number of rows and columns the returned
+        symmetric matrix will have.
+
+    Returns
+    -------
+    torch.Tensor
+        A size-by-size symmetric matrix.
     """
-    X = np.zeros((dim, dim))
-    # triu_indices gets indices of upper triangular matrix in row-major order
-    col_idx, row_idx = np.triu_indices(dim)
-    X[(row_idx, col_idx)] = x
+    assert len(x.shape) == 1
+    size = size if size > 0 else symm_dim_to_size(x.shape[0])
+
+    sqrt2 = torch.sqrt(torch.tensor(2, device=x.device))
+    X = torch.zeros((size, size), dtype=x.dtype, device=x.device)
+    row_idx, col_idx = torch.triu_indices(size, size)
+    X[row_idx, col_idx] = x / sqrt2
     X = X + X.T
-    X /= np.sqrt(2)
-    X[np.diag_indices(dim)] = np.diagonal(X) * np.sqrt(2) / 2
+    diag_indices = torch.arange(size)
+    X[diag_indices, diag_indices] /= sqrt2
     return X
 
 
-def vec_symm(X):
-    """Returns a vectorized representation of a symmetric matrix `X`.
-
-    Vectorization (including scaling) as per SCS.
-    vec(X) = (X11, sqrt(2)*X21, ..., sqrt(2)*Xk1, X22, sqrt(2)*X32, ..., Xkk)
-    """
-    X = X.copy()
-    X *= np.sqrt(2)
-    X[np.diag_indices(X.shape[0])] = np.diagonal(X) / np.sqrt(2)
-    col_idx, row_idx = np.triu_indices(X.shape[0])
-    return X[(row_idx, col_idx)]
-
-
-def _proj(x: np.ndarray,
-          cone,
+def _proj(x: torch.Tensor,
+          cone: str,
           dual=False
-) -> np.ndarray:
-    """TODO: add docstring and cite
+) -> torch.Tensor:
+    """Project x onto an "atom" cone.
     """
     if cone == EXP_DUAL:
         cone = EXP
         dual = not dual
 
     if cone == ZERO:
-        return x if dual else np.zeros(x.shape)
+        return x if dual else torch.zeros(x.shape[0])
     elif cone == POS:
-        return np.maximum(x, 0)
+        return torch.maximum(x, torch.tensor(0, dtype=x.dtype, device=x.device))
     elif cone == SOC:
         t = x[0]
         z = x[1:]
-        norm_z = np.linalg.norm(z, 2)
-        if norm_z <= t or np.isclose(norm_z, t, atol=1e-8):
+        norm_z = torch.linalg.norm(z, 2)
+        if norm_z <= t or torch.isclose(norm_z, t, atol=1e-8):
             return x
         elif norm_z <= -t:
-            return np.zeros(x.shape)
+            return torch.zeros(x.shape[0])
         else:
-            return 0.5 * (1 + t / norm_z) * np.append(norm_z, z)
+            return 0.5 * (1 + t / norm_z) * torch.cat((norm_z.unsqueeze(0), z))
     elif cone == PSD:
-        dim = psd_dim(x.size)
-        X = unvec_symm(x, dim)
-        lambd, Q = np.linalg.eigh(X)
-        return vec_symm(Q @ sparse.diags(np.maximum(lambd, 0)) @ Q.T)
+        size = symm_dim_to_size(x.shape[0])
+        X = unvec_symm(x, size)
+        # TODO: cache lambd (before clamp) and Q
+        lambd, Q = torch.linalg.eigh(X)
+        lambd.clamp_(min=0)
+        PiX = Q @ (lambd.unsqueeze(-1) * Q.T)
+        return vec_symm(PiX)
     # elif cone == EXP:
     #     num_cones = int(x.size / 3)
     #     out = np.zeros(x.size)
@@ -125,146 +209,49 @@ def _proj(x: np.ndarray,
 
 
 def proj(x,
-         cones,
+         cones: list[Tuple[str, int | list[int]]],
          dual=False
-) -> np.ndarray:
+) -> torch.Tensor:
     """Projects x onto a (convex) cone, or its dual cone.
 
-    TODO: add more
+    Cone can be the cartesian product of "atom" cones
 
     Parameters
     ----------
-    x : np.ndarray
-        The
+    x : torch.Tensor
     cones : Dict
     """
-    projection = np.zeros(x.shape)
+    projection = torch.zeros(x.shape[0])
     offset = 0
     for cone, sz in cones:
         sz = sz if isinstance(sz, (tuple, list)) else (sz,)
         if sum(sz) == 0:
             continue
-        for dim in sz:
+        for cone_dim in sz:
             if cone == PSD:
-                dim = vec_psd_dim(dim)
+                cone_dim = symm_size_to_dim(cone_dim)
             elif cone == EXP or cone == EXP_DUAL:
-                dim *= 3
+                cone_dim *= 3
 
-            projection[offset:offset+dim] = _proj(x[offset:offset+dim],
-                                                  cone,
-                                                  dual=dual)
-            offset += dim
+            projection[offset:offset+cone_dim] = _proj(x[offset:offset+cone_dim],
+                                                       cone,
+                                                       dual=dual)
+            offset += cone_dim
+
     return projection
 
-def pi(z: Tuple[np.ndarray,
-                np.ndarray,
-                np.ndarray],
-       cones: List[Tuple[str,
-                         Union[int, List[int]]
-                         ]
-                    ]
-) -> np.ndarray:
+def pi(z: Tuple[torch.Tensor,
+                torch.Tensor,
+                torch.Tensor],
+       cones: list[Tuple[str, int | list[int]]]
+) -> torch.Tensor:
     """Projection onto R^n x K^* x R_+
     TODO: add more
     """
     u, v, w = z
-    return np.concatenate(
-        [u, proj(v, cones, dual=True), np.maximum(w, 0)]
-    )
-
-
-# ======= DERIVATIVES =======
-
-def _dprojection_soc(x: np.ndarray) -> lo.LinearOperator:
-    """TODO: add more"""
-    n = x.size
-    t, z = x[0], x[1:]
-    norm_z = la.norm(z)
-    if (norm_z <= t):
-        return lo.Identity(n)
-    elif (norm_z <= -t):
-        return lo.Zero(n)
-    else:
-        unit_z = z / norm_z
-
-        def mv(dx: np.ndarray) -> np.ndarray:
-            dt, dz = dx[0], dx[1:dx.size]
-            first_entry = dt*norm_z + z @ dz
-            second_chunk = dt*z + (t + norm_z)*dz \
-                            - t * unit_z * (unit_z @ dz)
-            output = np.concatenate(([first_entry], second_chunk))
-            return (1.0 / (2 * norm_z)) * output
-
-        return lo.aslinearoperator(sla.LinearOperator((n, n), matvec=mv, rmatvec=mv))
-
-def _dprojection_pos(x: np.ndarray) -> lo.LinearOperator:
-    return lo.Diagonal(0.5 * (np.sign(x) + 1))
-
-def _dprojection_zero(x: np.ndarray, dual: bool) -> lo.LinearOperator:
-    """dual cone is free cone"""
-    n = x.size
-    return lo.Identity(n) if dual else lo.Zero(n)
-
-def _dprojection(x: np.ndarray,
-                 cone,
-                 dual: bool=False
-) -> lo.LinearOperator:
-    if cone == EXP_DUAL:
-        cone = EXP
-        dual = not dual
-
-    if cone == ZERO:
-        return _dprojection_zero(x, dual)
-    elif cone == POS:
-        return _dprojection_pos(x)
-    elif cone == SOC:
-        return _dprojection_soc(x)
-    elif cone == PSD:
-        raise NotImplementedError("%s not implemented" % cone)
-    elif cone == EXP:
-        raise NotImplementedError("%s not implemented" % cone)
-
-def dprojection(x: np.ndarray,
-                cones: List[Tuple[str,
-                                  Union[int, List[int]]
-                                 ]
-                           ],
-                dual=False
-) -> lo.LinearOperator:
-    ops = []
-    offset = 0
-    # TODO: create a cone iterator or something to consolidate?
-    for cone, sz in cones:
-        sz = sz if isinstance(sz, (tuple, list)) else (sz,)
-        if sum(sz) == 0:
-            continue
-        for dim in sz:
-            if cone == PSD:
-                dim = vec_psd_dim(dim)
-            elif cone == EXP or cone == EXP_DUAL:
-                dim *= 3
-
-            ops.append(_dprojection(x[offset:offset + dim], cone, dual=dual))
-            offset += dim
-
-    return lo.BlockDiag(ops)
-
-def dpi(u: np.ndarray,
-        v: np.ndarray,
-        w: float,
-        cones: List[Tuple[str,
-                         Union[int, List[int]]
-                         ]
-                    ]
-) -> lo.LinearOperator:
-    """Derivative of the projection of z onto R^n x K^* x R_+
-    """
-
-    def gt_0(t):
-        return 1.0 if t >= 0.0 else 0.0
-
-    ops = [lo.Identity(u.size),
-           dprojection(v, cones, dual=True),
-           Scalar(gt_0(w))
-           ]
-    return lo.BlockDiag(ops)
+    n = u.shape[0]
+    out = torch.zeros(n + v.shape[0] + 1, dtype=u.dtype, device=u.device)
+    out[0:n] = u
+    out[n:-1] = proj(v, cones, dual=True)
+    out[-1] = torch.maximum(w, torch.tensor(0.0, dtype=w.dtype, device=w.device))
+    return out

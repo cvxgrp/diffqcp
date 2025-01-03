@@ -14,12 +14,13 @@ at the nonlinear transform Q).
 
 import numpy as np
 import scipy.sparse as sparse
-from pylops.utils import dottest
-from pylops.optimization.cls_leastsquares import lsqr
+import torch
 
-from diffqcp.qcp_deriv import Du_Q, dData_Q
+from diffqcp.qcp_derivs import Du_Q, dData_Q
 import tests.utils as utils
 from diffqcp.utils import Q
+
+# TODO: manually implement PyLops's `dottest`
 
 
 def test_dData_Q_is_approximation():

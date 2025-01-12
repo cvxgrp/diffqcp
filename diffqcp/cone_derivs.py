@@ -3,7 +3,7 @@ from typing import Tuple
 import torch
 import linops as lo
 
-from diffqcp.utils import Scalar, BlockDiag, SymmetricOperator
+from diffqcp.utils import ScalarOperator, BlockDiag, SymmetricOperator
 from diffqcp.cones import (ZERO, POS, SOC, PSD, EXP, EXP_DUAL, symm_size_to_dim,
     vec_symm, unvec_symm)
 
@@ -115,10 +115,11 @@ def _dprojection_soc(x: torch.Tensor) -> lo.LinearOperator:
         return SymmetricOperator(x.shape[0], mv, device=x.device)
 
 def _dprojection_pos(x: torch.Tensor) -> lo.LinearOperator:
+    """TODO: add docstring"""
     return lo.DiagonalOperator(0.5 * (torch.sign(x) + 1.0))
 
 def _dprojection_zero(x: torch.Tensor, dual: bool) -> lo.LinearOperator:
-    """dual cone is free cone"""
+    """TODO: add docstring; dual cone is free cone"""
     n = x.shape[0]
     return lo.IdentityOperator(n) if dual else lo.ZeroOperator(n)
 
@@ -147,6 +148,7 @@ def dprojection(x: torch.Tensor,
                 cones: list[Tuple[str, int | list[int]]],
                 dual=False
 ) -> lo.LinearOperator:
+    """TODO: add docstring"""
     ops = []
     offset = 0
     for cone, sz in cones:
@@ -170,7 +172,7 @@ def dpi(u: torch.Tensor,
         cones: list[Tuple[str, int | list[int]]]
 ) -> lo.LinearOperator:
     """Derivative of the projection of z onto R^n x K^* x R_+
-
+    TODO: finish docstring
     Notes
     -----
     allow for batch dimension?
@@ -184,6 +186,6 @@ def dpi(u: torch.Tensor,
 
     ops = [lo.IdentityOperator(u.shape[0]),
            dprojection(v, cones, dual=True),
-           Scalar(scale_val)]
+           ScalarOperator(scale_val)]
 
     return BlockDiag(ops)

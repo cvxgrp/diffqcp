@@ -1,14 +1,27 @@
 # General
-(Update Dec. 21 2024 ~ 10:00 PT)
+(Update Jan. 12 2025 ~ 14:45 PT)
 
-**Derivative computations for least squares (approximation) problems and for least l2-norm problems are showing good results!** (Do see slight technicality below.)
-
-Next steps are probably some mix of
-1. Adding support for more cones.
-2. Adding adjoint (requires math. I did start tinkering with this some more today. I have a math question for you (Parth) that I'll send over when you have a moment. I think I have
-an approach to find adjoint of $D_{Data}Q(u, Data)$, but I want to ensure it is valid before I start pulling the thread too hard. I'm also not sure how easy it will be.)
+Torch port utility functions and linear operators appear to be working. Aiming to make another push
+today that will enable the same functionality on this torch branch as the original prototype's functionality.
 
 # TODOS
+
+## torch_port branch
+
+### for original functionality
+
+1. port the derivative atoms test file to torch and test.
+2. port the qcp derivative test file to torch and test.
+
+### after original functionality
+(will write more after two todos above)
+
+1. More rigorous testing of projection derivatives and qcp derivatives (such as those in `diffcp`).
+Perhaps create `dottest` for linops
+2. Testing of PSD cone code.
+3. hunt down the canonicalization issue (see below; previously mentioned negative differential question.)
+
+## old branch
 
 **Most immediate**
 - Need to understand if we need to return `-dx, -dy, -ds` from `diffqcp.qcp.compute_derivative.derivative`. This is what `diffcp` does, despite

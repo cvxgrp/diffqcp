@@ -67,6 +67,8 @@ def dData_Q(u: torch.Tensor,
     to a data perturbation.
     TODO: add more.
 
+    dP SHOULD NOT JUST BE UPPER TRIANGULAR PART
+
     Notes
     -----
     Potentially refactor into lo.LinearOperator once we have the adjoint.

@@ -55,7 +55,7 @@ def test_dData_Q_is_approximation():
         db = np.random.normal(0, 1e-6, size=b.size)
         dQ = Q(P + dP, A + dA, q + dq, b + db, x, y, tau) - z
 
-        np.testing.assert_allclose(dQ,
+        torch.testing.assert_allclose(dQ,
                                    dData_Q(u, dP, dA, dq, db))
 
 

@@ -7,7 +7,8 @@ import torch
 import linops as lo
 
 from diffqcp.cone_derivs import dpi
-from diffqcp.utils import (_sLinearOperator, sparse_tensor_transpose)
+from diffqcp.utils import sparse_tensor_transpose
+from diffqcp.linops import _sLinearOperator
 
 def Du_Q(u: torch.Tensor,
          P: torch.Tensor | lo.LinearOperator,
@@ -75,8 +76,9 @@ def dData_Q(u: torch.Tensor,
     x, y, tau = u[:n], u[n:-1], u[-1]
 
     dP_x = dP @ x
+    dAT = sparse_tensor_transpose(dA)
 
-    first_chunk = dP_x + dA.T @ y + tau * dq
+    first_chunk = dP_x + dAT @ y + tau * dq
     second_chunk = -dA @ x + tau * db
     final_entry = -(1/tau)* x @ dP_x - dq @ x - db @ y
 

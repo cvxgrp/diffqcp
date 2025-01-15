@@ -11,8 +11,8 @@ import scipy.sparse as sparse
 import torch
 import linops as lo
 
-from diffqcp.utils import (ScalarOperator, SymmetricOperator, BlockDiag,
-                            _sLinearOperator, to_sparse_csc_tensor, to_tensor)
+from diffqcp.utils import (to_sparse_csr_tensor, to_tensor)
+from diffqcp.linops import (ScalarOperator, SymmetricOperator, BlockDiag, _sLinearOperator)
 from tests.utils import generate_problem_data
 
 def test_scalar_operator():
@@ -49,8 +49,8 @@ def test_symmetric_tensor():
     for _ in range(10):
 
         P, _, _, _ = generate_problem_data(n, m, sparse.random, np.random.randn)
-        P_upper = sparse.triu(P).tocsc()
-        P_tch = to_sparse_csc_tensor(P_upper)
+        P_upper = sparse.triu(P).tocsr()
+        P_tch = to_sparse_csr_tensor(P_upper)
         P_op = SymmetricOperator(n, P_tch)
 
         x = np.random.randn(n)
@@ -58,9 +58,9 @@ def test_symmetric_tensor():
         P_x_tch = to_tensor(P @ x)
         PT_x_tch = to_tensor(P.T @ x)
 
-        assert torch.allclose(P_x_tch, P_op @ x_tch, atol=1e-5, rtol=1e-5)
-        assert torch.allclose(PT_x_tch, P_x_tch, atol=1e-5, rtol=1e-5), "MV products not equal for true values"
-        assert torch.allclose(PT_x_tch, P_op.T @ x_tch, atol=1e-5, rtol=1e-5), "MV products not equal for operator"
+        assert torch.allclose(P_x_tch, P_op @ x_tch, atol=1e-6, rtol=1e-6), "MV products not equal"
+        assert torch.allclose(PT_x_tch, P_x_tch, atol=1e-5, rtol=1e-5), "MV transpose, products not equal for true values"
+        assert torch.allclose(PT_x_tch, P_op.T @ x_tch, atol=1e-5, rtol=1e-5), "MV transpose, products not equal for operator"
 
 def test_symmetric_callable():
     """
@@ -99,7 +99,7 @@ def test_block_diag_operator():
         op1: lo.LinearOperator = lo.DiagonalOperator(x)
         op2 : lo.LinearOperator = lo.MatrixOperator(A)
         op3 : lo.LinearOperator = ScalarOperator(torch.tensor(2))
-        full_op = BlockDiag([op1, op2, op3])
+        block_op = BlockDiag([op1, op2, op3])
 
         v = torch.randn(N, generator=rng)
         x, y, tau = v[0:n], v[n:2*n], v[-1]
@@ -116,8 +116,8 @@ def test_block_diag_operator():
         out_transpose[-1] = op3.T @ u[-1].unsqueeze(0)
 
 
-        assert torch.allclose(out, full_op @ v)
-        assert torch.allclose(out_transpose, full_op.T @ u)
+        assert torch.allclose(out, block_op @ v)
+        assert torch.allclose(out_transpose, block_op.T @ u)
 
 
 def test_sLinearOperator():

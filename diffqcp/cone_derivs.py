@@ -3,7 +3,7 @@ from typing import Tuple
 import torch
 import linops as lo
 
-from diffqcp.utils import ScalarOperator, BlockDiag, SymmetricOperator
+from diffqcp.linops import ScalarOperator, BlockDiag, SymmetricOperator
 from diffqcp.cones import (ZERO, POS, SOC, PSD, EXP, EXP_DUAL, symm_size_to_dim,
     vec_symm, unvec_symm)
 

@@ -14,13 +14,14 @@ at the nonlinear transform Q).
 
 import numpy as np
 import scipy.sparse as sparse
-from scipy.sparse import csc_matrix
+from scipy.sparse import csr_matrix
 import torch
 
 from diffqcp.qcp_derivs import Du_Q, dData_Q
 import tests.utils as utils
 from diffqcp.utils import Q
-import diffqcp.utils as lo_utils
+import diffqcp.utils as qcp_utils
+from diffqcp.linops import SymmetricOperator
 
 # TODO: manually implement PyLops's `dottest`
 
@@ -43,36 +44,27 @@ def test_dData_Q_is_approximation():
         n = m + np.random.randint(low=5, high=15)
         N = n + m + 1
 
-        P, A, q, b = utils.generate_problem_data(n,
-                                                 m,
-                                                 sparse.random,
-                                                 np.random.randn)
-        P_upper = sparse.triu(P).tocsc()
-        P_tch = lo_utils.to_sparse_csc_tensor(P_upper)
-        P_op = lo_utils.SymmetricOperator(n, P_tch)
-        A_tch = lo_utils.to_sparse_csc_tensor(A)
-        q_tch = lo_utils.to_tensor(q)
-        b_tch = lo_utils.to_tensor(b)
+        P_upper, P_op, A, q, b = utils.generate_torch_problem_data(n,
+                                                                   m,
+                                                                   sparse.random,
+                                                                   np.random.randn)
 
         u = torch.randn(N, generator=rng)
         u[-1] = torch.tensor(1) # always the case when differentiating at soln.
 
         x, y, tau = u[:n], u[n: -1], u[-1]
         tau = tau.unsqueeze(0)
-        z = Q(P_op, A_tch, q_tch, b_tch, x, y, tau)
+        z = Q(P_op, A, q, b, x, y, tau)
 
-        dP = utils.get_random_like(P_upper, lambda n: np.random.normal(0, 1e-6, size=n))
-        dP_tch = lo_utils.to_sparse_csc_tensor(dP)
-        dP_op = lo_utils.SymmetricOperator(n, dP_tch)
+        dP_upper = utils.get_random_like(P_upper, lambda n: np.random.normal(0, 1e-6, size=n))
         dA = utils.get_random_like(A, lambda n: np.random.normal(0, 1e-6, size=n))
-        dA_tch = lo_utils.to_sparse_csc_tensor(dA)
-        dq = 1e-6*torch.randn(q.size, generator=rng)
-        db = 1e-6*torch.randn(b.size, generator=rng)
-        assert A_tch.layout == dA_tch.layout
-        new = A_tch.to_sparse_csc() + dA_tch.to_sparse_csc()
-        dQ = Q(P_op + dP_op, A_tch + dA_tch, q_tch + dq, b_tch + db, x, y, tau) - z
+        dq = 1e-6*torch.randn(q.shape[0], generator=rng)
+        db = 1e-6*torch.randn(b.shape[0], generator=rng)
+        dP_op, dA, dq, db = utils.convert_prob_data_to_torch(dP_upper, dA, dq, db)
 
-        torch.allclose(dQ, dData_Q(u, dP_op, dA_tch, dq, db))
+        dQ = Q(P_op + dP_op, A + dA, q + dq, b + db, x, y, tau) - z
+
+        torch.allclose(dQ, dData_Q(u, dP_op, dA, dq, db))
 
 
 # def test_Du_Q_is_approximation():
@@ -88,8 +80,9 @@ def test_dData_Q_is_approximation():
 #     -----
 #     When attempted with atol=1e-6, test fails.
 #     """
-#     pass
 #     np.random.seed(0)
+#     rng = torch.Generator().manual_seed(0)
+
 #     for _ in range(10):
 #         n = np.random.randint(low=10, high=20)
 #         m = np.random.randint(low=10, high=20)
@@ -100,9 +93,11 @@ def test_dData_Q_is_approximation():
 #                                                  sparse.random,
 #                                                  np.random.randn)
 
-#         u = np.random.randn(N)
-#         u[-1] = 1 # always the case when differentiating at soln.
+#         u = torch.randn(N, generator=rng)
+#         u[-1] = torch.tensor(1) # always the case when differentiating at soln.
+
 #         x, y, tau = u[:n], u[n: -1], u[-1]
+#         tau = tau.unsqueeze(0)
 #         z = Q(P, A, q, b, x, y, tau)
 
 #         du = 1e-5*np.random.randn(N)

@@ -13,7 +13,8 @@ import clarabel
 import diffqcp.cones as cone_utils
 from diffqcp.cone_derivs import dpi, dprojection
 from diffqcp.qcp_derivs import Du_Q, form_M, dData_Q
-from diffqcp.utils import to_tensor, to_sparse_csr_tensor, SymmetricOperator
+from diffqcp.utils import to_tensor, to_sparse_csr_tensor
+from diffqcp.linops import SymmetricOperator
 
 
 def compute_derivative(P: torch.Tensor | spmatrix,

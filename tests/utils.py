@@ -5,11 +5,12 @@ atom computations.
 from typing import Dict, Tuple, List, Union, Callable
 
 import numpy as np
-from scipy.sparse import csc_matrix
+from scipy.sparse import (csc_matrix, csr_matrix)
 import cvxpy as cp
 import clarabel
 from clarabel import DefaultSolution
 
+import diffqcp.utils as lo_utils
 
 def generate_problem_data(n: int,
                           m: int,
@@ -18,13 +19,30 @@ def generate_problem_data(n: int,
 ) -> Tuple[csc_matrix, csc_matrix, np.ndarray, np.ndarray]:
     P = sparse_randomness(n, n, density=0.4)
     P = (P + P.T) / 2
-    P = csc_matrix(P)
+    P = csr_matrix(P)
     A = sparse_randomness(m, n, density=0.4)
+    A = csr_matrix(A)
 
     q = randomness(n)
     b = randomness(m)
 
     return P, A, q, b
+
+
+# def convert_problem_data(P: csc_matrix,
+#                          A: csc_matrix,
+#                          q: np.ndarray,
+#                          b : np.ndarray
+# ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+#     P = lo_u
+
+
+# def convert_problem_data_true(P: csc_matrix,
+#                               A: csc_matrix,
+#                               q: np.ndarray,
+#                               b : np.ndarray
+# ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+#     pass
 
 # stolen from diffcp/utils.py
 def get_random_like(A: csc_matrix,

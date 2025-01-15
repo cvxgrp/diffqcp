@@ -3,7 +3,7 @@ from numbers import Number
 
 import numpy as np
 import scipy.sparse as sparse
-from scipy.sparse import csc_matrix
+from scipy.sparse import (csc_matrix, spmatrix, csr_matrix)
 
 import torch
 import linops as lo
@@ -45,11 +45,11 @@ def to_sparse_csc_tensor(sparse_array : csc_matrix,
                          dtype: torch.dtype = torch.float32,
                          device: torch.device | None = None
 ) -> torch.Tensor:
-    """Convert scipy.sparse.csc_matrix to torch.sparse_csc_matrix
+    """Convert a scipy.sparse.spmatrix to a torch.sparse_csc_matrix.
 
     Parameters
     ----------
-    sparse_array : csc_matrix
+    sparse_array : spmatrix
         Input array
     dtype : torch.dtype, optional
         Data type for the output tensor, by default torch.float32.
@@ -59,20 +59,22 @@ def to_sparse_csc_tensor(sparse_array : csc_matrix,
     Returns
     -------
     torch.Tensor
-        Output tensor.
+        Output tensor in sparse_csc layout.
 
     Notes
     -----
     Oddly, when calling this function in diffqcp.test_utils.py on a
     scipy.sparse.csc_matrix, the sparse_array within this function was
     a scipy.sparse.coo_matrix. Hence the generic check and then casting to
-    CSC matrix.
+    csc matrix.
     """
 
     if isinstance(sparse_array, sparse.spmatrix):
 
         if not isinstance(sparse_array, csc_matrix):
             sparse_array = csc_matrix(sparse_array)
+
+        sparse_array = sparse_array if isinstance(sparse_array, csc_matrix) else csc_matrix(sparse_array)
 
         ccol_indices = torch.tensor(sparse_array.indptr, dtype=torch.int64, device=device)
         row_indices = torch.tensor(sparse_array.indices, dtype=torch.int64, device=device)
@@ -90,6 +92,47 @@ def to_sparse_csc_tensor(sparse_array : csc_matrix,
     else:
         raise ValueError("Input must be a scipy sparse matrix in CSC format")
 
+
+def to_sparse_csr_tensor(sparse_array: spmatrix,
+                         dtype: torch.dtype = torch.float32,
+                         device: torch.device | None = None
+) -> torch.Tensor:
+    """Convert a scipy.sparse.spmatrix to a torch.sparse_csr_matrix.
+
+    Parameters
+    ----------
+    sparse_array : spmatrix
+        Input array.
+    dtype : torch.dtype, optional
+        Data type for the output tensor, by default torch.float32.
+    device : torch.device, optional
+        Device for the output tensor, by default None.
+
+    Returns
+    -------
+    torch.Tensor
+        Output tensor in sparse_csr layout.
+    """
+
+    if isinstance(sparse_array, spmatrix):
+
+        sparse_array = sparse_array if isinstance(sparse_array, csr_matrix) else csr_matrix(sparse_array)
+
+        crow_indices = torch.tensor(sparse_array.indptr, dtype=torch.int64, device=device)
+        col_indices = torch.tensor(sparse_array.indices, dtype=torch.int64, device=device)
+        values = torch.tensor(sparse_array.data, dtype=dtype, device=device)
+
+        return torch.sparse_csr_tensor(
+            crow_indices = crow_indices,
+            col_indices = col_indices,
+            values = values,
+            size = sparse_array.shape,
+            dtype = dtype,
+            device = device
+        )
+
+    else:
+        raise ValueError("Input must be a scipy sparse matrix.")
 
 def sparse_csc_tensor_diag(X : torch.Tensor) -> torch.Tensor:
     """Extracts the diagonal of a square 2-D tensor.
@@ -122,12 +165,12 @@ def sparse_csc_tensor_diag(X : torch.Tensor) -> torch.Tensor:
         for i, row in enumerate(indices[row_vals_start:row_vals_end]):
             if row == col:
                 diagonal[col] = values[row_vals_start + i]
-            elif row > col: continue
+            elif row > col : continue
 
     return diagonal
 
-def sparse_csc_tensor_transpose(X: torch.Tensor) -> torch.Tensor:
-    """Return the transpose of a sparse 2-D torch tensor.
+def sparse_csr_tensor_diag(X: torch.Tensor) -> torch.Tensor:
+    """Extracts the diagonal of a square 2-D tensor.
 
     Parameters
     ----------
@@ -135,22 +178,88 @@ def sparse_csc_tensor_transpose(X: torch.Tensor) -> torch.Tensor:
         A 2-D tensor (<=> len(X.shape) == 2).
 
     Returns
-    --------
-    torch.Tensor (in sparse csr format)
-        X.T
+    -------
+    torch.Tensor
+        The 1-D diagonal tensor of X.
     """
 
     assert len(X.shape) == 2
-    assert X.layout == torch.sparse_csc
+    assert X.layout == torch.sparse_csr
     assert X.shape[0] == X.shape[1]
 
-    return torch.sparse_csr_tensor(
-        crow_indices = X.ccol_indices(),
-        col_indices = X.row_indices(),
-        values = X.values(),
-        size = X.shape,
-        dtype=X.dtype,
-        device=X.device)
+    n = X.shape[0]
+    indptr = X.crow_indices()
+    indices = X.col_indices()
+    values = X.values()
+
+    diagonal = torch.zeros(n, dtype=X.dtype, device=X.device)
+
+    for row in range(n):
+        col_vals_start = indptr[row] # also start index of data vals for row
+        col_vals_end = indptr[row+1]
+        for i, col in enumerate(indices[col_vals_start:col_vals_end]):
+            if row == col:
+                diagonal[row] = values[col_vals_start + i]
+            elif row > col : continue
+
+    return diagonal
+
+def sparse_tensor_transpose(X: torch.Tensor,
+                            output_csr: bool=False
+) -> torch.Tensor:
+    """Return the transpose of a sparse 2-D torch tensor.
+
+    Parameters
+    ----------
+    X : torch.Tensor (in sparse csc format or sparse csr format)
+        A 2-D tensor (<=> len(X.shape) == 2).
+    output_csr : bool, optional
+        Whether the returned transpose should be a sparse csr tensor.
+        If X is a sparse csc tensor, then X^T is already outputted
+        as a sparse csr tensor.
+
+    Returns
+    --------
+    torch.Tensor
+        X^T. If X is in sparse csr format then X^T will by default be in
+        sparse csc format (it can be cast to csr format for additional
+        flops using the `output_csr` flag).
+        If X is in sparse csc format then X^T will always be returned
+        in sparse csr format.
+
+    Notes
+    -----
+    BE ADVISED:
+        if outputting X^T in sparse_csc format, be sure
+        the operations performed with X^T are supported by
+        torch.sparse_csc tensors. Such operations are
+        - matrix-vector multiplication (X^T @ v),
+        - matrix-matrix multiplication (X^T @ V),
+        - scaling the matrix (alpha * X^T).
+        An operation that is not supported is matrix-matrix
+        addition (X^T + V).
+    """
+
+    assert len(X.shape) == 2
+    assert (X.layout == torch.sparse_csc or
+        X.layout == torch.sparse_csr)
+
+    if X.layout == torch.sparse_csc:
+        return torch.sparse_csr_tensor(
+            crow_indices = X.ccol_indices(),
+            col_indices = X.row_indices(),
+            values = X.values(),
+            size = (X.shape[1], X.shape[0]),
+            dtype=X.dtype,
+            device=X.device)
+    else:
+        return torch.sparse_csc_tensor(
+            ccol_indices = X.crow_indices(),
+            row_indices = X.col_indices(),
+            values = X.values(),
+            size = (X.shape[1], X.shape[0]),
+            dtype=X.dtype,
+            device=X.device)
 
 class ScalarOperator(lo.LinearOperator):
     """A scalar linear operator.
@@ -215,10 +324,9 @@ class SymmetricOperator(lo.LinearOperator):
             Default machine is the host. It is recommended to provide the device
             (loosely) the op is on.
         """
-        # assert isinstance(U, torch.Tensor)
-        # assert len(U.shape) == 2
-
         if isinstance(op, torch.Tensor):
+            assert len(op.shape) == 2
+
             diag = sparse_csc_tensor_diag(op)
             opT = sparse_csc_tensor_transpose(op)
             self._mv = lambda v : op @ v + opT @ v - diag * v
@@ -360,11 +468,10 @@ def Q(P: torch.Tensor | lo.LinearOperator,
     """
     n = x.shape[0]
     N = n + y.shape[0] + 1
-    first_chunk = P @ x + A.T @ y + tau * q
-    second_chunk = -A @ x + tau * b
-    final_entry = -(1/tau) * x @ (P @ x) - q @ x - b @ y
+    AT = sparse_csc_tensor_transpose(A)
     output = torch.zeros(N, dtype = x.dtype, device=x.device)
-    output[0:n] = first_chunk
-    output[n:-1] = second_chunk
-    output[-1] = final_entry
+    output[0:n] = P @ x + AT @ y + tau * q
+    output[n:-1] = -A @ x + tau * b
+    output[-1] = -(1/tau) * x @ (P @ x) - q @ x - b @ y
+
     return output

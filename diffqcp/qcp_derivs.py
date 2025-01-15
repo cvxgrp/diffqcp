@@ -7,7 +7,7 @@ import torch
 import linops as lo
 
 from diffqcp.cone_derivs import dpi
-from diffqcp.utils import _sLinearOperator
+from diffqcp.utils import (_sLinearOperator, sparse_tensor_transpose)
 
 def Du_Q(u: torch.Tensor,
          P: torch.Tensor | lo.LinearOperator,
@@ -27,32 +27,30 @@ def Du_Q(u: torch.Tensor,
 
     Px = P @ x
     xT_P_x = x @ Px
+    AT = sparse_tensor_transpose(A) # If A was in csr format, AT is in csc format.
 
     def mv(du: torch.Tensor) -> torch.Tensor:
         dx, dy, dtau = du[:n], du[n:-1], du[-1]
+        out = torch.zeros(N, dtype=A.dtype, device=A.device)
 
-        first_chunk = P @ dx + A.T @ dy + dtau * q
-        second_chunk = -A @ dx + dtau * b
-        final_entry = -(2/tau) * x @ (P @ dx) - q @ dx - b @ dy \
+        out[0:n] = P @ dx + AT @ dy + dtau * q
+        out[n:-1] = -A @ dx + dtau * b
+        out[-1] = -(2/tau) * x @ (P @ dx) - q @ dx - b @ dy \
                         + (1/tau**2) * dtau * xT_P_x
 
-        return torch.cat((first_chunk,
-                          second_chunk,
-                          final_entry.unsqueeze(0)))
+        return out
 
     def rv(dv: torch.Tensor) -> torch.Tensor:
         dv1, dv2, dv3 = dv[:n], dv[n:-1], dv[-1]
+        out = torch.zeros(N, dtype=A.dtype, device=A.device)
 
-        first_chunk = P @ dv1 - A.T @ dv2 + ( -(2/tau)*Px - q )*dv3
-        second_chunk = A @ dv1 - dv3 * b
-        final_entry = q @ dv1 + b @ dv2 + (1/tau**2) * dv3 * xT_P_x
+        out[0:n] = P @ dv1 - AT @ dv2 + ( -(2/tau)*Px - q )*dv3
+        out[n:-1] = A @ dv1 - dv3 * b
+        out[-1] = q @ dv1 + b @ dv2 + (1/tau**2) * dv3 * xT_P_x
 
-        return torch.cat((first_chunk,
-                          second_chunk,
-                          final_entry.unsqueeze(0)))
+        return out
 
     Du_Q_op = _sLinearOperator(N, N, mv, rv)
-
     return Du_Q_op
 
 

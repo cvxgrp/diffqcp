@@ -4,7 +4,7 @@ Exposes the function to be used to compute the derivative of a QCP.
 from typing import Dict, Tuple, Callable
 
 import numpy as np
-from scipy.sparse import csc_matrix
+from scipy.sparse import (csc_matrix, csr_matrix, spmatrix)
 import torch
 import linops as lo
 from linops.lsqr import lsqr
@@ -13,11 +13,11 @@ import clarabel
 import diffqcp.cones as cone_utils
 from diffqcp.cone_derivs import dpi, dprojection
 from diffqcp.qcp_derivs import Du_Q, form_M, dData_Q
-from diffqcp.utils import to_tensor, to_sparse_csc_tensor, SymmetricOperator
+from diffqcp.utils import to_tensor, to_sparse_csr_tensor, SymmetricOperator
 
 
-def compute_derivative(P: torch.Tensor | csc_matrix,
-                       A: torch.Tensor | csc_matrix,
+def compute_derivative(P: torch.Tensor | spmatrix,
+                       A: torch.Tensor | spmatrix,
                        q: torch.Tensor | np.ndarray,
                        b: torch.Tensor | np.ndarray,
                        cone_dict: Dict[str, int | list[int]],
@@ -27,8 +27,8 @@ def compute_derivative(P: torch.Tensor | csc_matrix,
                                  | clarabel.DefaultSolution,
                        dtype: torch.dtype | None = None,
                        device: torch.device | None = None
-) -> Callable[[torch.Tensor | csc_matrix,
-               torch.Tensor | csc_matrix,
+) -> Callable[[torch.Tensor | spmatrix,
+               torch.Tensor | spmatrix,
                torch.Tensor,
                torch.Tensor],
                Tuple[torch.Tensor,
@@ -53,14 +53,16 @@ def compute_derivative(P: torch.Tensor | csc_matrix,
 
     Parameters
     ---------
-    P : torch.Tensor | scipy.sparse.csc_matrix
+    P : torch.Tensor | scipy.sparse.spmatrix
         The quadratic component of the objective function.
         This parameter should only be the **upper triangular part** of the P
-        in (P) and (D), and it should be either a scipy.sparse.csc_matrix
-        **or** a torch.Tensor in torch.sparse_csc layout.
-    A : torch.Tensor | scipy.sparse.csc_matrix
-        A sparse matrix in CSC format, stored as a scipy.sparse_csc_matrix
-        **or** a torch.Tensor in torch.sparse_csc_layout.
+        in (P) and (D), and it should be either a scipy.sparse.spmatrix
+        **or** a torch.Tensor. (See notes below for more information on the
+        storage of P.)
+    A : torch.Tensor | scipy.sparse.spmatrix
+        A scipy.sparse.spmatrix **or** a torch.Tensor.
+        (See notes below for more information on the
+        storage of A.)
         The first block of rows must correspond to the zero cone, the next block
         to the positive orthant, then the second-order cone, the PSD cone, the exponential
         cone, and finally the exponential dual cone. PSD matrix variables
@@ -110,6 +112,15 @@ def compute_derivative(P: torch.Tensor | csc_matrix,
     is the upper triangular part of a PSD matrix (i.e., checks on these properties
     are not done). The primal-dual solution, (x^star, y^star, s^star), is not
     checked in any way.
+    - If the provided P is a torch tensor in sparse csr format, no data conversions
+    will be performed. If P is a torch tensor stored in any other way (so
+    according to any other sparsity format or just as a regular tensor), it will be
+    internally converted to a tensor in sparse csr format.
+    Similarly, while all scipy sparse matrices will be converted to a torch
+    tensor, if the provided scipy sparse matrix is not in csr format, it will first
+    be converted to such before being used to construct a sparse torch tensor in csr
+    format.
+    - The storage of A follows the same guidelines as the storage for P.
     - The dtype for tensors is chosen according to the following logic:
         - If a dtype parameter is provided, this dtype is used.
         - If a dtype parameter is not provided, but the parameter P is a torch.Tensor,
@@ -140,35 +151,25 @@ def compute_derivative(P: torch.Tensor | csc_matrix,
         assert (device is None or isinstance(device, torch.device))
         DEVICE = device
 
-    if isinstance(P, csc_matrix):
-        P = to_sparse_csc_tensor(P, DTYPE, DEVICE)
+    if isinstance(P, spmatrix):
+        P = to_sparse_csr_tensor(P, DTYPE, DEVICE)
     elif isinstance(P, torch.Tensor):
-        if P.layout != torch.sparse_csc:
-            raise ValueError("The provided P is a torch Tensor, "
-                + " but it is not in sparse CSC format.")
-
+        P = P.to_sparse_csr() if P.layout != torch.sparse_csr else P
         P = P.to(dtype=DTYPE, device=DEVICE)
     else:
-        raise ValueError("P must be either a sparse torch Tensor"
-            + " in CSC format, or a sparse scipy matrix"
-            + " in CSC format. (And only the upper triangular"
-            + " part of the mathematical P it represents"
-            + " should be provided.)")
+        raise ValueError("P must be a torch Tensor or a sparse scipy matrix."
+            + " (And only the upper triangular part of the mathematical"
+            + " P it represents should be provided.)")
 
-    if isinstance(A, csc_matrix):
-        A = to_sparse_csc_tensor(A, DTYPE, DEVICE)
+    if isinstance(A, spmatrix):
+        A = to_sparse_csr_tensor(A, DTYPE, DEVICE)
     elif isinstance(A, torch.Tensor):
-        if A.layout != torch.sparse_csc:
-            raise ValueError("The provided A is a torch Tensor, "
-                + " but it is not in sparse CSC format.")
+        A = A.to_sparse_csr() if A.layout != torch.sparse_csr else A
         A = A.to(dtype=DTYPE, device=DEVICE)
     else:
-        raise ValueError("A must be either a sparse torch Tensor"
-            + " in CSC format, or a sparse scipy matrix"
-            + " in CSC format.")
+        raise ValueError("A must be a torch Tensor or a sparse scipy matrix.")
 
     P_linop = SymmetricOperator(P.shape[0], P, DEVICE)
-
     q = to_tensor(q, DTYPE, DEVICE)
     b = to_tensor(b, DTYPE, DEVICE)
 
@@ -188,10 +189,11 @@ def compute_derivative(P: torch.Tensor | csc_matrix,
     n = x.shape[0]
     m = y.shape[0]
 
-    cones = cone_utils.parse_cone_dict(cone_dict)
+    cones : list[Tuple[str, int | list[int]]] = cone_utils.parse_cone_dict(cone_dict)
 
     z = (x, y - s, torch.tensor(1.0, dtype=DTYPE, device=DEVICE))
     u, v, w, = z
+    # TODO: consider how to handle z; as a tuple?
     Pi_z = cone_utils.pi(z, cones)
 
     Dz_Q_Pi_z: lo.LinearOperator = Du_Q(Pi_z, P_linop, A, q, b)
@@ -206,36 +208,25 @@ def compute_derivative(P: torch.Tensor | csc_matrix,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
         # TODO: create a helper function to perform this functionality
-        # since also done above
-        if isinstance(dP, csc_matrix):
-            dP = to_sparse_csc_tensor(dP, DTYPE, DEVICE)
+        if isinstance(dP, spmatrix):
+            dP = to_sparse_csr_tensor(dP, DTYPE, DEVICE)
         elif isinstance(dP, torch.Tensor):
-            if dP.layout != torch.sparse_csc:
-                raise ValueError("The provided P is a torch Tensor, "
-                    + " but it is not in sparse CSC format.")
-
+            dP = dP.to_sparse_csr() if dP.layout != torch.sparse_csr else dP
             dP = dP.to(dtype=DTYPE, device=DEVICE)
         else:
-            raise ValueError("dP must be either a sparse torch Tensor"
-                + " in CSC format, or a sparse scipy matrix"
-                + " in CSC format. (And only the upper triangular"
-                + " part of the mathematical dP it represents"
-                + " should be provided.)")
+            raise ValueError("dP must be a torch Tensor or a sparse scipy matrix."
+                + " (And only the upper triangular part of the mathematical"
+                + " P it represents should be provided.)")
 
-        if isinstance(dA, csc_matrix):
-            dA = to_sparse_csc_tensor(dA, DTYPE, DEVICE)
+        if isinstance(dA, spmatrix):
+            dA = to_sparse_csr_tensor(dA, DTYPE, DEVICE)
         elif isinstance(dA, torch.Tensor):
-            if dA.layout != torch.sparse_csc:
-                raise ValueError("The provided dA is a torch Tensor, "
-                    + " but it is not in sparse CSC format.")
+            dA = dA.to_sparse_csr() if dA.layout != torch.sparse_csr else dA
             dA = dA.to(dtype=DTYPE, device=DEVICE)
         else:
-            raise ValueError("dA must be either a sparse torch Tensor"
-                + " in CSC format, or a sparse scipy matrix"
-                + " in CSC format.")
+            raise ValueError("dA must be a torch Tensor or a sparse scipy matrix.")
 
         dP_linop = SymmetricOperator(dP.shape[0], dP, DEVICE)
-
         dq = to_tensor(dq, DTYPE, DEVICE)
         db = to_tensor(db, DTYPE, DEVICE)
 

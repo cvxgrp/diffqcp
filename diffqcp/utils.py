@@ -1,4 +1,7 @@
-from typing import Sequence, Callable
+"""
+Utilities for manipulating torch tensors + the homogeneous, nonlinear embedding mapping.
+"""
+
 from numbers import Number
 
 import numpy as np
@@ -41,7 +44,7 @@ def to_tensor(
     else:
         raise ValueError("Input must be a numpy array or torch tensor")
 
-def to_sparse_csc_tensor(sparse_array : csc_matrix,
+def to_sparse_csc_tensor(sparse_array : spmatrix,
                          dtype: torch.dtype = torch.float32,
                          device: torch.device | None = None
 ) -> torch.Tensor:
@@ -133,6 +136,7 @@ def to_sparse_csr_tensor(sparse_array: spmatrix,
 
     else:
         raise ValueError("Input must be a scipy sparse matrix.")
+    
 
 def sparse_csc_tensor_diag(X : torch.Tensor) -> torch.Tensor:
     """Extracts the diagonal of a square 2-D tensor.
@@ -169,6 +173,7 @@ def sparse_csc_tensor_diag(X : torch.Tensor) -> torch.Tensor:
 
     return diagonal
 
+
 def sparse_csr_tensor_diag(X: torch.Tensor) -> torch.Tensor:
     """Extracts the diagonal of a square 2-D tensor.
 
@@ -204,10 +209,32 @@ def sparse_csr_tensor_diag(X: torch.Tensor) -> torch.Tensor:
 
     return diagonal
 
+
+def sparse_tensor_diag(X: torch.Tensor) -> torch.Tensor:
+    """Extracts the diagonal of a square 2-D tensor.
+
+    Parameters
+    ----------
+    X : torch.Tensor (in sparse csc or csr format)
+        A 2-D tensor (<=> len(X.shape) == 2)
+
+    Returns
+    -------
+    torch.Tensor
+        The 1-D diagonal tensor of X.
+    """
+    assert len(X.shape) == 2
+    assert (X.layout == torch.sparse_csr or X.layout == torch.sparse_csr)
+    assert X.shape[0] == X.shape[1]
+
+    if X.layout == torch.sparse_csr : return sparse_csr_tensor_diag(X)
+    else : return sparse_csc_tensor_diag(X)
+
+
 def sparse_tensor_transpose(X: torch.Tensor,
                             output_csr: bool=False
 ) -> torch.Tensor:
-    """Return the transpose of a sparse 2-D torch tensor.
+    """Return the transpose of a sparse 2-D tensor.
 
     Parameters
     ----------
@@ -253,13 +280,75 @@ def sparse_tensor_transpose(X: torch.Tensor,
             dtype=X.dtype,
             device=X.device)
     else:
-        return torch.sparse_csc_tensor(
-            ccol_indices = X.crow_indices(),
-            row_indices = X.col_indices(),
-            values = X.values(),
-            size = (X.shape[1], X.shape[0]),
-            dtype=X.dtype,
-            device=X.device)
+        out = torch.sparse_csc_tensor(
+                ccol_indices = X.crow_indices(),
+                row_indices = X.col_indices(),
+                values = X.values(),
+                size = (X.shape[1], X.shape[0]),
+                dtype=X.dtype,
+                device=X.device)
+        if not output_csr:
+            return out
+        else:
+            return out.to_sparse_csc()
+        
+def _get_GPU_settings(P: torch.Tensor,
+                      dtype: torch.device | None,
+                      device: torch.device | None
+) -> tuple[torch.dtype, torch.device | None]:
+    """Convenience method to reduce number of lines in `compute_derivative`.
+
+    See the docstring of `compute_derivative` for the explanation of this
+    method's logic.
+    """
+    if dtype is None and isinstance(P, torch.Tensor):
+        DTYPE = P.dtype
+    elif dtype is not None:
+        assert isinstance(dtype, torch.dtype)
+        DTYPE = dtype
+    else:
+        DTYPE = torch.float32
+
+    if device is None and isinstance(P, torch.Tensor):
+        DEVICE = P.device
+    else:
+        assert (device is None or isinstance(device, torch.device))
+        DEVICE = device
+    
+    return DTYPE, DEVICE
+
+
+def _convert_problem_data(P: torch.Tensor | spmatrix,
+                          A: torch.Tensor | spmatrix,
+                          q: torch.Tensor | np.ndarray,
+                          b: torch.Tensor | np.ndarray,
+                          dtype: torch.dtype,
+                          device: torch.device
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Convenience method to reduce number of lines in `compute_derivative`.
+    """
+    if isinstance(P, spmatrix):
+        P = to_sparse_csr_tensor(P, dtype, device)
+    elif isinstance(P, torch.Tensor):
+        P = P.to_sparse_csr() if P.layout != torch.sparse_csr else P
+        P = P.to(dtype=dtype, device=device)
+    else:
+        raise ValueError("P (and dP) must be a torch Tensor or a sparse scipy matrix."
+            + " (And only the upper triangular part of the mathematical"
+            + " P it represents should be provided.)")
+
+    if isinstance(A, spmatrix):
+        A = to_sparse_csr_tensor(A, dtype, device)
+    elif isinstance(A, torch.Tensor):
+        A = A.to_sparse_csr() if A.layout != torch.sparse_csr else A
+        A = A.to(dtype=dtype, device=device)
+    else:
+        raise ValueError("A (and dA) must be a torch Tensor or a sparse scipy matrix.")
+
+    q = to_tensor(q, dtype, device)
+    b = to_tensor(b, dtype, device)
+
+    return P, A, q, b
 
 
 def Q(P: torch.Tensor | lo.LinearOperator,
@@ -272,12 +361,13 @@ def Q(P: torch.Tensor | lo.LinearOperator,
 ) -> torch.Tensor:
     """Homogeneous embedding, nonlinear transform.
 
-    check if P is only upper part
+    See the diffqcp paper for the origin of this function.
+    It is used throughout this repository for testing purposes only.
     """
     n = x.shape[0]
     N = n + y.shape[0] + 1
     AT = sparse_tensor_transpose(A)
-    output = torch.zeros(N, dtype = x.dtype, device=x.device)
+    output = torch.empty(N, dtype = x.dtype, device=x.device)
     output[0:n] = P @ x + AT @ y + tau * q
     output[n:-1] = -A @ x + tau * b
     output[-1] = -(1/tau) * x @ (P @ x) - q @ x - b @ y

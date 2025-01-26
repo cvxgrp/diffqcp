@@ -1,26 +1,35 @@
-from typing import Tuple
-
 import torch
 import linops as lo
 
 from diffqcp.linops import ScalarOperator, BlockDiag, SymmetricOperator
-from diffqcp.cones import (ZERO, POS, SOC, PSD, EXP, EXP_DUAL, symm_size_to_dim,
-    vec_symm, unvec_symm)
+from diffqcp.cones import (ZERO, POS, SOC, PSD, EXP, EXP_DUAL, CONES,
+                           symm_size_to_dim, vec_symm, unvec_symm)
 
 def _dprojection_psd(x: torch.Tensor) -> lo.LinearOperator:
     """Returns the derivative of the projection onto the PSD cone at x.
 
+    Parameters
+    ----------
+    x : torch.Tensor
+        A vectorized PSD matrix with dimension == len(x).
+
     Returns
     -------
     lo.LinearOperator
-        The derivative of the projectoin onto the PSD cone at x as an
+        The derivative of the projection onto the PSD cone at x as an
         abstract linear map.
 
     Notes
     -----
     - see BMB'18 for derivative and its derivation
     - TODO: cache Q and lambd from projection
+    - TODO: needs testing/support (later phase of project)
+    - This computation should be optimized for the GPU, however, it does
+    need to make use of the caching that will be done when projecting onto the
+    cone, which happens before this derivative evaluation.
     """
+    assert len(x.shape) == 1, "PSD projection: x must be vectorized."
+
     dim = x.shape[0]
     X = unvec_symm(x)
     lambd, Q = torch.linalg.eigh(X)
@@ -80,17 +89,19 @@ def _dprojection_soc(x: torch.Tensor) -> lo.LinearOperator:
     Parameters
     ----------
     x : torch.Tensor
-        The point
+        Where the derivative of the projection onto the SOC is evaluated.
+        The length of x is the dimension of the SOC that the projection
+        is onto.
 
     Returns
     -------
     lo.LinearOperator
-    The derivative of the projectoin onto the SOC at x as an
-    abstract linear map.
+        The derivative of the projection onto the SOC at x as an
+        abstract linear map.
 
     Notes
     ------
-    See BMB'18 for derivative
+    - See BMB'18 for derivative
     """
     n = x.shape[0]
     t, z = x[0], x[1:]
@@ -116,17 +127,19 @@ def _dprojection_soc(x: torch.Tensor) -> lo.LinearOperator:
 
 def _dprojection_pos(x: torch.Tensor) -> lo.LinearOperator:
     """TODO: add docstring"""
-    return lo.DiagonalOperator(0.5 * (torch.sign(x) + 1.0))
+    return lo.DiagonalOperator(0.5 * (torch.sign(x).to(dtype=x.dtype, device=x.device) + 1.0))
 
 def _dprojection_zero(x: torch.Tensor, dual: bool) -> lo.LinearOperator:
     """TODO: add docstring; dual cone is free cone"""
     n = x.shape[0]
-    return lo.IdentityOperator(n) if dual else lo.ZeroOperator(n)
+    return lo.IdentityOperator(n) if dual else lo._ZeroOperator(n)
 
 def _dprojection(x: torch.Tensor,
                  cone : str,
                  dual: bool=False
 ) -> lo.LinearOperator:
+    """The derivative of the projection onto cone at x.
+    """
     if cone == EXP_DUAL:
         cone = EXP
         dual = not dual
@@ -139,19 +152,41 @@ def _dprojection(x: torch.Tensor,
         return _dprojection_soc(x)
     elif cone == PSD:
         return _dprojection_psd(x)
-    elif cone == EXP:
-        raise NotImplementedError("%s not implemented" % cone)
     else:
         raise NotImplementedError("%s not implemented" % cone)
 
 def dprojection(x: torch.Tensor,
-                cones: list[Tuple[str, int | list[int]]],
+                cones: list[tuple[str, int | list[int]]],
                 dual=False
 ) -> lo.LinearOperator:
-    """TODO: add docstring"""
+    """Returns the derivative of the projection of x onto a convex cone (or its dual).
+
+    Parameters
+    ----------
+    x : torch.Tensor
+        The tensor to evaluate the derivative of the projection at.
+    cones : list[tuple[str, int | list[int]]]
+        A list of cones in the format specified in the docstrings of `proj`
+        in `cones.py`, whose cartesian product is the cone this function
+        returns the derivative of the projection onto at x.
+    dual : bool, optional
+        Whether the projection of x is onto the cone or dual cone.
+        Default is True <=> project x onto the cone.
+
+    Returns
+    -------
+    lo.LinearOperator
+        The derivative of the projection onto a convex cone (or its dual) at x.
+
+    Notes
+    -----
+    - TODO: This function can certainly be rewritten to utilize GPU parallelization
+    (this will look similar to however `proj` is rewritten).
+    """
     ops = []
     offset = 0
     for cone, sz in cones:
+        assert cone in CONES, f"{cone} is not a known cone."
         sz = sz if isinstance(sz, (tuple, list)) else (sz,)
         if sum(sz) == 0:
             continue
@@ -169,13 +204,27 @@ def dprojection(x: torch.Tensor,
 def dpi(u: torch.Tensor,
         v : torch.Tensor,
         w: torch.Tensor,
-        cones: list[Tuple[str, int | list[int]]]
+        cones: list[tuple[str, int | list[int]]]
 ) -> lo.LinearOperator:
-    """Derivative of the projection of z onto R^n x K^* x R_+
-    TODO: finish docstring
-    Notes
-    -----
-    allow for batch dimension?
+    """Derivative of the projection of z = (u, v , w) onto R^n x K^* x R_+.
+
+    Parameters
+    ----------
+    u : torch.Tensor
+        The derivative of the projection onto R^n is evaluated at u.
+    v : torch.Tensor
+        The derivative of the projection onto K^* is evaluated at v.
+    w : torch.Tensor
+        The derivative of the projection onto R_+ is evaluated at w.
+    cones : list[tuple[str, int | list[int]]]
+        A list of cones in the format specified in the docstrings of `proj`
+        in `cones.py`. The derivative of the projection onto K^* is computed
+        at v.
+
+    Returns
+    -------
+    lo.LinearOperator
+        The derivative of the projection onto R^n x K^* x R_+ at x.
     """
     assert len(u.shape) == 1
     assert len(v.shape) == 1

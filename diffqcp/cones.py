@@ -1,14 +1,12 @@
 """
-All cone related objects and functionalty (including projections onto cones and their derivates).
-Some of the cone code related to the more advanced cones will probably be added in separate
-files, though.
+Cone utility functions and projections.
+The derivative of these projections and the exponential cone projection are in separate files.
 """
 import math
-from typing import Tuple, Dict
 
 import torch
 
-# need to check for alternative to distutils, which was deprecated starting in Python 3.12
+# TODO: need to check for alternative to distutils, which was deprecated starting in Python 3.12
 
 ZERO = "z"
 POS = "l"
@@ -20,20 +18,20 @@ EXP_DUAL = "ed"
 # The ordering of CONES matches SCS.
 CONES = [ZERO, POS, SOC, PSD, EXP, EXP_DUAL]
 
-def parse_cone_dict(cone_dict: Dict[str, int | list[int]]
-) -> list[Tuple[str, int | list[int]]]:
+def parse_cone_dict(cone_dict: dict[str, int | list[int]]
+) -> list[tuple[str, int | list[int]]]:
     """Parses SCS-style cone dictionary.
 
     Parameters
     ----------
-    cone_dict : Dict[str, int | list[int]]
+    cone_dict : dict[str, int | list[int]]
         A dictionary with keys corresponding to cones and values
         corresponding to their dimension (either integers or lists of integers;
-        see the docstring for `compute_derivative`).
+        see the docstring for `compute_derivative` in `qcp.py`).
 
     Returns
     -------
-    list[Tuple[str, int | list[int]]]
+    list[tuple[str, int | list[int]]]
         A list of two-tuples where the first entry in a tuple is a
         key from the provided dictionary and the second entry in
         that tuple is the corresponding dictionary value.
@@ -52,7 +50,7 @@ def symm_size_to_dim(size: int) -> int:
     Parameters
     ----------
     size : int
-        The number of columns (or equivalently, rows) of a symmetric matrix.
+        The number of columns (equivalently, rows) of a symmetric matrix.
 
     Returns
     -------
@@ -108,12 +106,12 @@ def vec_symm(X: torch.Tensor) -> torch.Tensor:
     matrix in row-major order. This is equivalent to extracting the lower triangular
     indices of a dim x dim matrix in column-major order.
     """
-    assert len(X.shape) == 2
+    assert len(X.shape) == 2, "vec_symm requires that X is a 2-D tensor."
 
-    sqrt2 = torch.sqrt(torch.tensor(2, device=X.device))
+    sqrt2 = torch.sqrt(torch.tensor(2, dtype=X.dtype, device=X.device))
     size = X.shape[0]
 
-    row_idx, col_idx = torch.triu_indices(size, size)
+    row_idx, col_idx = torch.triu_indices(size, size, device=X.device)
     vec = X[row_idx, col_idx]
     vec[row_idx != col_idx] *= sqrt2
     return vec
@@ -150,12 +148,12 @@ def unvec_symm(x: torch.Tensor,
     assert len(x.shape) == 1
     size = size if size > 0 else symm_dim_to_size(x.shape[0])
 
-    sqrt2 = torch.sqrt(torch.tensor(2, device=x.device))
+    sqrt2 = torch.sqrt(torch.tensor(2, dtype=x.dtype, device=x.device))
     X = torch.zeros((size, size), dtype=x.dtype, device=x.device)
-    row_idx, col_idx = torch.triu_indices(size, size)
+    row_idx, col_idx = torch.triu_indices(size, size, device=x.device)
     X[row_idx, col_idx] = x / sqrt2
     X = X + X.T
-    diag_indices = torch.arange(size)
+    diag_indices = torch.arange(size, device=x.device)
     X[diag_indices, diag_indices] /= sqrt2
     return X
 
@@ -164,66 +162,80 @@ def _proj(x: torch.Tensor,
           cone: str,
           dual=False
 ) -> torch.Tensor:
-    """Project x onto an "atom" cone.
+    """Project x onto an "atom" cone or its dual.
+
+    Notes
+    -----
+    - TODO: test PSD cone projection support.
+    - TODO: cache the eigendecomposition computed when projecting onto PSD cones.
+    - TODO: add support for projecting onto exponential cone. 
     """
     if cone == EXP_DUAL:
         cone = EXP
         dual = not dual
 
     if cone == ZERO:
-        return x if dual else torch.zeros(x.shape[0])
+        return x if dual else torch.zeros(x.shape[0], dtype=x.dtype, device=x.device)
     elif cone == POS:
         return torch.maximum(x, torch.tensor(0, dtype=x.dtype, device=x.device))
     elif cone == SOC:
         t = x[0]
         z = x[1:]
         norm_z = torch.linalg.norm(z, 2)
+        #TODO: lower tolerance to account for dtype being torch.float32 by default?
         if norm_z <= t or torch.isclose(norm_z, t, atol=1e-8):
             return x
         elif norm_z <= -t:
-            return torch.zeros(x.shape[0])
+            return torch.zeros(x.shape[0], dtype=x.dtype, device=x.device)
         else:
             return 0.5 * (1 + t / norm_z) * torch.cat((norm_z.unsqueeze(0), z))
     elif cone == PSD:
         size = symm_dim_to_size(x.shape[0])
         X = unvec_symm(x, size)
-        # TODO: cache lambd (before clamp) and Q
         lambd, Q = torch.linalg.eigh(X)
         lambd.clamp_(min=0)
         PiX = Q @ (lambd.unsqueeze(-1) * Q.T)
         return vec_symm(PiX)
-    # elif cone == EXP:
-    #     num_cones = int(x.size / 3)
-    #     out = np.zeros(x.size)
-    #     offset = 0
-    #     for _ in range(num_cones):
-    #         x_i = x[offset:offset + 3]
-    #         if dual:
-    #             x_i = x_i * -1
-    #         out[offset:offset + 3] = project_exp_cone(x_i)
-    #         offset += 3
-    #     # via Moreau: Pi_K*(x) = x + Pi_K(-x)
-    #     return x + out if dual else out
     else:
         raise NotImplementedError("%s not implemented" % cone)
 
 
 def proj(x,
-         cones: list[Tuple[str, int | list[int]]],
+         cones: list[tuple[str, int | list[int]]],
          dual=False
 ) -> torch.Tensor:
     """Projects x onto a (convex) cone, or its dual cone.
 
-    Cone can be the cartesian product of "atom" cones
-
     Parameters
     ----------
     x : torch.Tensor
-    cones : Dict
+        The tensor to be projected.
+    cones : list[tuple[str, int | list[int]]]
+        The list of cones that x will be projected onto
+        the cartesian product of.
+        Specifically, cones should be a list of two-tuples, where
+        the first element is the key for a known (convex) "atom" cone
+        (see the docstring for `compute_derivative` in `qcp.py`)
+        and the second element is the dimensionality of the cone.
+        The second element in the tuple being a list corresponds to
+        there being len(list) of those cones to project onto.
+    dual : bool, optional
+        Whether to project x onto the cone or dual cone.
+        Default is True <=> project x onto the cone (not the dual).
+
+    Returns
+    -------
+    torch.Tensor
+        x projected onto cones.
+
+    Notes
+    -----
+    - TODO: This function can certainly be rewritten to utilize GPU parallelization.
     """
-    projection = torch.zeros(x.shape[0])
-    offset = 0
+    projection = torch.empty(x.shape[0], dtype=x.dtype, device=x.device)
+    offset = torch.tensor(0, dtype=torch.int32, device=x.device)
     for cone, sz in cones:
+        assert cone in CONES, f"{cone} is not a known cone."
         sz = sz if isinstance(sz, (tuple, list)) else (sz,)
         if sum(sz) == 0:
             continue
@@ -240,18 +252,34 @@ def proj(x,
 
     return projection
 
-def pi(z: Tuple[torch.Tensor,
+
+def pi(z: tuple[torch.Tensor,
                 torch.Tensor,
                 torch.Tensor],
-       cones: list[Tuple[str, int | list[int]]]
+       cones: list[tuple[str, int | list[int]]]
 ) -> torch.Tensor:
-    """Projection onto R^n x K^* x R_+
-    TODO: add more
+    """Projection onto R^n x K^* x R_+.
+    
+    Parameters
+    ----------
+    z : tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        The point to project onto R^n x K^* x R_+.
+        The second element in the tuple must have a length
+        corresponding to the dimensionality of K^*.
+    cones : list[tuple[str, int | list[int]]]
+        A list of cones in the format specified in the docstrings of `proj`
+        in `cones.py`. The tensor z[1] will be projected onto the dual of
+        each cone (so the dual of the cartesian product of the cones).
+    
+    Returns
+    -------
+    torch.Tensor
+        The projection of z onto R^n x K^* x R_+.
     """
     u, v, w = z
     n = u.shape[0]
-    out = torch.zeros(n + v.shape[0] + 1, dtype=u.dtype, device=u.device)
+    out = torch.empty(n + v.shape[0] + 1, dtype=u.dtype, device=u.device)
     out[0:n] = u
-    out[n:-1] = proj(v, cones, dual=True)
+    out[n:-1] = proj(v, cones, dual=True) # TODO: cache this!!!
     out[-1] = torch.maximum(w, torch.tensor(0.0, dtype=w.dtype, device=w.device))
     return out

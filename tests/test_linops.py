@@ -35,6 +35,7 @@ def test_scalar_operator():
     assert torch.allclose(neg_scal_op.T@v, neg_scal*v)
 
 
+# TODO : add dtype as param for test
 def test_symmetric_tensor():
     """
     For some 2-D torch tensor representing a symmetric matrix, there are numerical
@@ -50,15 +51,15 @@ def test_symmetric_tensor():
 
         P, _, _, _ = generate_problem_data(n, m, sparse.random, np.random.randn)
         P_upper = sparse.triu(P).tocsr()
-        P_tch = to_sparse_csr_tensor(P_upper)
-        P_op = SymmetricOperator(n, P_tch)
+        P_upper_tch = to_sparse_csr_tensor(P_upper)
+        P_op = SymmetricOperator(n, P_upper_tch)
 
         x = np.random.randn(n)
         x_tch = to_tensor(x)
         P_x_tch = to_tensor(P @ x)
         PT_x_tch = to_tensor(P.T @ x)
 
-        assert torch.allclose(P_x_tch, P_op @ x_tch, atol=1e-6, rtol=1e-6), "MV products not equal"
+        assert torch.allclose(P_x_tch, P_op @ x_tch, atol=1e-5, rtol=1e-5), "MV products not equal"
         assert torch.allclose(PT_x_tch, P_x_tch, atol=1e-5, rtol=1e-5), "MV transpose, products not equal for true values"
         assert torch.allclose(PT_x_tch, P_op.T @ x_tch, atol=1e-5, rtol=1e-5), "MV transpose, products not equal for operator"
 

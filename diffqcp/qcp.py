@@ -1,28 +1,28 @@
 """
-Exposes the function to be used to compute the derivative of a QCP.
+Exposes the function `compute_derivative`, which computes the derivative of a QCP.
 """
-from typing import Dict, Tuple, Callable
+from typing import Callable
 
 import numpy as np
-from scipy.sparse import (csc_matrix, csr_matrix, spmatrix)
+from scipy.sparse import spmatrix
 import torch
 import linops as lo
 from linops.lsqr import lsqr
 import clarabel
 
-import diffqcp.cones as cone_utils
-from diffqcp.cone_derivs import dpi, dprojection
-from diffqcp.qcp_derivs import Du_Q, form_M, dData_Q
-from diffqcp.utils import to_tensor, to_sparse_csr_tensor
 from diffqcp.linops import SymmetricOperator
+import diffqcp.cones as cone_utils
+from diffqcp.cone_derivs import dprojection
+from diffqcp.qcp_derivs import Du_Q, form_M, dData_Q
+from diffqcp.utils import to_tensor, _convert_problem_data, _get_GPU_settings
 
 
 def compute_derivative(P: torch.Tensor | spmatrix,
                        A: torch.Tensor | spmatrix,
                        q: torch.Tensor | np.ndarray,
                        b: torch.Tensor | np.ndarray,
-                       cone_dict: Dict[str, int | list[int]],
-                       solution: Tuple[torch.Tensor | np.ndarray | list[float],
+                       cone_dict: dict[str, int | list[int]],
+                       solution: tuple[torch.Tensor | np.ndarray | list[float],
                                        torch.Tensor | np.ndarray | list[float],
                                        torch.Tensor | np.ndarray | list[float]]
                                  | clarabel.DefaultSolution,
@@ -32,7 +32,7 @@ def compute_derivative(P: torch.Tensor | spmatrix,
                torch.Tensor | spmatrix,
                torch.Tensor,
                torch.Tensor],
-               Tuple[torch.Tensor,
+               tuple[torch.Tensor,
                      torch.Tensor,
                      torch.Tensor]]:
 # ) -> lo.LinearOperator:
@@ -73,7 +73,7 @@ def compute_derivative(P: torch.Tensor | spmatrix,
         Linear component of objective function.
     b : torch.Tensor | np.ndarray
         Cone program constraint offset.
-    cone_dict : Dict[str, int | list[int]]
+    cone_dict : dict[str, int | list[int]]
         A dictionary with keys corresponding to cones and values
         corresponding to their dimension. The keys must be a subset of
             - diffqcp.ZERO
@@ -87,7 +87,7 @@ def compute_derivative(P: torch.Tensor | spmatrix,
         be lists. A k-dimensional PSD cone corresponds to a k x k matrix
         variable; a value of k for diffcp.EXP corresponds to k / 3
         exponential cones. See SCS documentation for more details.
-    solution : Tuple[torch.Tensor | np.ndarray | list[float],
+    solution : tuple[torch.Tensor | np.ndarray | list[float],
                      torch.Tensor | np.ndarray | list[float],
                      torch.Tensor | np.ndarray | list[float]]
                 | clarabel.DefaultSolution
@@ -138,41 +138,10 @@ def compute_derivative(P: torch.Tensor | spmatrix,
         the device defaults to None (i.e., the CPU).
     """
 
-    if dtype is None and isinstance(P, torch.Tensor):
-        DTYPE = P.dtype
-    elif dtype is not None:
-        assert isinstance(dtype, torch.dtype)
-        DTYPE = dtype
-    else:
-        DTYPE = torch.float32
+    DTYPE, DEVICE = _get_GPU_settings(P, dtype=dtype, device=device)
 
-    if device is None and isinstance(P, torch.Tensor):
-        DEVICE = P.device
-    else:
-        assert (device is None or isinstance(device, torch.device))
-        DEVICE = device
-
-    if isinstance(P, spmatrix):
-        P = to_sparse_csr_tensor(P, DTYPE, DEVICE)
-    elif isinstance(P, torch.Tensor):
-        P = P.to_sparse_csr() if P.layout != torch.sparse_csr else P
-        P = P.to(dtype=DTYPE, device=DEVICE)
-    else:
-        raise ValueError("P must be a torch Tensor or a sparse scipy matrix."
-            + " (And only the upper triangular part of the mathematical"
-            + " P it represents should be provided.)")
-
-    if isinstance(A, spmatrix):
-        A = to_sparse_csr_tensor(A, DTYPE, DEVICE)
-    elif isinstance(A, torch.Tensor):
-        A = A.to_sparse_csr() if A.layout != torch.sparse_csr else A
-        A = A.to(dtype=DTYPE, device=DEVICE)
-    else:
-        raise ValueError("A must be a torch Tensor or a sparse scipy matrix.")
-
+    P, A, q, b = _convert_problem_data(P, A, q, b, dtype=DTYPE, device=DEVICE)
     P_linop = SymmetricOperator(P.shape[0], P, DEVICE)
-    q = to_tensor(q, DTYPE, DEVICE)
-    b = to_tensor(b, DTYPE, DEVICE)
 
     if isinstance(solution, clarabel.DefaultSolution):
         x = solution.x
@@ -190,46 +159,25 @@ def compute_derivative(P: torch.Tensor | spmatrix,
     n = x.shape[0]
     m = y.shape[0]
 
-    cones : list[Tuple[str, int | list[int]]] = cone_utils.parse_cone_dict(cone_dict)
+    cones : list[tuple[str, int | list[int]]] = cone_utils.parse_cone_dict(cone_dict)
 
     z = (x, y - s, torch.tensor(1.0, dtype=DTYPE, device=DEVICE))
     u, v, w, = z
-    # TODO: consider how to handle z; as a tuple?
     Pi_z = cone_utils.pi(z, cones)
 
     Dz_Q_Pi_z: lo.LinearOperator = Du_Q(Pi_z, P_linop, A, q, b)
     # TODO?: Need to cache the following (this is 2nd repeat, essentially)
     D_Pi_Kstar_v: lo.LinearOperator = dprojection(v, cones, dual=True)
-    M: lo.LinearOperator = form_M(u, v, w[0], Dz_Q_Pi_z, cones)
+    M: lo.LinearOperator = form_M(u, v, w, Dz_Q_Pi_z, cones)
 
-    def derivative(dP: torch.Tensor | csc_matrix,
-                   dA: torch.Tensor | csc_matrix,
+    def derivative(dP: torch.Tensor | spmatrix,
+                   dA: torch.Tensor | spmatrix,
                    dq: torch.Tensor | np.ndarray,
                    db: torch.Tensor | np.ndarray
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
-        # TODO: create a helper function to perform this functionality
-        if isinstance(dP, spmatrix):
-            dP = to_sparse_csr_tensor(dP, DTYPE, DEVICE)
-        elif isinstance(dP, torch.Tensor):
-            dP = dP.to_sparse_csr() if dP.layout != torch.sparse_csr else dP
-            dP = dP.to(dtype=DTYPE, device=DEVICE)
-        else:
-            raise ValueError("dP must be a torch Tensor or a sparse scipy matrix."
-                + " (And only the upper triangular part of the mathematical"
-                + " P it represents should be provided.)")
-
-        if isinstance(dA, spmatrix):
-            dA = to_sparse_csr_tensor(dA, DTYPE, DEVICE)
-        elif isinstance(dA, torch.Tensor):
-            dA = dA.to_sparse_csr() if dA.layout != torch.sparse_csr else dA
-            dA = dA.to(dtype=DTYPE, device=DEVICE)
-        else:
-            raise ValueError("dA must be a torch Tensor or a sparse scipy matrix.")
-
-        dP_linop = SymmetricOperator(dP.shape[0], dP, DEVICE)
-        dq = to_tensor(dq, DTYPE, DEVICE)
-        db = to_tensor(db, DTYPE, DEVICE)
+        dP, dA, dq, db = _convert_problem_data(dP, dA, dq, db, dtype=DTYPE, device=DEVICE)
+        dP_linop = SymmetricOperator(n, dP, DEVICE)
 
         # TODO: change dData_Q to return a linop and then move
         # the creation to outside derivative, and then
@@ -258,7 +206,7 @@ def compute_derivative(P: torch.Tensor | spmatrix,
 #           np.ndarray,
 #           np.ndarray
 #           ],
-#           Tuple[np.ndarray,
+#           tuple[np.ndarray,
 #                 np.ndarray,
 #                 np.ndarray]
 #         ]

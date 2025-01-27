@@ -313,6 +313,7 @@ def dottest(Op: lo.LinearOperator,
 
         is_linop = math.isclose( (Op @ u) @ v, u @ (Op.T @ v), rel_tol=rtol, abs_tol=atol)
 
-        if not is_linop : return False
+        if not is_linop:
+            return False
 
     return True

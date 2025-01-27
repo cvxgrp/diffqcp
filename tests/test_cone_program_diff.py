@@ -15,8 +15,7 @@ import torch
 
 import diffqcp.qcp as cone_prog
 from diffqcp.utils import to_tensor
-from tests.utils import (data_and_soln_from_cvxpy_problem, get_zeros_like,
-                        torch_data_and_soln_from_cvxpy_problem)
+from tests.utils import data_and_soln_from_cvxpy_problem, get_zeros_like
 
 
 def test_least_squares_small():

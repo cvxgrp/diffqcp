@@ -130,32 +130,32 @@ def test_Du_Q_is_approximation():
 #     Notes
 #     -----
 #     """
-#     pass
 #     np.random.seed(0)
+#     rng = torch.Generator().manual_seed(0)
+
 #     for i in range(10):
 #         m = np.random.randint(low=10, high=20)
 #         n = m + np.random.randint(low=5, high=15)
 #         N = n + m + 1
 
-#         P, A, q, b = utils.generate_problem_data(n,
-#                                                  m,
-#                                                  sparse.random,
-#                                                  np.random.randn)
+#         P_upper, P_op, A, q, b = utils.generate_torch_problem_data(n,
+#                                                                    m,
+#                                                                    sparse.random,
+#                                                                    np.random.randn,
+#                                                                    dtype=torch.float64)
 
-#         u = np.random.randn(N)
-#         u[-1] = 1 # always the case when differentiating at soln.
+#         u = torch.randn(N, generator=rng, dtype=torch.float64)
+#         u[-1] = torch.tensor(1.0, dtype=torch.float64) # always the case when differentiating at soln.
 #         x, y, tau = u[:n], u[n: -1], u[-1]
-#         z = Q(P, A, q, b, x, y, tau)
+#         z = Q(P_op, A, q, b, x, y, tau)
 
-#         du = 1e-5*np.random.randn(N)
+#         du = 1e-2*torch.randn(N, generator=rng, dtype=torch.float64)
 #         dx, dy, dtau = du[:n], du[n: -1], du[-1]
-#         dQ = Q(P, A, q, b, x + dx, y + dy, tau + dtau) - z
+#         dQ = Q(P_op, A, q, b, x + dx, y + dy, tau + dtau) - z
 
-#         deriv_op = Du_Q(u, P, A, q, b)
+#         deriv_op = Du_Q(u, P_op, A, q, b)
 
-#         np.testing.assert_allclose(du,
-#                                    deriv_op._rmatvec(dQ),
-#                                    atol=1e-7)
+#         assert torch.allclose(du, deriv_op.T @ dQ, atol=1e-6)
 
 
 def test_Du_Q_is_linop():
@@ -193,8 +193,6 @@ def test_Du_Q_is_linop():
         # default dtype of dottest is float64
         assert utils.dottest(deriv_op)
 
-        # assert dottest(deriv_op, N, N)
-
 
 # def test_Du_Q_lsqr():
 #     """Test lsqr performance for Du_Q.
@@ -215,8 +213,8 @@ def test_Du_Q_is_linop():
 #                                                                    sparse.random,
 #                                                                    np.random.randn,
 #                                                                    dtype=torch.float64)
-#         u = torch.randn(N, generator=rng,dtype=torch.float64)
-#         u[-1] = torch.tensor(1, dtype=torch.float64) # always the case when differentiating at soln.
+#         u = torch.randn(N, generator=rng, dtype=torch.float64)
+#         u[-1] = torch.tensor(1.0, dtype=torch.float64) # always the case when differentiating at soln.
 
 #         deriv_op = Du_Q(u, P_op, A, q, b)
 

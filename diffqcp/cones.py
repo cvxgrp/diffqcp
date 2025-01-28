@@ -269,7 +269,7 @@ def pi(z: tuple[torch.Tensor,
     cones : list[tuple[str, int | list[int]]]
         A list of cones in the format specified in the docstrings of `proj`
         in `cones.py`. The tensor z[1] will be projected onto the dual of
-        each cone (so the dual of the cartesian product of the cones).
+        each cone (so the dual of the cartesian product of the cones). 
     
     Returns
     -------

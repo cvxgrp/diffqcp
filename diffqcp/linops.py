@@ -217,19 +217,3 @@ class _sLinearOperator(lo.LinearOperator):
 
     def _matmul_impl(self, v: torch.Tensor) -> torch.Tensor:
         return self._mv(v)
-
-
-class ZeroOperator(lo.LinearOperator):
-    """Overwrite of torch-linops ZeroOperator.
-    
-    Allows for dtype specification.
-    """
-    supports_operator_matrix = True
-    def __init__(self, shape, adjoint=None):
-        self._shape = shape
-        self._adjoint = ZeroOperator((shape[1], shape[0]), self) \
-                if adjoint is None else adjoint
-
-    def _matmul_impl(self, v):
-        shape = (self.shape[0], *v.shape[1:])
-        return torch.zeros(shape, dtype=v.dtype, device=v.device)

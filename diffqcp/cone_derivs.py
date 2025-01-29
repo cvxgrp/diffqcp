@@ -1,7 +1,7 @@
 import torch
 import linops as lo
 
-from diffqcp.linops import ScalarOperator, BlockDiag, SymmetricOperator, ZeroOperator
+from diffqcp.linops import ScalarOperator, BlockDiag, SymmetricOperator
 from diffqcp.cones import (ZERO, POS, SOC, PSD, EXP, EXP_DUAL, CONES,
                            symm_size_to_dim, vec_symm, unvec_symm)
 
@@ -110,7 +110,7 @@ def _dprojection_soc(x: torch.Tensor) -> lo.LinearOperator:
     if (norm_z <= t):
         return lo.IdentityOperator(n)
     elif (norm_z <= -t):
-        return ZeroOperator((n, n))
+        return lo.blocks.ZeroOperator((n, n))
     else:
         unit_z = z / norm_z
 
@@ -133,7 +133,7 @@ def _dprojection_pos(x: torch.Tensor) -> lo.LinearOperator:
 def _dprojection_zero(x: torch.Tensor, dual: bool) -> lo.LinearOperator:
     """TODO: add docstring; dual cone is free cone"""
     n = x.shape[0]
-    return lo.IdentityOperator(n) if dual else ZeroOperator((n, n))
+    return lo.IdentityOperator(n) if dual else lo.blocks.ZeroOperator((n, n))
 
 def _dprojection(x: torch.Tensor,
                  cone : str,

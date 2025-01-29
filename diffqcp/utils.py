@@ -169,7 +169,8 @@ def sparse_csc_tensor_diag(X : torch.Tensor) -> torch.Tensor:
         for i, row in enumerate(indices[row_vals_start:row_vals_end]):
             if row == col:
                 diagonal[col] = values[row_vals_start + i]
-            elif row > col : continue
+            elif row > col:
+                continue
 
     return diagonal
 
@@ -205,7 +206,8 @@ def sparse_csr_tensor_diag(X: torch.Tensor) -> torch.Tensor:
         for i, col in enumerate(indices[col_vals_start:col_vals_end]):
             if row == col:
                 diagonal[row] = values[col_vals_start + i]
-            elif row > col : continue
+            elif row > col:
+                continue
 
     return diagonal
 
@@ -227,8 +229,10 @@ def sparse_tensor_diag(X: torch.Tensor) -> torch.Tensor:
     assert (X.layout == torch.sparse_csr or X.layout == torch.sparse_csr)
     assert X.shape[0] == X.shape[1]
 
-    if X.layout == torch.sparse_csr : return sparse_csr_tensor_diag(X)
-    else : return sparse_csc_tensor_diag(X)
+    if X.layout == torch.sparse_csr:
+        return sparse_csr_tensor_diag(X)
+    else:
+        return sparse_csc_tensor_diag(X)
 
 
 def sparse_tensor_transpose(X: torch.Tensor,

@@ -7,10 +7,11 @@ import numpy as np
 from scipy.sparse import spmatrix
 import torch
 import linops as lo
-from linops.lsqr import lsqr
+# from linops.lsqr import lsqr # TODO: re-add once fixes are released
 import clarabel
 
 from diffqcp.linops import SymmetricOperator
+from diffqcp.lsqr import lsqr
 import diffqcp.cones as cone_utils
 from diffqcp.cone_derivs import dprojection
 from diffqcp.qcp_derivs import Du_Q, form_M, dData_Q
@@ -181,22 +182,19 @@ def compute_derivative(P: torch.Tensor | spmatrix,
 
         # TODO: change dData_Q to return a linop and then move
         # the creation to outside derivative, and then
-        # call operator here
-        # NOTE: Requires passing in data as a single tensor
-        dQ_D = dData_Q(Pi_z, dP_linop, dA, dq, db)
+        # call operator here (this will require passing data as single tensor)
+        d_DN = dData_Q(Pi_z, dP_linop, dA, dq, db)
 
-        if torch.allclose(dQ_D, torch.tensor(0, dtype=dtype, device=DEVICE)):
-            dz = torch.zeros(dQ_D.shape[0])
+        if torch.allclose(d_DN, torch.tensor(0, dtype=dtype, device=DEVICE)):
+            dz = torch.zeros(d_DN.shape[0])
         else:
-            dz = lsqr(M, dQ_D)
+            dz = lsqr(M, -d_DN)
 
-        du, dv, dw = dz[:n], dz[n:n+m], dz[-1]
-        dx = du - x * dw
-        dy = D_Pi_Kstar_v @ dv - y * dw
-        ds = D_Pi_Kstar_v @ dv - dv - s * dw
+        dr, dw, dz_N = dz[:n], dz[n:n+m], dz[-1]
+        dx = dr - x * dz_N
+        dy = D_Pi_Kstar_v @ dw - y * dz_N
+        ds = D_Pi_Kstar_v @ dw - dw - s * dz_N
         return dx, dy, ds
-
-    # TODO: create linear operator
 
     return derivative
 

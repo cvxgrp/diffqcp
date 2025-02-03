@@ -17,9 +17,10 @@ import scipy.sparse as sparse
 from scipy.sparse import csr_matrix
 import torch
 import linops as lo
-from linops.lsqr import lsqr
+from linops.lsqr import lsqr as lsqr2
 
 from diffqcp.qcp_derivs import Du_Q, dData_Q
+from diffqcp.lsqr import lsqr
 import tests.utils as utils
 from diffqcp.utils import Q
 import diffqcp.utils as qcp_utils
@@ -194,35 +195,68 @@ def test_Du_Q_is_linop():
         assert utils.dottest(deriv_op)
 
 
-# def test_Du_Q_lsqr():
-#     """Test lsqr performance for Du_Q.
+def test_Du_Q_lsqr():
+    """Test lsqr performance for Du_Q.
 
-#     For some u
+    For some u
 
-#     """
-#     np.random.seed(0)
-#     rng = torch.Generator().manual_seed(0)
+    """
+    np.random.seed(0)
+    rng = torch.Generator().manual_seed(0)
 
-#     for i in range(10):
-#         m = np.random.randint(low=10, high=20)
-#         n = m + np.random.randint(low=5, high=15)
-#         N = n + m + 1
+    for i in range(10):
+        m = np.random.randint(low=10, high=20)
+        n = m + np.random.randint(low=5, high=15)
+        N = n + m + 1
 
-#         P_upper, P_op, A, q, b = utils.generate_torch_problem_data(n,
-#                                                                    m,
-#                                                                    sparse.random,
-#                                                                    np.random.randn,
-#                                                                    dtype=torch.float64)
-#         u = torch.randn(N, generator=rng, dtype=torch.float64)
-#         u[-1] = torch.tensor(1.0, dtype=torch.float64) # always the case when differentiating at soln.
+        P_upper, P_op, A, q, b = utils.generate_torch_problem_data(n,
+                                                                   m,
+                                                                   sparse.random,
+                                                                   np.random.randn,
+                                                                   dtype=torch.float64)
+        u = torch.randn(N, generator=rng, dtype=torch.float64)
+        u[-1] = torch.tensor(1.0, dtype=torch.float64) # always the case when differentiating at soln.
 
-#         deriv_op = Du_Q(u, P_op, A, q, b)
+        deriv_op = Du_Q(u, P_op, A, q, b)
 
-#         x = 1e-2*torch.randn(N, generator=rng, dtype=torch.float64)
-#         xlsqr = lsqr(deriv_op, deriv_op @ x)
+        x = 1e-6*torch.randn(N, generator=rng, dtype=torch.float64)
+        xlsqr = lsqr(deriv_op, deriv_op @ x)
 
-#         print("x: ", x)
-#         print("xlsr: ", xlsqr)
+        print("x: ", x)
+        print("xlsqr: ", xlsqr)
 
-#         # np.testing.assert_allclose(x, xlsqr, atol=1e-4)
-#         assert torch.allclose(x, xlsqr, atol=1e-4)
+        # np.testing.assert_allclose(x, xlsqr, atol=1e-4)
+        assert torch.allclose(x, xlsqr, atol=1e-8)
+
+def test_Du_Q_lsqr2():
+    """Test lsqr performance for Du_Q.
+
+    For some u
+
+    """
+    np.random.seed(0)
+    rng = torch.Generator().manual_seed(0)
+
+    for i in range(10):
+        m = np.random.randint(low=10, high=20)
+        n = m + np.random.randint(low=5, high=15)
+        N = n + m + 1
+
+        P_upper, P_op, A, q, b = utils.generate_torch_problem_data(n,
+                                                                   m,
+                                                                   sparse.random,
+                                                                   np.random.randn,
+                                                                   dtype=torch.float64)
+        u = torch.randn(N, generator=rng, dtype=torch.float64)
+        u[-1] = torch.tensor(1.0, dtype=torch.float64) # always the case when differentiating at soln.
+
+        deriv_op = Du_Q(u, P_op, A, q, b)
+
+        x = 1e-6*torch.randn(N, generator=rng, dtype=torch.float64)
+        xlsqr = lsqr2(deriv_op, deriv_op @ x)
+
+        print("x: ", x)
+        print("xlsqr: ", xlsqr)
+
+        # np.testing.assert_allclose(x, xlsqr, atol=1e-4)
+        assert torch.allclose(x, xlsqr, atol=1e-8)

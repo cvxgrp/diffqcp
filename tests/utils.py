@@ -215,7 +215,8 @@ def get_torch_zeros_like(A: torch.Tensor) -> torch.Tensor:
     """
     A_dense = A.to_dense()
 
-def data_and_soln_from_cvxpy_problem(problem: cp.Problem
+def data_and_soln_from_cvxpy_problem(problem: cp.Problem,
+                                     cone_type: str = 'scs'
 ) -> Tuple[csc_matrix,
            csc_matrix,
            np.ndarray,
@@ -228,7 +229,14 @@ def data_and_soln_from_cvxpy_problem(problem: cp.Problem
     clarabel_probdata, _, _ = problem.get_problem_data(cp.CLARABEL)
     scs_probdata, _, _ = problem.get_problem_data(cp.SCS)
 
-    P, q = scs_probdata['P'], scs_probdata['c']
+    q = scs_probdata['c']
+    
+    try:
+        P = scs_probdata['P']
+    except:
+        P = np.zeros((q.size, q.size))
+        P = sparse.triu(P).tocsr()
+
     A, b = scs_probdata['A'], scs_probdata['b']
 
     clarabel_cones = cp.reductions.solvers.conic_solvers.clarabel_conif.dims_to_solver_cones(clarabel_probdata["dims"])
@@ -239,7 +247,7 @@ def data_and_soln_from_cvxpy_problem(problem: cp.Problem
     solver = clarabel.DefaultSolver(P, q, A, b, clarabel_cones, solver_settings)
     soln = solver.solve()
 
-    return P, A, q, b, scs_cone_dict, soln
+    return P, A, q, b, scs_cone_dict, soln, clarabel_cones
 
 
 def torch_data_and_soln_from_cvxpy_problem(problem: cp.Problem,
@@ -284,7 +292,7 @@ def dottest(Op: lo.LinearOperator,
     rtol : float, optional
         Relative dottest tolerance. Default 1e-6.
     atol : float, optional
-        Absolute dottest tolderance. Default 1e-21.
+        Absolute dottest tolerance. Default 1e-21.
     dtype: float, optional
         The datatype of u and v. Default is torch.float64.
 

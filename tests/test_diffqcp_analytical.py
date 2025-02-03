@@ -15,7 +15,7 @@ import torch
 
 import diffqcp.qcp as cone_prog
 from diffqcp.utils import to_tensor
-from tests.utils import data_and_soln_from_cvxpy_problem, get_zeros_like
+from tests.utils import data_and_soln_from_cvxpy_problem, get_zeros_like, get_random_like
 
 
 def test_least_squares_small():
@@ -69,14 +69,16 @@ def test_least_squares_small():
 
         dP = get_zeros_like(P_can)
         dA = get_zeros_like(A_can)
-        db = 1e-2 * torch.randn(b_can.size, generator=rng, dtype=torch.float64)
+        db = 1e-6 * torch.randn(b_can.size, generator=rng, dtype=torch.float64)
 
         Dx_b = to_tensor(la.solve(A.T @ A, A.T), dtype=torch.float64)
 
         DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64)
         dx, dy, ds = DS(dP, dA, torch.zeros(q_can.size), db)
 
-        assert torch.allclose( Dx_b @ db, dx[m:], atol=1e-4)
+        # print(f"delta_x: {Dx_b @ db} \n dx: {-dx[m:]} \n === ===")
+        
+        assert torch.allclose( Dx_b @ db, -dx[m:], atol=1e-8)
 
 
 def test_least_squares_larger():
@@ -113,7 +115,7 @@ def test_least_squares_larger():
         DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64)
         dx, dy, ds = DS(dP, dA, np.zeros(q_can.size), db)
 
-        assert torch.allclose( Dx_b @ db, dx[m:], atol=1e-4)
+        assert torch.allclose( Dx_b @ db, -dx[m:], atol=1e-4)
 
 
 def test_least_squares_soln_of_eqns_small():
@@ -173,7 +175,7 @@ def test_least_squares_soln_of_eqns_small():
         Dxb_db = to_tensor(AT @ la.solve(A @ AT, db), dtype=torch.float64)
 
         DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64)
-        dx, dy, ds = DS(dP, dA, np.zeros(q_can.size), -db)
+        dx, dy, ds = DS(dP, dA, np.zeros(q_can.size), db)
 
         assert torch.allclose(Dxb_db, dx, atol=1e-5)
 
@@ -215,6 +217,6 @@ def test_least_squares_soln_of_eqns_larger():
         Dxb_db = to_tensor(AT @ la.solve(A @ AT, db), dtype=torch.float64)
 
         DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64)
-        dx, dy, ds = DS(dP, dA, np.zeros(q_can.size), -db)
+        dx, dy, ds = DS(dP, dA, np.zeros(q_can.size), db)
 
         assert torch.allclose(Dxb_db, dx, atol=1e-5)

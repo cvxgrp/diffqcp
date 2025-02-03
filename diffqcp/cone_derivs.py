@@ -44,40 +44,40 @@ def _dprojection_psd(x: torch.Tensor) -> lo.LinearOperator:
     def mv(dx: torch.Tensor) -> torch.Tensor:
         Q_T_DX_Q = Q.T @ unvec_symm(dx) @ Q
 
-        i, j = torch.meshgrid(torch.arange(Q_T_DX_Q.shape[0], device=dx.device),
-                              torch.arange(Q_T_DX_Q.shape[1], device=dx.device),
-                              indexing='ij')
+        # i, j = torch.meshgrid(torch.arange(Q_T_DX_Q.shape[0], device=dx.device),
+        #                       torch.arange(Q_T_DX_Q.shape[1], device=dx.device),
+        #                       indexing='ij')
 
-        i_le_k_j_le_k = (i <= k) & (j <= k)
-        i_gt_k_j_le_k = (i > k) & (j <= k)
-        i_le_k_j_gt_k = (i <= k) & (j > k)
+        # i_le_k_j_le_k = (i <= k) & (j <= k)
+        # i_gt_k_j_le_k = (i > k) & (j <= k)
+        # i_le_k_j_gt_k = (i <= k) & (j > k)
 
-        lambda_i_pos = torch.clamp(lambd[i], min=zero)
-        lambda_i_neg = -torch.clamp(lambd[i], max=zero)
-        lambda_j_pos = torch.clamp(lambd[j], min=zero)
-        lambda_j_neg = -torch.clamp(lambd[i], max=zero)
+        # lambda_i_pos = torch.clamp(lambd[i], min=zero)
+        # lambda_i_neg = -torch.clamp(lambd[i], max=zero)
+        # lambda_j_pos = torch.clamp(lambd[j], min=zero)
+        # lambda_j_neg = -torch.clamp(lambd[i], max=zero)
 
-        lambda_i_pos = lambda_i_pos[i_gt_k_j_le_k]
-        lambda_j_pos = lambda_j_pos[i_le_k_j_gt_k]
+        # lambda_i_pos = lambda_i_pos[i_gt_k_j_le_k]
+        # lambda_j_pos = lambda_j_pos[i_le_k_j_gt_k]
 
-        Q_T_DX_Q[i_le_k_j_le_k] = 0
-        Q_T_DX_Q[i_gt_k_j_le_k] *= lambda_i_pos / (lambda_j_neg[i_gt_k_j_le_k] + lambda_i_pos)
-        Q_T_DX_Q[i_le_k_j_gt_k] *= lambda_j_pos / (lambda_i_neg[i_le_k_j_gt_k] + lambda_j_pos)
+        # Q_T_DX_Q[i_le_k_j_le_k] = 0
+        # Q_T_DX_Q[i_gt_k_j_le_k] *= lambda_i_pos / (lambda_j_neg[i_gt_k_j_le_k] + lambda_i_pos)
+        # Q_T_DX_Q[i_le_k_j_gt_k] *= lambda_j_pos / (lambda_i_neg[i_le_k_j_gt_k] + lambda_j_pos)
 
         # Hadamard product w/o forming B matrix
         # So Q_T_DX_Q becomes (B hadamard Q_T_DX_Q) after double for loop.
-        # for i in range(Q_T_DX_Q.shape[0]):
-        #     for j in range(Q_T_DX_Q.shape[1]):
-        #         if i <= k and j <= k:
-        #             Q_T_DX_Q[i, j] = 0
-        #         elif k > k and j <= k:
-        #             lambda_i_pos = torch.maximum(lambd[i], zero)
-        #             lambda_j_neg = -torch.minimum(lambd[j], zero)
-        #             Q_T_DX_Q[i, j] *= lambda_i_pos / (lambda_j_neg + lambda_i_pos)
-        #         elif i <= k and j > k:
-        #             lambda_i_neg = -torch.minimum(lambd[i], zero)
-        #             lambd_j_pos = torch.maximum(lambd[j], zero)
-        #             Q_T_DX_Q[i, j] *= lambd_j_pos / (lambda_i_neg + lambd_j_pos)
+        for i in range(Q_T_DX_Q.shape[0]):
+            for j in range(Q_T_DX_Q.shape[1]):
+                if i <= k and j <= k:
+                    Q_T_DX_Q[i, j] = 0
+                elif k > k and j <= k:
+                    lambda_i_pos = torch.maximum(lambd[i], zero)
+                    lambda_j_neg = -torch.minimum(lambd[j], zero)
+                    Q_T_DX_Q[i, j] *= lambda_i_pos / (lambda_j_neg + lambda_i_pos)
+                elif i <= k and j > k:
+                    lambda_i_neg = -torch.minimum(lambd[i], zero)
+                    lambd_j_pos = torch.maximum(lambd[j], zero)
+                    Q_T_DX_Q[i, j] *= lambd_j_pos / (lambda_i_neg + lambd_j_pos)
 
         DPiX_DX = Q @ Q_T_DX_Q @ Q.T
         return vec_symm(DPiX_DX)

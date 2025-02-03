@@ -118,6 +118,10 @@ def form_M(u: torch.Tensor,
            cones: list[tuple[str, int | list[int]]]
 ) -> lo.LinearOperator:
     """Form the derivative composition M as given in diffqcp implementation section.
+
+    Notes
+    -----
+    We don't divide by 1/z_N (or w, in this namespace) since at the solution z_N == 1.
     """
     N = u.shape[0] + v.shape[0] + 1
     Dz_Pi_z = dpi(u, v, w, cones)

@@ -232,6 +232,7 @@ def test_least_squares_soln_of_eqns_larger():
 def test_constrained_least_squares():
     np.random.seed(0)
     rng = torch.Generator().manual_seed(0)
+    EPS = 1e-6
 
     num_optimal = 0
     for _ in range(10):
@@ -252,7 +253,7 @@ def test_constrained_least_squares():
         
         lambd: np.ndarray = constrs[0].dual_value
 
-        S = [i for i, val in enumerate(x.value) if val > 0]
+        S = [i for i, val in enumerate(x.value) if val > EPS]
         S_bar_len = n - len(S)
         I_s_bar = np.eye(n)
         I_s_bar = np.delete(I_s_bar, S, axis=1)
@@ -300,4 +301,4 @@ def test_constrained_least_squares():
         print("NUM OPTIMAL:", num_optimal)
         assert torch.allclose(dx_b_analytic, dx[m:], atol=1e-8)
 
-    assert num_optimal >= 2, "No derivative testing was actually performed."
+    assert num_optimal == 10, "No derivative testing was actually performed."

@@ -253,8 +253,8 @@ def test_constrained_least_squares():
         lambd: np.ndarray = constrs[0].dual_value
 
         S = [i for i, val in enumerate(x.value) if val > 0]
-        S_bar_len = lambd.size - len(S)
-        I_s_bar = np.eye(lambd.size)
+        S_bar_len = n - len(S)
+        I_s_bar = np.eye(n)
         I_s_bar = np.delete(I_s_bar, S, axis=1)
         A_hat = np.block([
             [A.T @ A, I_s_bar],
@@ -262,12 +262,12 @@ def test_constrained_least_squares():
         ])
         b_hat = np.hstack((A.T @ b, np.zeros(S_bar_len)))
         soln = la.solve(A_hat, b_hat)
-        print("x_star from LS equation: ", soln[0:lambd.size])
+        print("x_star from LS equation: ", soln[0:n])
         print("x_star from CVXPY: ", x.value)
-        if not np.allclose(soln[0:lambd.size], x.value, atol=1e-6):
+        if not np.allclose(soln[0:n], x.value, atol=1e-6):
             continue
         num_optimal += 1
-        print("lambda_{s_bar} from LS equation: ", soln[lambd.size:])
+        print("lambda_{s_bar} from LS equation: ", soln[n:])
         print("lambda from CVXPY: ", lambd)
 
         data = data_and_soln_from_cvxpy_problem(problem)
@@ -282,7 +282,7 @@ def test_constrained_least_squares():
                                               np.zeros(S_bar_len))
                                               )
                             )
-            dx_b = dsoln[0:lambd.size]
+            dx_b = dsoln[0:n]
             return to_tensor(dx_b, torch.float64)
 
         dP = get_zeros_like(P_can)

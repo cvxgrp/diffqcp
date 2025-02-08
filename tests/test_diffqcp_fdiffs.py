@@ -139,6 +139,7 @@ def test_ls_nonneg_cone():
     """
     np.random.seed(0)
     failed = 0
+    num_optimal = 0
     for _ in range(NUM_TRIALS):
         n = np.random.randint(25, 75)
         m = n + np.random.randint(5, 30)
@@ -151,8 +152,11 @@ def test_ls_nonneg_cone():
         prob = cp.Problem(cp.Minimize(f0), constrs)
         prob.solve()
         print(f"DUAL VALUE: {constrs[0].dual_value}")
-        if prob.status == 'optimal' and np.all(x.value > 0):
+        print(x.value)
+        print("num succeeded: ", num_optimal)
+        if prob.status == 'optimal' and not np.all(x.value > 0):
             _test_DS(prob)
+            num_optimal += 1
         else:
             failed += 1
     

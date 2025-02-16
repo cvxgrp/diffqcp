@@ -12,6 +12,7 @@ import torch
 
 import diffqcp.cones as cone_lib
 from diffqcp.cone_derivs import _dprojection, dprojection
+from diffqcp.pow_cone import proj_power_cone
 import diffqcp.utils as utils
 
 # ==== SOME CONE UTILITY TESTS ====
@@ -107,6 +108,26 @@ def test_proj_psd():
             cone_lib._proj(x_vec, cone_lib.PSD, dual=True), n))
         
 
+def test_proj_pow():
+    """Test projection onto POW cone, which is not self-dual.
+    """
+    np.random.seed(0)
+    n = 3
+    alphas = np.random.uniform(low=0, high=1, size=15)
+    for alpha in alphas:
+        x = np.random.randn(n)
+        x_tch = utils.to_tensor(x, dtype=torch.float64)
+        z = cp.Variable(n)
+        objective = cp.Minimize(cp.sum_squares(z - x))
+        # constraints = [z[0]**alpha * z[1]**(1-alpha) >= cp.abs(z[2])]
+        constraints = [cp.PowCone3D(z[0], z[1], z[2], alpha)]
+        prob = cp.Problem(objective, constraints)
+        prob.solve(solver="SCS", eps=1e-10)
+        z_star_tch = utils.to_tensor(z.value, dtype=torch.float64)
+        p = cone_lib.proj(x_tch, cones=[(cone_lib.POW, [alpha])])
+        assert torch.allclose(p, z_star_tch)
+        
+
 def test_projection():
     """Test projection onto cartesian product of atom cones.
     """
@@ -120,9 +141,12 @@ def test_projection():
             np.random.randint(1, 10))]
         psd_dim = [np.random.randint(1, 10) for _ in range(
             np.random.randint(1, 10))]
+        pow_alpha = [np.random.uniform(0, 1) for _ in range(np.random.randint(1, 10))]
         cones = [(cone_lib.ZERO, zero_dim), (cone_lib.POS, pos_dim),
-                 (cone_lib.SOC, soc_dim), (cone_lib.PSD, psd_dim)]
-        size = zero_dim + pos_dim + sum(soc_dim) + sum([cone_lib.symm_size_to_dim(d) for d in psd_dim])
+                 (cone_lib.SOC, soc_dim), (cone_lib.POW, pow_alpha),
+                 (cone_lib.PSD, psd_dim)]
+        size = zero_dim + pos_dim + sum(soc_dim) + sum([cone_lib.symm_size_to_dim(d) for d in psd_dim])\
+                + 3*len(pow_alpha)
         x = torch.randn(size, generator=rng, dtype=torch.float64)
         for dual in [False, True]:
             proj = cone_lib.proj(x, cones, dual=dual)
@@ -140,6 +164,10 @@ def test_projection():
                                                           dual=dual))
                 offset += dim
 
+            for alpha in pow_alpha:
+                assert torch.allclose(proj[offset:offset+3], proj_power_cone(x[offset:offset + 3], alpha))
+                offset += 3
+            
             for dim in psd_dim:
                 dim = cone_lib.symm_size_to_dim(dim)
                 assert torch.allclose(proj[offset:offset + dim], cone_lib._proj(x[offset:offset + dim], cone_lib.PSD,

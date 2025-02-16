@@ -6,6 +6,8 @@ import math
 
 import torch
 
+from diffqcp.pow_cone import proj_power_cone
+
 # TODO: need to check for alternative to distutils, which was deprecated starting in Python 3.12
 
 ZERO = "z"
@@ -14,9 +16,11 @@ SOC = "q"
 PSD = "s"
 EXP = "ep"
 EXP_DUAL = "ed"
+POW = 'p'
+POW_DUAL = "pd"
 
 # The ordering of CONES matches SCS.
-CONES = [ZERO, POS, SOC, PSD, EXP, EXP_DUAL]
+CONES = [ZERO, POS, SOC, PSD, EXP, EXP_DUAL, POW, POW_DUAL]
 
 def parse_cone_dict(cone_dict: dict[str, int | list[int]]
 ) -> list[tuple[str, int | list[int]]]:
@@ -231,6 +235,7 @@ def proj(x,
     Notes
     -----
     - TODO: This function can certainly be rewritten to utilize GPU parallelization.
+    (see the mixed parallel computing strategy proposed in CuClarabel.)
     """
     projection = torch.empty(x.shape[0], dtype=x.dtype, device=x.device)
     offset = torch.tensor(0, dtype=torch.int32, device=x.device)
@@ -240,6 +245,12 @@ def proj(x,
         if sum(sz) == 0:
             continue
         for cone_dim in sz:
+            if cone == POW:
+                # cone_dim is now actually the alpha defining K_pow(alpha)
+                projection[offset:offset+3] = proj_power_cone(x[offset:offset+3], cone_dim)
+                offset += 3
+                continue
+            
             if cone == PSD:
                 cone_dim = symm_size_to_dim(cone_dim)
             elif cone == EXP or cone == EXP_DUAL:

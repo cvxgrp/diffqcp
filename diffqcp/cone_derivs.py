@@ -2,7 +2,7 @@ import torch
 import linops as lo
 
 from diffqcp.linops import ScalarOperator, BlockDiag, SymmetricOperator
-from diffqcp.cones import (ZERO, POS, SOC, PSD, EXP, EXP_DUAL, CONES,
+from diffqcp.cones import (ZERO, POS, SOC, PSD, EXP, EXP_DUAL, POW, POW_DUAL, CONES,
                            symm_size_to_dim, vec_symm, unvec_symm)
 
 def _dprojection_psd(x: torch.Tensor) -> lo.LinearOperator:
@@ -195,6 +195,8 @@ def dprojection(x: torch.Tensor,
             if cone == PSD:
                 cone_dim = symm_size_to_dim(cone_dim)
             elif cone == EXP or cone == EXP_DUAL:
+                cone_dim *= 3
+            elif cone == POW or cone == POW_DUAL:
                 cone_dim *= 3
 
             ops.append(_dprojection(x[offset:offset + cone_dim], cone, dual=dual))

@@ -42,7 +42,8 @@ def to_tensor(
     elif isinstance(array, torch.Tensor) or isinstance(array, list):
         return torch.as_tensor(array, dtype=dtype, device=device)
     else:
-        raise ValueError("Input must be a numpy array or torch tensor")
+        raise ValueError("Input must be a numpy array, torch tensor, or list.")
+    
 
 def to_sparse_csc_tensor(sparse_array : spmatrix,
                          dtype: torch.dtype = torch.float32,

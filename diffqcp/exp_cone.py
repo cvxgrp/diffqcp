@@ -16,10 +16,8 @@ import torch
 EXP_CONE_INF_VALUE = 1e15
 
 def _is_finite(x: float) -> bool:
-    """
-    need to determine how to handle device vs host
-    """
-    pass
+    EXP_CONE_INF_VALUE_DEV = torch.tensor(EXP_CONE_INF_VALUE, dtype=x.dtype, device=x.device)
+    return torch.abs(x) < EXP_CONE_INF_VALUE_DEV
 
 
 def _clip(x: torch.Tensor,
@@ -29,8 +27,8 @@ def _clip(x: torch.Tensor,
     return torch.maximum(l, torch.minimum(u, x))
 
 
-def hfun(v: torch.Tensor,
-         rho: torch.Tensor,
+def hfun_and_grad_hfun(v: torch.Tensor,
+                       rho: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Parameters
@@ -56,6 +54,33 @@ def hfun(v: torch.Tensor,
         (rho * (rho - one) + one) * t0
     df = (rho * r0 + s0) * exprho + (r0 - (rho - one) * s0) * expnegrho - (2 * rho - one) * t0
     return (f, df)
+
+
+def hfun(v: torch.Tensor,
+         rho: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Parameters
+    ----------
+    v: torch.Tensor
+        1D tensor of size 3. Point to evaluate the (Fridberg) function and gradient at.
+    rho: torch.Tensor
+        A scalar tensor.
+
+    Returns
+    -------
+    torch.Tensor (scalar)
+        f(v), the Fridberg function at v.
+    """
+    r0, s0, t0 = v[0], v[1], v[2]
+    exprho = torch.exp(rho)
+    expnegrho = -torch.exp(rho)
+    one = torch.tensor(1, dtype=v.dtype, device=v.device)
+    
+    f = ((rho - one)*r0 + s0) * exprho - (r0 - rho * s0) * expnegrho -\
+        (rho * (rho - one) + one) * t0
+    
+    return f
 
 
 def pomega(rho: torch.Tensor) -> torch.Tensor:
@@ -160,8 +185,8 @@ def exp_search_bracket(v: torch.Tensor,
     upr = _clip(torch.maximum(low, upr), baselow, baseupr)
 
     if (low != upr):
-        fl, _ = hfun(v, low)
-        fu, _ = hfun(v, upr)
+        fl = hfun(v, low)
+        fu = hfun(v, upr)
 
         if fl * fu > zero:
             if torch.abs(fl) < torch.abs(fu):
@@ -193,7 +218,6 @@ def proj_primal_exp_cone_heuristic(v: torch.Tensor,
     dist = torch.linalg.norm(v - vp)
 
     # perspective interior
-    # TODO: add numerical tol?
     if s0 > zero:
         tp = torch.maximum(t0, s0 * torch.exp(r0 / s0))
         newdist = tp - t0
@@ -228,7 +252,6 @@ def proj_polar_exp_cone_heuristic(v: torch.Tensor,
     dist = torch.linalg.norm(v - vd)
 
     # perspective interior
-    # TODO: add numerical tol?
     if r0 > zero:
         one = torch.tensor(1, dtype=v.dtype, device=v.device)
         td = torch.minimum(t0, -r0 * torch.exp(s0/r0 - one))
@@ -240,6 +263,56 @@ def proj_polar_exp_cone_heuristic(v: torch.Tensor,
             dist = newdist
 
     return dist
+
+
+def root_search_binary(v: torch.Tensor,
+                       xl: torch.Tensor,
+                       xh: torch.Tensor,
+                       x: torch.Tensor
+) -> torch.Tensor:
+    """Binary search method for finding root of hfun.
+
+    Parameters
+    ----------
+    v: torch.Tensor
+        The point (in R^3) being projected onto the exponential cone.
+    xl: torch.Tensor (scalar)
+        Lower search bound for the root.
+    xh: torch.Tensor (scalar)
+        Upper search bound for the root.
+    x: torch.Tensor
+        The initial guess for the root.
+    
+    Returns
+    -------
+    torch.Tensor
+        The root of hfun.
+    """
+    EPS = torch.tensor(1e-12, dtype=v.dtype, device=v.device) # loosened from newton, since expensive
+    MAXITER = 40
+    zero = torch.tensor(0, dtype=v.dtype, device=v.device)
+    one = torch.tensor(1, dtype=v.dtype, device=v.device)
+    point5 = torch.tensor(0.5, dtype=v.dtype, device=v.device)
+
+    i = 0
+    while i < MAXITER:
+        f = hfun(v, x)
+        
+        if f < zero:
+            xl = x
+        else:
+            xu = x
+
+        # binary search step
+        x_plus = point5 * (xl + xu)
+        if (torch.abs(x_plus - x) <= EPS * torch.maximum(one, torch.abs(x_plus))
+            or x_plus == x or x_plus == xu):
+            break
+        
+        x = x_plus
+        i += 1
+    
+    return x_plus
 
 
 def root_search_newton(v: torch.Tensor,
@@ -275,7 +348,7 @@ def root_search_newton(v: torch.Tensor,
 
     i = 0
     while i < MAXITER:
-        f, df = hfun(v, x)
+        f, df = hfun_and_grad_hfun(v, x)
 
         if torch.abs(f) <= EPS:
             break
@@ -315,9 +388,92 @@ def root_search_newton(v: torch.Tensor,
         return root_search_binary(v, xl, xu, x)
     
 
+def proj_sol_primal_exp_cone(v: torch.Tensor,
+                             rho: torch.Tensor,
+                             vp: torch.Tensor
+) -> torch.Tensor:
+    """Convert from rho to primal projection.
+
+    **vp is modified in place** to be the primal projection.
+
+    Returns
+    -------
+    float (as a torch.Tensor)
+        ||v - vp||_2
+    """
+    zero = torch.tensor(0, dtype=v.dtype, device=v.device)
+    one = torch.tensor(1, dtype=v.dtype, device=v.device)
+    
+    linrho = (rho - one) * v[0] + v[1]
+    exprho = torch.exp(rho)
+    
+    if linrho > zero and _is_finite(exprho):
+        quadrho = rho * (rho - one) + one
+        vp[0] = rho * linrho / quadrho
+        vp[1] = linrho / quadrho
+        vp[2] = exprho * linrho / quadrho
+        dist = torch.linalg.norm(vp - v)
+    else:
+        vp[0] = torch.tensor(0, dtype=v.dtype, device=v.device)
+        vp[1] = torch.tensor(0, dtype=v.dtype, device=v.device)
+        vp[2] = torch.tensor(EXP_CONE_INF_VALUE, dtype=v.dtype, device=v.device)
+        dist = torch.tensor(EXP_CONE_INF_VALUE, dtype=v.dtype, device=v.device)
+    
+    return dist
+
+
+def proj_sol_polar_exp_cone(v: torch.Tensor,
+                            rho: torch.Tensor,
+                            vd: torch.Tensor
+) -> torch.Tensor:
+    """Convert from rho to polar projection.
+
+    **vd is modified in place** to be the polar projection.
+
+    Returns
+    -------
+    float (as a torch.Tensor)
+        ||v - vd||_2
+    """
+    zero = torch.tensor(0, dtype=v.dtype, device=v.device)
+    one = torch.tensor(1, dtype=v.dtype, device=v.device)
+
+    linrho = v[0] - rho * v[1]
+    exprho = torch.exp(-rho)
+    
+    if linrho > zero and _is_finite(exprho):
+        quadrho = rho * (rho - one) + one
+        lrho_div_qrho = linrho / quadrho
+        vd[0] = lrho_div_qrho
+        vd[1] = (one - rho) * lrho_div_qrho
+        vd[2] = -exprho * lrho_div_qrho
+        dist = torch.linalg.norm(vd - v)
+    else:
+        vd[0] = torch.tensor(0, dtype=v.dtype, device=v.device)
+        vd[1] = torch.tensor(0, dtype=v.dtype, device=v.device)
+        vd[2] = torch.tensor(-EXP_CONE_INF_VALUE, dtype=v.dtype, device=v.device)
+        dist = torch.tensor(EXP_CONE_INF_VALUE, dtype=v.dtype, device=v.device)
+    
+    return dist
+    
+
 def proj_exp(v: torch.Tensor,
              primal: bool
 ) -> torch.Tensor:
+    """Project v onto the exponential cone (or its dual).
+
+    Parameters
+    ----------
+    v: 1D torch.Tensor
+        The point to project.
+    primal: bool
+        Whether to project v onto the exponential cone or the dual exponential cone.
+    
+    Returns
+    -------
+    1D torch.Tensor
+        The projection.
+    """
     TOL = torch.tensor(1e-8, dtype=v.dtype, device=v.device)
     zero = torch.tensor(0, dtype=v.dtype, device=v.device)
     vp = torch.empty_like(v)

@@ -82,7 +82,8 @@ def compute_derivative(P: torch.Tensor | spmatrix,
             - diffqcp.SOC
             - diffqcp.PSD
             - diffqcp.EXP.
-            - TODO: what about diffqcp.EXP_DUAL
+            - diffqcp.POW
+            - TODO: what about diffqcp.EXP_DUAL and diffqcp.POW_DUAL
         The values of diffqcp.ZERO and diffqcp.POS are scalars while
         the values of diffqcp.SOC, diffqcp.PSD, and diffqcp.EXP should
         be lists. A k-dimensional PSD cone corresponds to a k x k matrix

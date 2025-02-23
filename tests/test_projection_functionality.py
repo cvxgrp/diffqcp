@@ -119,7 +119,6 @@ def test_proj_pow():
         x_tch = utils.to_tensor(x, dtype=torch.float64)
         z = cp.Variable(n)
         objective = cp.Minimize(cp.sum_squares(z - x))
-        # constraints = [z[0]**alpha * z[1]**(1-alpha) >= cp.abs(z[2])]
         constraints = [cp.PowCone3D(z[0], z[1], z[2], alpha)]
         prob = cp.Problem(objective, constraints)
         prob.solve(solver="SCS", eps=1e-10)

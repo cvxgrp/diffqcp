@@ -247,7 +247,13 @@ def proj(x,
         for cone_dim in sz:
             if cone == POW:
                 # cone_dim is now actually the alpha defining K_pow(alpha)
-                projection[offset:offset+3] = proj_power_cone(x[offset:offset+3], cone_dim)
+                if cone_dim < 0:
+                    # dual case
+                    # via Moreau: Pi_K^*(v) = v + Pi_K(-v)
+                    projection[offset:offset+3] = x[offset:offset+3] + proj_power_cone(-x[offset:offset+3], -cone_dim)
+                else:
+                    # primal case
+                    projection[offset:offset+3] = proj_power_cone(x[offset:offset+3], cone_dim)
                 offset += 3
                 continue
             

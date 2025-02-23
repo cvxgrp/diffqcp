@@ -13,6 +13,7 @@ import torch
 import diffqcp.cones as cone_lib
 from diffqcp.cone_derivs import _dprojection, dprojection
 from diffqcp.pow_cone import proj_power_cone
+from diffqcp.exp_cone import proj_exp_cone
 import diffqcp.utils as utils
 
 # ==== SOME CONE UTILITY TESTS ====
@@ -125,6 +126,26 @@ def test_proj_pow():
         z_star_tch = utils.to_tensor(z.value, dtype=torch.float64)
         p = cone_lib.proj(x_tch, cones=[(cone_lib.POW, [alpha])])
         assert torch.allclose(p, z_star_tch)
+
+
+def test_proj_exp():
+    """Test projection onto EXP cone, which is not self-dual.
+    """
+    np.random.seed(0)
+    n = 3
+    for _ in range(15):
+        x = np.random.randn(n)
+        x_tch = utils.to_tensor(x, dtype=torch.float64)
+        z = cp.Variable(n)
+        objective = cp.Minimize(cp.sum_squares(z - x))
+        constraints = [cp.ExpCone(*z)]
+        prob = cp.Problem(objective, constraints)
+        prob.solve(solver="SCS")
+        z_star_tch = utils.to_tensor(z.value, dtype=torch.float64)
+        p = proj_exp_cone(x_tch, primal=True)
+        print("diffqcp: ", p)
+        print("SCS: ", z_star_tch)
+        assert torch.allclose(p, z_star_tch, atol=1e-4)
         
 
 def test_projection():

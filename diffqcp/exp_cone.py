@@ -47,7 +47,7 @@ def hfun_and_grad_hfun(v: torch.Tensor,
     """
     r0, s0, t0 = v[0], v[1], v[2]
     exprho = torch.exp(rho)
-    expnegrho = -torch.exp(rho)
+    expnegrho = torch.exp(-rho)
     one = torch.tensor(1, dtype=v.dtype, device=v.device)
     
     f = ((rho - one)*r0 + s0) * exprho - (r0 - rho * s0) * expnegrho -\
@@ -74,7 +74,7 @@ def hfun(v: torch.Tensor,
     """
     r0, s0, t0 = v[0], v[1], v[2]
     exprho = torch.exp(rho)
-    expnegrho = -torch.exp(rho)
+    expnegrho = torch.exp(-rho)
     one = torch.tensor(1, dtype=v.dtype, device=v.device)
     
     f = ((rho - one)*r0 + s0) * exprho - (r0 - rho * s0) * expnegrho -\
@@ -145,7 +145,7 @@ def exp_search_bracket(v: torch.Tensor,
     EXP_CONE_INF_VALUE_DEV = torch.tensor(EXP_CONE_INF_VALUE,
                                           dtype=v.dtype,
                                           device=v.device)
-    EPS = torch.tensor(1e-12, dtype=torch.dtype, device=torch.device)
+    EPS = torch.tensor(1e-12, dtype=v.dtype, device=v.device)
 
     r0, s0, t0 = v[0], v[1], v[2]
     baselow = -EXP_CONE_INF_VALUE_DEV
@@ -162,7 +162,7 @@ def exp_search_bracket(v: torch.Tensor,
         curbnd = torch.log(t0 / ppsi(v))
         low = torch.maximum(low, curbnd)
     elif t0 < zero:
-        curbnd = -torch.log(-t0, dpsi(v))
+        curbnd = -torch.log(-t0 / dpsi(v))
         upr = torch.minimum(upr, curbnd)
 
     if r0 > zero:
@@ -341,10 +341,11 @@ def root_search_newton(v: torch.Tensor,
     EPS = torch.tensor(1e-15, dtype=v.dtype, device=v.device)
     DFTOL = torch.tensor(1e-13, dtype=v.dtype, device=v.device)
     MAXITER = 20
-    LODAMP = torch.tensor(0.5, dtype=v.dtype, device=v.device)
+    LODAMP = torch.tensor(0.05, dtype=v.dtype, device=v.device)
     HIDAMP = torch.tensor(0.95, dtype=v.dtype, device=v.device)
     zero = torch.tensor(0, dtype=v.dtype, device=v.device)
     one = torch.tensor(1, dtype=v.dtype, device=v.device)
+    point5 = torch.tensor(0.5, dtype=v.dtype, device=v.device)
 
     i = 0
     while i < MAXITER:
@@ -359,7 +360,7 @@ def root_search_newton(v: torch.Tensor,
             xu = x
         
         if xu <= xl:
-            xu = 0.5 * (xu + xl)
+            xu = point5 * (xu + xl)
             xl = xu
             break
 
@@ -457,8 +458,8 @@ def proj_sol_polar_exp_cone(v: torch.Tensor,
     return dist
     
 
-def proj_exp(v: torch.Tensor,
-             primal: bool
+def proj_exp_cone(v: torch.Tensor,
+                  primal: bool = True
 ) -> torch.Tensor:
     """Project v onto the exponential cone (or its dual).
 
@@ -466,8 +467,9 @@ def proj_exp(v: torch.Tensor,
     ----------
     v: 1D torch.Tensor
         The point to project.
-    primal: bool
+    primal: bool, optional
         Whether to project v onto the exponential cone or the dual exponential cone.
+        Default is True <=> v is projected onto the exponential cone.
     
     Returns
     -------
@@ -481,6 +483,7 @@ def proj_exp(v: torch.Tensor,
     v_hat = torch.empty_like(v)
 
     if not primal:
+        # To project onto dual use Pi_{C^*}(v) = -Pi_{C^\circ}(-v)
         v *= -1
     
     pdist = proj_primal_exp_cone_heuristic(v, vp)

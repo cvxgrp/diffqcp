@@ -208,8 +208,6 @@ def test_proj_pow_specific():
     prob.solve(solver="SCS")
     z_star_tch = utils.to_tensor(z.value, dtype=torch.float64)
     p = cone_lib.proj(x_tch, cones=[(cone_lib.POW, [alpha])])
-    print(p)
-    print(z_star_tch)
     assert torch.allclose(p, z_star_tch)
 
 
@@ -228,8 +226,6 @@ def test_proj_exp():
         prob.solve(solver="SCS")
         z_star_tch = utils.to_tensor(z.value, dtype=torch.float64)
         p = cone_lib._proj(x_tch, cone=cone_lib.EXP, dual=False)
-        print("diffqcp: ", p)
-        print("SCS: ", z_star_tch)
         assert torch.allclose(p, z_star_tch, atol=1e-4)
 
 
@@ -249,12 +245,8 @@ def test_proj_exp_dual():
         z_star_tch = utils.to_tensor(z.value, dtype=torch.float64)
         # p = cone_lib._proj(x_tch, cone=cone_lib.EXP_DUAL, dual=False)
         p = proj_exp_cone(x_tch, primal=False)
-        print("diffqcp: ", p)
         assert in_exp_dual(p), "p not in dual"
-        print(torch.linalg.norm(x_tch - p))
         assert in_exp_dual(z_star_tch + x_tch)
-        print(torch.linalg.norm((z_star_tch + x_tch) - x_tch))
-        print("SCS: ", z_star_tch + x_tch)
         assert torch.allclose(p, z_star_tch + x_tch, atol=1e-4)
 
 

@@ -2,7 +2,7 @@ import torch
 import linops as lo
 
 from diffqcp.linops import ScalarOperator, BlockDiag, SymmetricOperator
-from diffqcp.cones import (ZERO, POS, SOC, PSD, EXP, EXP_DUAL, POW, POW_DUAL, CONES,
+from diffqcp.cones import (ZERO, POS, SOC, PSD, EXP, EXP_DUAL, POW, CONES,
                            symm_size_to_dim, vec_symm, unvec_symm)
 
 def _dprojection_psd(x: torch.Tensor) -> lo.LinearOperator:
@@ -22,11 +22,9 @@ def _dprojection_psd(x: torch.Tensor) -> lo.LinearOperator:
     Notes
     -----
     - see BMB'18 for derivative and its derivation
+    - TODO: CURRENTLY IN DEBUG STATE
     - TODO: cache Q and lambd from projection
-    - TODO: needs testing/support (later phase of project)
-    - This computation should be optimized for the GPU, however, it does
-    need to make use of the caching that will be done when projecting onto the
-    cone, which happens before this derivative evaluation.
+    - TODO: optimize computation for GPU
     """
     assert len(x.shape) == 1, "PSD projection: x must be vectorized."
 
@@ -39,30 +37,18 @@ def _dprojection_psd(x: torch.Tensor) -> lo.LinearOperator:
     if lambd[0] >= zero:
         return lo.IdentityOperator(dim)
 
-    k = (lambd < zero).sum().item() - 1
+    k = -1
+    i = 0
+    while i < lambd.size:
+        if lambd[i] < 0:
+            k += 1
+        else:
+            break
+        i += 1
+        
 
     def mv(dx: torch.Tensor) -> torch.Tensor:
         Q_T_DX_Q = Q.T @ unvec_symm(dx) @ Q
-
-        # i, j = torch.meshgrid(torch.arange(Q_T_DX_Q.shape[0], device=dx.device),
-        #                       torch.arange(Q_T_DX_Q.shape[1], device=dx.device),
-        #                       indexing='ij')
-
-        # i_le_k_j_le_k = (i <= k) & (j <= k)
-        # i_gt_k_j_le_k = (i > k) & (j <= k)
-        # i_le_k_j_gt_k = (i <= k) & (j > k)
-
-        # lambda_i_pos = torch.clamp(lambd[i], min=zero)
-        # lambda_i_neg = -torch.clamp(lambd[i], max=zero)
-        # lambda_j_pos = torch.clamp(lambd[j], min=zero)
-        # lambda_j_neg = -torch.clamp(lambd[i], max=zero)
-
-        # lambda_i_pos = lambda_i_pos[i_gt_k_j_le_k]
-        # lambda_j_pos = lambda_j_pos[i_le_k_j_gt_k]
-
-        # Q_T_DX_Q[i_le_k_j_le_k] = 0
-        # Q_T_DX_Q[i_gt_k_j_le_k] *= lambda_i_pos / (lambda_j_neg[i_gt_k_j_le_k] + lambda_i_pos)
-        # Q_T_DX_Q[i_le_k_j_gt_k] *= lambda_j_pos / (lambda_i_neg[i_le_k_j_gt_k] + lambda_j_pos)
 
         # Hadamard product w/o forming B matrix
         # So Q_T_DX_Q becomes (B hadamard Q_T_DX_Q) after double for loop.
@@ -126,14 +112,17 @@ def _dprojection_soc(x: torch.Tensor) -> lo.LinearOperator:
 
         return SymmetricOperator(x.shape[0], mv, device=x.device)
 
+
 def _dprojection_pos(x: torch.Tensor) -> lo.LinearOperator:
     """TODO: add docstring"""
     return lo.DiagonalOperator(0.5 * (torch.sign(x).to(dtype=x.dtype, device=x.device) + 1.0))
+
 
 def _dprojection_zero(x: torch.Tensor, dual: bool) -> lo.LinearOperator:
     """TODO: add docstring; dual cone is free cone"""
     n = x.shape[0]
     return lo.IdentityOperator(n) if dual else lo.blocks.ZeroOperator((n, n))
+
 
 def _dprojection(x: torch.Tensor,
                  cone : str,
@@ -155,6 +144,7 @@ def _dprojection(x: torch.Tensor,
         return _dprojection_psd(x)
     else:
         raise NotImplementedError("%s not implemented" % cone)
+
 
 def dprojection(x: torch.Tensor,
                 cones: list[tuple[str, int | list[int]]],
@@ -183,6 +173,7 @@ def dprojection(x: torch.Tensor,
     -----
     - TODO: This function can certainly be rewritten to utilize GPU parallelization
     (this will look similar to however `proj` is rewritten).
+    - TODO: still need to support EXP, EXP_DUAL, and POW JVPs
     """
     ops = []
     offset = 0
@@ -196,13 +187,14 @@ def dprojection(x: torch.Tensor,
                 cone_dim = symm_size_to_dim(cone_dim)
             elif cone == EXP or cone == EXP_DUAL:
                 cone_dim *= 3
-            elif cone == POW or cone == POW_DUAL:
+            elif cone == POW:
                 cone_dim *= 3
 
             ops.append(_dprojection(x[offset:offset + cone_dim], cone, dual=dual))
             offset += cone_dim
 
     return BlockDiag(ops)
+
 
 def dpi(u: torch.Tensor,
         v : torch.Tensor,

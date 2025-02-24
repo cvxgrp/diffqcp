@@ -16,6 +16,7 @@ from torchsparsegradutils.utils.lsmr import lsmr
 from diffqcp import compute_derivative
 from diffqcp import utils
 from tests.utils import data_and_soln_from_cvxpy_problem, get_random_like
+from diffqcp.pow_cone import proj_power_cone
 
 def _test_DS(prob: cp.Problem,
              tol: float = 1e-8,
@@ -79,7 +80,13 @@ def test_socp():
 
 if __name__ == "__main__":
     # test_socp()
-    rng = torch.Generator().manual_seed(0)
-    diag_op = lo.DiagonalOperator(torch.randn(10, generator=rng, dtype=torch.float64))
-    b = diag_op @ torch.randn(10)
-    lsmr(diag_op, b, Armat=diag_op.T, n=10)
+    # rng = torch.Generator().manual_seed(0)
+    # diag_op = lo.DiagonalOperator(torch.randn(10, generator=rng, dtype=torch.float64))
+    # b = diag_op @ torch.randn(10)
+    # lsmr(diag_op, b, Armat=diag_op.T, n=10)
+    x = torch.tensor([1, 2, 3], dtype=torch.float64)
+    alpha = 0.6
+    p = proj_power_cone(-x, alpha)
+    print(p + x)
+    # print(p[0]**alpha * p[1]**(1-alpha))
+    # print(torch.abs(p[2]))

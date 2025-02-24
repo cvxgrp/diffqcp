@@ -484,7 +484,7 @@ def proj_exp_cone(v: torch.Tensor,
 
     if not primal:
         # To project onto dual use Pi_{C^*}(v) = -Pi_{C^\circ}(-v)
-        v *= -1
+        v = -1*v
     
     pdist = proj_primal_exp_cone_heuristic(v, vp)
     ddist = proj_polar_exp_cone_heuristic(v, vd)
@@ -518,3 +518,25 @@ def proj_exp_cone(v: torch.Tensor,
         vd[...] = v_hat
     # else negate projection onto polar cone for projection onto dual
     return -vd
+
+#  === HELPER FUNCTIONS ===
+
+CONE_THRESH = 1e-6
+
+def in_exp(v: torch.Tensor) -> bool:
+    """Whether v is in the EXP cone.
+    """
+    CONE_THRESH_DEV = torch.tensor(CONE_THRESH, dtype=v.dtype, device=v.device)
+    x, y, z = v[0], v[1], v[2]
+    return ((x <= 0 and torch.abs(y) <= CONE_THRESH_DEV and z >= 0)
+            or y > 0 and y * torch.exp(x / y) - z <= CONE_THRESH_DEV)
+
+
+def in_exp_dual(z: torch.Tensor) -> bool:
+    """Whether z is in the dual EXP cone.
+    """
+    EULER_DEV = torch.exp(torch.tensor(1, dtype=z.dtype, device=z.device))
+    CONE_THRESH_DEV = torch.tensor(CONE_THRESH, dtype=z.dtype, device=z.device)
+    u, v, w = z[0], z[1], z[2]
+    return (torch.abs(u) <= CONE_THRESH_DEV and v >= 0 and w >= 0
+            or (u < 0 and -u * torch.exp(v / u) - EULER_DEV * w <= CONE_THRESH))

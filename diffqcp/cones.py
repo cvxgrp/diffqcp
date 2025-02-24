@@ -7,6 +7,7 @@ import math
 import torch
 
 from diffqcp.pow_cone import proj_power_cone
+from diffqcp.exp_cone import proj_exp_cone
 
 # TODO: need to check for alternative to distutils, which was deprecated starting in Python 3.12
 
@@ -17,10 +18,11 @@ PSD = "s"
 EXP = "ep"
 EXP_DUAL = "ed"
 POW = 'p'
-POW_DUAL = "pd"
+# Note we don't define a POW_DUAL cone as we stick with SCS convention
+# and use -alpha to create a dual power cone.
 
 # The ordering of CONES matches SCS.
-CONES = [ZERO, POS, SOC, PSD, EXP, EXP_DUAL, POW, POW_DUAL]
+CONES = [ZERO, POS, SOC, PSD, EXP, EXP_DUAL, POW]
 
 def parse_cone_dict(cone_dict: dict[str, int | list[int]]
 ) -> list[tuple[str, int | list[int]]]:
@@ -170,9 +172,7 @@ def _proj(x: torch.Tensor,
 
     Notes
     -----
-    - TODO: test PSD cone projection support.
     - TODO: cache the eigendecomposition computed when projecting onto PSD cones.
-    - TODO: add support for projecting onto exponential cone. 
     """
     if cone == EXP_DUAL:
         cone = EXP
@@ -200,6 +200,15 @@ def _proj(x: torch.Tensor,
         lambd.clamp_(min=0)
         PiX = Q @ (lambd.unsqueeze(-1) * Q.T)
         return vec_symm(PiX)
+    elif cone == EXP:
+        num_cones = int(x.shape[0] / 3)
+        out = torch.empty_like(x)
+        offset = 0
+        for _ in range(num_cones):
+            x_i = x[offset:offset+3]
+            out[offset:offset+3] = proj_exp_cone(x_i, primal=not dual)
+            offset += 3
+        return out
     else:
         raise NotImplementedError("%s not implemented" % cone)
 
@@ -245,6 +254,7 @@ def proj(x,
         if sum(sz) == 0:
             continue
         for cone_dim in sz:
+
             if cone == POW:
                 # cone_dim is now actually the alpha defining K_pow(alpha)
                 if cone_dim < 0:
@@ -254,13 +264,14 @@ def proj(x,
                 else:
                     # primal case
                     projection[offset:offset+3] = proj_power_cone(x[offset:offset+3], cone_dim)
+                
                 offset += 3
                 continue
             
-            if cone == PSD:
-                cone_dim = symm_size_to_dim(cone_dim)
-            elif cone == EXP or cone == EXP_DUAL:
+            if cone == EXP or cone == EXP_DUAL:
                 cone_dim *= 3
+            elif cone == PSD:
+                cone_dim = symm_size_to_dim(cone_dim)
 
             projection[offset:offset+cone_dim] = _proj(x[offset:offset+cone_dim],
                                                        cone,

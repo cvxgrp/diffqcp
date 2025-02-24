@@ -1,10 +1,14 @@
 """
-Ported (projection-related) tests from diffcp/tests/test_cone_prog_diff.py.
+Projection (and projection JVP) tests.
 
 More specifically, this file contains tests for
 1. cone utility functions (all related to PSD projections),
 2. the projections onto cones,
 3. and the derivatives of projections onto cones.
+
+Lots of ported tests from diffcp/tests/test_cone_prog_diff.py.
+
+# TODO: add functionality to test these on device
 """
 import cvxpy as cp
 import numpy as np
@@ -13,7 +17,7 @@ import torch
 import diffqcp.cones as cone_lib
 from diffqcp.cone_derivs import _dprojection, dprojection
 from diffqcp.pow_cone import proj_power_cone
-from diffqcp.exp_cone import proj_exp_cone
+from diffqcp.exp_cone import proj_exp_cone, in_exp, in_exp_dual
 import diffqcp.utils as utils
 
 # ==== SOME CONE UTILITY TESTS ====
@@ -41,6 +45,28 @@ def test_vec_symm():
     n = 5
     x = torch.randn(cone_lib.symm_size_to_dim(n), generator=rng, dtype=torch.float64)
     np.testing.assert_allclose(cone_lib.vec_symm(cone_lib.unvec_symm(x, n)), x)
+
+
+def test_in_exp():
+    in_vecs = [[0, 0, 1], [-1, 0, 0], [1, 1, 5]]
+    for vec in in_vecs:
+        tensor = utils.to_tensor(vec, dtype=torch.float64)
+        assert in_exp(tensor)
+    not_in_vecs = [[1, 0, 0], [-1, -1, 1], [-1, 0, -1]]
+    for vec in not_in_vecs:
+        tensor = utils.to_tensor(vec, dtype=torch.float64)
+        assert not in_exp(tensor)
+
+
+def test_in_exp_dual():
+    in_vecs = [[0, 1, 1], [-1, 1, 5]]
+    not_in_vecs = [[0, -1, 1], [0, 1, -1]]
+    for vec in in_vecs:
+        tensor = utils.to_tensor(vec, dtype=torch.float64)
+        assert in_exp_dual(tensor)
+    for vec in not_in_vecs:
+        tensor = utils.to_tensor(vec, dtype=torch.float64)
+        assert not in_exp_dual(tensor)
 
 # ==== CONE PROJECTION TESTS ====
 
@@ -128,6 +154,65 @@ def test_proj_pow():
         assert torch.allclose(p, z_star_tch)
 
 
+def test_proj_pow_diffcpish():
+    """Modified from the exp cone test in diffcp.
+    """
+    np.random.seed(0)
+    n = 3
+    alphas1 = np.random.uniform(low=0, high=1, size=15)
+    alphas2 = np.random.uniform(low=0, high=1, size=15)
+    alphas3 = np.random.uniform(low=0, high=1, size=15)
+    for i in range(alphas1.shape[0]):
+        x = np.random.randn(9)
+        x_tch = utils.to_tensor(x, dtype=torch.float64)
+        var = cp.Variable(9)
+        constr = [cp.PowCone3D(var[0], var[1], var[2], alphas1[i])]
+        constr += [cp.PowCone3D(var[3], var[4], var[5], alphas2[i])]
+        constr += [cp.PowCone3D(var[6], var[7], var[8], alphas3[i])]
+        obj = cp.Minimize(cp.norm(var[0:3] - x[0:3]) +
+                          cp.norm(var[3:6] - x[3:6]) +
+                          cp.norm(var[6:9] - x[6:9]))
+        prob = cp.Problem(obj, constr)
+        prob.solve(solver="SCS")
+        var_star = utils.to_tensor(var.value, dtype=torch.float64)
+        p = cone_lib.proj(x_tch,
+                          [(cone_lib.POW, [alphas1[i], alphas2[i], alphas3[i]])],
+                          dual=False)
+        assert torch.allclose(p, var_star, atol=1e-4, rtol=1e-7)
+
+        var = cp.Variable(9)
+        constr = [cp.PowCone3D(var[0], var[1], var[2], alphas1[i])]
+        constr += [cp.PowCone3D(var[3], var[4], var[5], alphas2[i])]
+        constr += [cp.PowCone3D(var[6], var[7], var[8], alphas3[i])]
+        obj = cp.Minimize(cp.norm(var[0:3] + x[0:3]) +
+                          cp.norm(var[3:6] + x[3:6]) +
+                          cp.norm(var[6:9] + x[6:9]))
+        prob = cp.Problem(obj, constr)
+        prob.solve(solver="SCS")
+        var_star = utils.to_tensor(var.value, dtype=torch.float64)
+        p_dual = cone_lib.proj(x_tch,
+                          [(cone_lib.POW, [-alphas1[i], -alphas2[i], -alphas3[i]])],
+                          dual=False)
+        assert torch.allclose(p_dual, x_tch + var_star, atol=1e-4)
+
+
+def test_proj_pow_specific():
+    n = 3
+    x = np.array([1, 2, 3])
+    x_tch = utils.to_tensor(x, dtype=torch.float64)
+    alpha = 0.6
+    z = cp.Variable(n)
+    obj = cp.Minimize(cp.sum_squares(z - x))
+    constrs = [cp.PowCone3D(*z, alpha)]
+    prob = cp.Problem(obj, constrs)
+    prob.solve(solver="SCS")
+    z_star_tch = utils.to_tensor(z.value, dtype=torch.float64)
+    p = cone_lib.proj(x_tch, cones=[(cone_lib.POW, [alpha])])
+    print(p)
+    print(z_star_tch)
+    assert torch.allclose(p, z_star_tch)
+
+
 def test_proj_exp():
     """Test projection onto EXP cone, which is not self-dual.
     """
@@ -142,11 +227,116 @@ def test_proj_exp():
         prob = cp.Problem(objective, constraints)
         prob.solve(solver="SCS")
         z_star_tch = utils.to_tensor(z.value, dtype=torch.float64)
-        p = proj_exp_cone(x_tch, primal=True)
+        p = cone_lib._proj(x_tch, cone=cone_lib.EXP, dual=False)
         print("diffqcp: ", p)
         print("SCS: ", z_star_tch)
         assert torch.allclose(p, z_star_tch, atol=1e-4)
-        
+
+
+def test_proj_exp_dual():
+    """Test projection onto EXP cone, which is not self-dual.
+    """
+    np.random.seed(0)
+    n = 3
+    for _ in range(15):
+        x = np.random.randn(n)
+        x_tch = utils.to_tensor(x, dtype=torch.float64)
+        z = cp.Variable(n)
+        objective = cp.Minimize(cp.sum_squares(x + z))
+        constraints = [cp.ExpCone(*z)]
+        prob = cp.Problem(objective, constraints)
+        prob.solve(solver="SCS")
+        z_star_tch = utils.to_tensor(z.value, dtype=torch.float64)
+        # p = cone_lib._proj(x_tch, cone=cone_lib.EXP_DUAL, dual=False)
+        p = proj_exp_cone(x_tch, primal=False)
+        print("diffqcp: ", p)
+        assert in_exp_dual(p), "p not in dual"
+        print(torch.linalg.norm(x_tch - p))
+        assert in_exp_dual(z_star_tch + x_tch)
+        print(torch.linalg.norm((z_star_tch + x_tch) - x_tch))
+        print("SCS: ", z_star_tch + x_tch)
+        assert torch.allclose(p, z_star_tch + x_tch, atol=1e-4)
+
+
+def test_proj_exp_scs():
+    """test values ported from scs/test/problems/test_exp_cone.h
+    """
+    TOL = torch.tensor(1e-6, dtype=torch.float64)
+
+    vs = [torch.tensor([1, 2, 3], dtype=torch.float64),
+          torch.tensor([0.14814832, 1.04294573, 0.67905585], dtype=torch.float64),
+          torch.tensor([-0.78301134, 1.82790084, -1.05417044], dtype=torch.float64),
+          torch.tensor([1.3282585, -0.43277314, 1.7468072], dtype=torch.float64),
+          torch.tensor([0.67905585, 0.14814832, 1.04294573], dtype=torch.float64),
+          torch.tensor([0.50210027, 0.12314491, -1.77568921], dtype=torch.float64)]
+    
+    vp_true = [torch.tensor([0.8899428, 1.94041881, 3.06957226], dtype=torch.float64),
+               torch.tensor([-0.02001571, 0.8709169, 0.85112944], dtype=torch.float64),
+               torch.tensor([-1.17415616, 0.9567094, 0.280399], dtype=torch.float64),
+               torch.tensor([0.53160512, 0.2804836, 1.86652094], dtype=torch.float64),
+               torch.tensor([0.38322814, 0.27086569, 1.11482228], dtype=torch.float64),
+               torch.tensor([0, 0, 0], dtype=torch.float64)]
+    vd_true = [torch.tensor([-0., 2., 3.], dtype=torch.float64),
+               torch.tensor([-0., 1.04294573, 0.67905585], dtype=torch.float64),
+               torch.tensor([-0.68541419, 1.85424082, 0.01685653], dtype=torch.float64),
+               torch.tensor([-0.02277033, -0.12164823, 1.75085347], dtype=torch.float64),
+               torch.tensor([-0., 0.14814832, 1.04294573], dtype=torch.float64),
+               torch.tensor([-0., 0.12314491, -0.], dtype=torch.float64)]
+    
+    for i in range(len(vs)):
+        v = vs[i]
+        vp = proj_exp_cone(v, primal=True)
+        vd = proj_exp_cone(v, primal=False)
+        assert torch.allclose(vp, vp_true[i], atol=TOL)
+        assert torch.allclose(vd, vd_true[i], atol=TOL)
+
+    # now test integratated into diffqcp
+    vs = torch.cat(vs)
+    vp_true = torch.cat(vp_true)
+    vd_true = torch.cat(vd_true)
+    p = cone_lib.proj(vs, cones=[(cone_lib.EXP, 6)], dual=False)
+    pd = cone_lib.proj(vs, cones=[(cone_lib.EXP_DUAL, 6)], dual=False)
+    assert torch.allclose(p, vp_true, atol=TOL)
+    assert torch.allclose(pd, vd_true, atol=TOL)
+    p = cone_lib.proj(vs, cones=[(cone_lib.EXP_DUAL, 6)], dual=True)
+    pd = cone_lib.proj(vs, cones=[(cone_lib.EXP, 6)], dual=True)
+    assert torch.allclose(p, vp_true, atol=TOL)
+    assert torch.allclose(pd, vd_true, atol=TOL)
+
+
+def test_proj_exp_diffcp():
+    """port from diffcp.
+    """
+    np.random.seed(0)
+    for _ in range(15):
+        x = np.random.randn(9)
+        x_tch = utils.to_tensor(x, dtype=torch.float64)
+        var = cp.Variable(9)
+        constr = [cp.constraints.ExpCone(var[0], var[1], var[2])]
+        constr += [cp.constraints.ExpCone(var[3], var[4], var[5])]
+        constr += [cp.constraints.ExpCone(var[6], var[7], var[8])]
+        obj = cp.Minimize(cp.norm(var[0:3] - x[0:3]) +
+                          cp.norm(var[3:6] - x[3:6]) +
+                          cp.norm(var[6:9] - x[6:9]))
+        prob = cp.Problem(obj, constr)
+        prob.solve(solver="SCS", eps=1e-12, max_iters=10_000)
+        var_star = utils.to_tensor(var.value, dtype=torch.float64)
+        p = cone_lib.proj(x_tch, [(cone_lib.EXP, 3)], dual=False)
+        assert torch.allclose(p, var_star, atol=1e-4, rtol=1e-7)
+
+        var = cp.Variable(9)
+        constr = [cp.constraints.ExpCone(var[0], var[1], var[2])]
+        constr.append(cp.constraints.ExpCone(var[3], var[4], var[5]))
+        constr.append(cp.constraints.ExpCone(var[6], var[7], var[8]))
+        obj = cp.Minimize(cp.norm(var[0:3] + x[0:3]) +
+                          cp.norm(var[3:6] + x[3:6]) +
+                          cp.norm(var[6:9] + x[6:9]))
+        prob = cp.Problem(obj, constr)
+        prob.solve(solver="SCS", eps=1e-12)
+        var_star = utils.to_tensor(var.value, dtype=torch.float64)
+        p_dual = cone_lib.proj(x_tch, [(cone_lib.EXP_DUAL, 3)], dual=False)
+        assert torch.allclose(p_dual, x_tch + var_star, atol=1e-6)
+
 
 def test_projection():
     """Test projection onto cartesian product of atom cones.
@@ -162,23 +352,37 @@ def test_projection():
         psd_dim = [np.random.randint(1, 10) for _ in range(
             np.random.randint(1, 10))]
         pow_alpha = [np.random.uniform(0, 1) for _ in range(np.random.randint(1, 10))]
-        cones = [(cone_lib.ZERO, zero_dim), (cone_lib.POS, pos_dim),
+        pow_alpha_neg = [-alpha for alpha in pow_alpha]
+        exp_dim = np.random.randint(3, 18)
+        cones = [(cone_lib.POW, pow_alpha_neg), (cone_lib.ZERO, zero_dim),
+                 (cone_lib.POS, pos_dim), (cone_lib.EXP, exp_dim),
                  (cone_lib.SOC, soc_dim), (cone_lib.POW, pow_alpha),
-                 (cone_lib.PSD, psd_dim)]
+                 (cone_lib.PSD, psd_dim), (cone_lib.EXP_DUAL, exp_dim)]
         size = zero_dim + pos_dim + sum(soc_dim) + sum([cone_lib.symm_size_to_dim(d) for d in psd_dim])\
-                + 3*len(pow_alpha)
+                + 2*3*len(pow_alpha) + 2*3*exp_dim
         x = torch.randn(size, generator=rng, dtype=torch.float64)
         for dual in [False, True]:
             proj = cone_lib.proj(x, cones, dual=dual)
 
             offset = 0
-            assert torch.allclose(proj[:zero_dim], cone_lib._proj(x[:zero_dim], cone_lib.ZERO, dual=dual))
+            for alpha in pow_alpha_neg:
+                v = -x[offset:offset + 3]
+                assert torch.allclose(proj[offset:offset+3],
+                                      x[offset:offset+3]+ proj_power_cone(v,-alpha))
+                offset += 3
+            
+            assert torch.allclose(proj[offset:zero_dim], cone_lib._proj(x[offset:zero_dim], cone_lib.ZERO, dual=dual))
             offset += zero_dim
 
             assert torch.allclose(proj[offset:offset + pos_dim], cone_lib._proj(x[offset:offset + pos_dim], cone_lib.POS,
                                                                         dual=dual))
             offset += pos_dim
 
+            dim = 3 * exp_dim
+            assert torch.allclose(proj[offset:offset+dim],
+                                  cone_lib.proj(x[offset:offset+dim], [(cone_lib.EXP, exp_dim)], dual=dual))
+            offset += dim
+            
             for dim in soc_dim:
                 assert torch.allclose(proj[offset:offset + dim], cone_lib._proj(x[offset:offset + dim], cone_lib.SOC,
                                                           dual=dual))
@@ -193,6 +397,11 @@ def test_projection():
                 assert torch.allclose(proj[offset:offset + dim], cone_lib._proj(x[offset:offset + dim], cone_lib.PSD,
                                                                         dual=dual))
                 offset += dim
+
+            dim = 3 * exp_dim
+            assert torch.allclose(proj[offset:offset+dim],
+                                  cone_lib.proj(x[offset:offset+dim], [(cone_lib.EXP_DUAL, exp_dim)], dual=dual))
+            offset += dim
 
 # ==== DERIVATIVES OF PROJECTIONS TESTS ====
 

@@ -18,18 +18,19 @@ from scipy.sparse import csr_matrix
 import torch
 import linops as lo
 from linops.lsqr import lsqr as lsqr2
+import pytest
 
 from diffqcp.qcp_derivs import Du_Q, dData_Q
 from diffqcp.lsqr import lsqr
 import tests.utils as utils
 from diffqcp.utils import Q
-import diffqcp.utils as qcp_utils
-from diffqcp.linops import SymmetricOperator
 
-# TODO: manually implement PyLops's `dottest`
+devices = [torch.device('cpu')]
+if torch.cuda.is_available():
+    devices += [torch.device('cuda')]
 
-
-def test_dData_Q_is_approximation():
+@pytest.mark.parametrize("device", devices)
+def test_dData_Q_is_approximation(device):
     """Test implementation of DQ(u) w.r.t. Data.
 
     Taking D in S^n_+ x R^(n x m) x R^n x R^m and a small perturbation
@@ -55,10 +56,11 @@ def test_dData_Q_is_approximation():
                                                                    m,
                                                                    sparse.random,
                                                                    np.random.randn,
-                                                                   dtype=torch.float64)
+                                                                   dtype=torch.float64,
+                                                                   device=device)
 
-        u = torch.randn(N, generator=rng,dtype=torch.float64)
-        u[-1] = torch.tensor(1, dtype=torch.float64) # always the case when differentiating at soln.
+        u = torch.randn(N, generator=rng,dtype=torch.float64, device=device)
+        u[-1] = torch.tensor(1, dtype=torch.float64, device=device) # always the case when differentiating at soln.
 
         x, y, tau = u[:n], u[n: -1], u[-1]
         tau = tau.unsqueeze(0)
@@ -68,7 +70,7 @@ def test_dData_Q_is_approximation():
         dA = utils.get_random_like(A, lambda n: np.random.normal(0, 1e-6, size=n))
         dq = torch.randn(q.shape[0], generator=rng)
         db = torch.randn(b.shape[0], generator=rng)
-        dP_op, dA, dq, db = utils.convert_prob_data_to_torch(dP_upper, dA, dq, db, dtype=torch.float64)
+        dP_op, dA, dq, db = utils.convert_prob_data_to_torch(dP_upper, dA, dq, db, dtype=torch.float64, device=device)
 
         dQ = Q(P_op + dP_op, A + dA, q + dq, b + db, x, y, tau) - z
 

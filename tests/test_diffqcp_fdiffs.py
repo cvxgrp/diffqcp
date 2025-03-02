@@ -19,6 +19,9 @@ from diffqcp import compute_derivative
 from diffqcp import utils
 
 NUM_TRIALS = 10
+devices = [torch.device('cpu')]
+if torch.cuda.is_available():
+    devices += [torch.device('cuda')]
 
 def _test_DS(prob: cp.Problem,
              tol: float = 1e-8,
@@ -33,37 +36,38 @@ def _test_DS(prob: cp.Problem,
     P_upper, A = prob_data[0], prob_data[1]
     q, b = prob_data[2], prob_data[3]
     cone_dict, soln, clarabel_cones = prob_data[4], prob_data[5], prob_data[6]
+    
+    for device in devices:
+        DS = compute_derivative(P_upper, A, q, b, cone_dict,
+                                solution=soln, dtype=dtype, device=device)
 
-    DS = compute_derivative(P_upper, A, q, b, cone_dict,
-                            solution=soln, dtype=dtype)
+        dP_upper = get_random_like(P_upper, lambda n: np.random.normal(0, 1e-6, size=n))
+        dA = get_random_like(A, lambda n: np.random.normal(0, 1e-6, size=n))
+        dq = np.random.normal(0, 1e-6, size=q.size)
+        db = np.random.normal(0, 1e-6, size=b.size)
 
-    dP_upper = get_random_like(P_upper, lambda n: np.random.normal(0, 1e-6, size=n))
-    dA = get_random_like(A, lambda n: np.random.normal(0, 1e-6, size=n))
-    dq = np.random.normal(0, 1e-6, size=q.size)
-    db = np.random.normal(0, 1e-6, size=b.size)
+        solver_settings = clarabel.DefaultSettings()
+        solver_settings.verbose = False
+        solver = clarabel.DefaultSolver(P_upper + dP_upper,
+                                        q + dq,
+                                        A + dA,
+                                        b + db,
+                                        clarabel_cones, solver_settings)
+        delta_soln = solver.solve()
 
-    solver_settings = clarabel.DefaultSettings()
-    solver_settings.verbose = False
-    solver = clarabel.DefaultSolver(P_upper + dP_upper,
-                                    q + dq,
-                                    A + dA,
-                                    b + db,
-                                    clarabel_cones, solver_settings)
-    delta_soln = solver.solve()
+        delta_x = utils.to_tensor(delta_soln.x, dtype=dtype, device=device) - utils.to_tensor(soln.x, dtype=dtype, device=device)
+        delta_y = utils.to_tensor(delta_soln.z, dtype=dtype, device=device) - utils.to_tensor(soln.z, dtype=dtype, device=device)
+        delta_s = utils.to_tensor(delta_soln.s, dtype=dtype, device=device) - utils.to_tensor(soln.s, dtype=dtype, device=device)
 
-    delta_x = utils.to_tensor(delta_soln.x, dtype=dtype) - utils.to_tensor(soln.x, dtype=dtype)
-    delta_y = utils.to_tensor(delta_soln.z, dtype=dtype) - utils.to_tensor(soln.z, dtype=dtype)
-    delta_s = utils.to_tensor(delta_soln.s, dtype=dtype) - utils.to_tensor(soln.s, dtype=dtype)
+        dx, dy, ds = DS(dP_upper, dA, dq, db)
 
-    dx, dy, ds = DS(dP_upper, dA, dq, db)
+        print(f"delta_x: {delta_x} \n dx: {dx} \n === ===")
+        print(f"delta_y: {delta_y} \n dy: {dy} \n === ===")
+        print(f"delta_s: {delta_s} \n ds: {ds} \n === ===")
 
-    print(f"delta_x: {delta_x} \n dx: {dx} \n === ===")
-    print(f"delta_y: {delta_y} \n dy: {dy} \n === ===")
-    print(f"delta_s: {delta_s} \n ds: {ds} \n === ===")
-
-    assert torch.allclose(delta_x, dx, atol=tol)
-    assert torch.allclose(delta_y, dy, atol=tol)
-    assert torch.allclose(delta_s, ds, atol=tol)
+        assert torch.allclose(delta_x, dx, atol=tol)
+        assert torch.allclose(delta_y, dy, atol=tol)
+        assert torch.allclose(delta_s, ds, atol=tol)
 
 
 def test_least_squares():
@@ -251,3 +255,30 @@ def test_socp2():
         _test_DS(prob)
     else:
         assert False, "test_socp2 wasn't run because problem was infeasible"
+
+
+def test_psd():
+    """
+    SDP generation from https://www.cvxpy.org/examples/basic/sdp.html#basic-examples.
+    """
+    n = 3
+    p = 3
+    np.random.seed(1)
+    C = np.random.randn(n, n)
+    A = []
+    b = []
+    for _ in range(p):
+        A.append(np.random.randn(n, n))
+        b.append(np.random.randn())
+    
+    X = cp.Variable((n, n), symmetric=True)
+    constraints = [X >> 0]
+    constraints += [
+        cp.trace(A[i] @ X) == b[i] for i in range(p)
+    ]
+    prob = cp.Problem(cp.Minimize(cp.trace(C @ X)), constraints=constraints)
+    prob.solve()
+    if prob.status == 'optimal':
+        _test_DS(prob)
+    else:
+        assert False, "test_psd wasn't run because problem was infeasible"

@@ -39,13 +39,12 @@ def _dprojection_psd(x: torch.Tensor) -> lo.LinearOperator:
 
     k = -1
     i = 0
-    while i < lambd.size:
+    while i < lambd.shape[0]:
         if lambd[i] < 0:
             k += 1
         else:
             break
         i += 1
-        
 
     def mv(dx: torch.Tensor) -> torch.Tensor:
         Q_T_DX_Q = Q.T @ unvec_symm(dx) @ Q
@@ -56,7 +55,7 @@ def _dprojection_psd(x: torch.Tensor) -> lo.LinearOperator:
             for j in range(Q_T_DX_Q.shape[1]):
                 if i <= k and j <= k:
                     Q_T_DX_Q[i, j] = 0
-                elif k > k and j <= k:
+                elif i > k and j <= k:
                     lambda_i_pos = torch.maximum(lambd[i], zero)
                     lambda_j_neg = -torch.minimum(lambd[j], zero)
                     Q_T_DX_Q[i, j] *= lambda_i_pos / (lambda_j_neg + lambda_i_pos)

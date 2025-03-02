@@ -12,6 +12,7 @@ of Fridberg's routines (see exp_cone.c).
 The derivative of the projection is a port from https://github.com/cvxgrp/diffcp/blob/master/cpp/src/cones.cpp.
 """
 import torch
+from linops import LinearOperator
 
 EXP_CONE_INF_VALUE = 1e15
 
@@ -540,3 +541,25 @@ def in_exp_dual(z: torch.Tensor) -> bool:
     u, v, w = z[0], z[1], z[2]
     return (torch.abs(u) <= CONE_THRESH_DEV and v >= 0 and w >= 0
             or (u < 0 and -u * torch.exp(v / u) - EULER_DEV * w <= CONE_THRESH))
+
+#  === Derivative Subroutine ===
+
+def dproj_exp_cone(x: torch.Tensor,
+                   dual: bool
+) -> LinearOperator:
+    """
+
+    Notes
+    -----
+    - port from diffcp
+    
+    """
+    pass
+    # num_cones = int(x.shape[0] / 3)
+    # ops = [None] * num_cones
+    # offset = 0
+    # for i in range(num_cones):
+    #     x_i = torch.empty(3, dtype=x.dtype, device=x.device)
+    #     if dual:
+    #         x_i = -1 * x[]
+    # can batch inverse

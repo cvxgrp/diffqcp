@@ -12,13 +12,18 @@ import numpy as np
 import scipy.linalg as la
 import cvxpy as cp
 import torch
+import pytest
 
 import diffqcp.qcp as cone_prog
 from diffqcp.utils import to_tensor
 from tests.utils import data_and_soln_from_cvxpy_problem, get_zeros_like, get_random_like
 
+devices = [torch.device('cpu')]
+if torch.cuda.is_available():
+    devices += [torch.device('cuda')]
 
-def test_least_squares_small():
+@pytest.mark.parametrize("device", devices)
+def test_least_squares_small(device):
     """
     The least squares (approximation) problem
 
@@ -70,18 +75,19 @@ def test_least_squares_small():
         dP = get_zeros_like(P_can)
         dA = get_zeros_like(A_can)
         assert b.size == b_can.size
-        np.testing.assert_allclose(-b, b_can)
-        db = 1e-6 * torch.randn(b_can.size, generator=rng, dtype=torch.float64)
+        np.testing.assert_allclose(-b, b_can) # sanity check
+        db = 1e-6 * torch.randn(b_can.size, generator=rng, dtype=torch.float64, device=device)
 
-        Dx_b = to_tensor(la.solve(A.T @ A, A.T), dtype=torch.float64)
+        Dx_b = to_tensor(la.solve(A.T @ A, A.T), dtype=torch.float64, device=device)
 
-        DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64)
-        dx, dy, ds = DS(dP, dA, torch.zeros(q_can.size), -db)
+        DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
+        dx, dy, ds = DS(dP, dA, torch.zeros(q_can.size, device=device), -db)
         
         assert torch.allclose( Dx_b @ db, dx[m:], atol=1e-8)
 
 
-def test_least_squares_larger():
+@pytest.mark.parametrize("device", devices)
+def test_least_squares_larger(device):
     """
     See `test_least_squares_small` for more information.
 
@@ -112,19 +118,20 @@ def test_least_squares_larger():
 
         dP = get_zeros_like(P_can)
         dA = get_zeros_like(A_can)
-        assert b.size == b_can.size
+        assert b.size == b_can.size # sanity check
         np.testing.assert_allclose(-b, b_can)
-        db = 1e-2 * torch.randn(b_can.size, generator=rng, dtype=torch.float64)
+        db = 1e-2 * torch.randn(b_can.size, generator=rng, dtype=torch.float64, device=device)
 
-        Dx_b = to_tensor(la.solve(A.T @ A, A.T), dtype=torch.float64)
+        Dx_b = to_tensor(la.solve(A.T @ A, A.T), dtype=torch.float64, device=device)
 
-        DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64)
+        DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
         dx, dy, ds = DS(dP, dA, np.zeros(q_can.size), -db)
 
         assert torch.allclose( Dx_b @ db, dx[m:], atol=1e-5)
 
 
-def test_least_squares_soln_of_eqns_small():
+@pytest.mark.parametrize("device", devices)
+def test_least_squares_soln_of_eqns_small(device):
     """
     The least-l2-norm problem is
 
@@ -175,18 +182,19 @@ def test_least_squares_soln_of_eqns_small():
 
         dP = get_zeros_like(P_can)
         dA = get_zeros_like(A_can)
-        db = 1e-2 * torch.randn(b_can.size, generator=rng, dtype=torch.float64)
+        db = 1e-2 * torch.randn(b_can.size, generator=rng, dtype=torch.float64, device=device)
 
         AT = A.T
-        Dxb_db = to_tensor(AT @ la.solve(A @ AT, db), dtype=torch.float64)
+        Dxb_db = to_tensor(AT @ la.solve(A @ AT, db), dtype=torch.float64, device=device)
 
-        DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64)
-        dx, dy, ds = DS(dP, dA, np.zeros(q_can.size), db)
+        DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
+        dx, dy, ds = DS(dP, dA, np.zeros(q_can.size), db) # leave zero creation with numpy to see if gpu conversion worked
 
         assert torch.allclose(Dxb_db, dx, atol=1e-5)
 
 
-def test_least_squares_soln_of_eqns_larger():
+@pytest.mark.parametrize("device", devices)
+def test_least_squares_soln_of_eqns_larger(device):
     """
     See `test_least_squares_soln_of_eqns_small` for more information.
     """
@@ -217,19 +225,21 @@ def test_least_squares_soln_of_eqns_larger():
 
         dP = get_zeros_like(P_can)
         dA = get_zeros_like(A_can)
-        db = 1e-2 * torch.randn(b_can.size, generator=rng, dtype=torch.float64)
+        db = 1e-2 * torch.randn(b_can.size, generator=rng, dtype=torch.float64, device=device)
 
         AT = A.T
-        Dxb_db = to_tensor(AT @ la.solve(A @ AT, db), dtype=torch.float64)
+        Dxb_db = to_tensor(AT @ la.solve(A @ AT, db), dtype=torch.float64, device=device)
 
-        DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64)
+        DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
         dx, dy, ds = DS(dP, dA, np.zeros(q_can.size), db)
 
         assert torch.allclose(Dxb_db, dx, atol=1e-5)
 
+
 ### A more complicated example ###
 
-def test_constrained_least_squares():
+@pytest.mark.parametrize("device", devices)
+def test_constrained_least_squares(device):
     np.random.seed(0)
     rng = torch.Generator().manual_seed(0)
     EPS = 1e-6
@@ -284,15 +294,15 @@ def test_constrained_least_squares():
                                               )
                             )
             dx_b = dsoln[0:n]
-            return to_tensor(dx_b, torch.float64)
+            return to_tensor(dx_b, dtype=torch.float64, device=device)
 
         dP = get_zeros_like(P_can)
         dA = get_zeros_like(A_can)
         db = 1e-6 * np.random.randn(b.size)
         db_can = np.hstack((db, np.zeros(b_can.size - b.size)))
 
-        DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64)
-        dx, dy, ds = DS(dP, dA, torch.zeros(q_can.size), db_can)
+        DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
+        dx, dy, ds = DS(dP, dA, torch.zeros(q_can.size, device=device), db_can)
         
         dx_b_analytic = dx_b_analytical(db)
         

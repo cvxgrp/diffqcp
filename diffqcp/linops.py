@@ -209,7 +209,7 @@ class _sLinearOperator(lo.LinearOperator):
         if isinstance(rv, lo.LinearOperator):
             self._adjoint = rv
         elif rv is not None:
-            self._adjoint = _sLinearOperator(m, n, rv, self)
+            self._adjoint = _sLinearOperator(m, n, rv, self, device=device, supports_operator_matrix=supports_operator_matrix)
         # else we don't instantiate adjoint and make linops differentiate to find it.
 
         self.device = device

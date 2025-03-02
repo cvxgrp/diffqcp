@@ -13,12 +13,17 @@ Lots of ported tests from diffcp/tests/test_cone_prog_diff.py.
 import cvxpy as cp
 import numpy as np
 import torch
+import pytest
 
 import diffqcp.cones as cone_lib
 from diffqcp.cone_derivs import _dprojection, dprojection
 from diffqcp.pow_cone import proj_power_cone
 from diffqcp.exp_cone import proj_exp_cone, in_exp, in_exp_dual
 import diffqcp.utils as utils
+
+devices = [torch.device('cpu')]
+if torch.cuda.is_available():
+    devices += [torch.device('cuda')]
 
 # ==== SOME CONE UTILITY TESTS ====
 
@@ -31,89 +36,97 @@ def test_psd_dim():
     assert cone_lib.symm_dim_to_size(cone_lib.symm_size_to_dim(n)) == n
 
 
-def test_unvec_symm():
+@pytest.mark.parametrize("device", devices)
+def test_unvec_symm(device):
     np.random.seed(0)
     n = 5
     x = np.random.randn(n, n)
     x = x + x.T
-    x = utils.to_tensor(x, dtype=torch.float64)
+    x = utils.to_tensor(x, dtype=torch.float64, device=device)
     assert torch.allclose(cone_lib.unvec_symm(cone_lib.vec_symm(x), n), x)
 
 
-def test_vec_symm():
+@pytest.mark.parametrize("device", devices)
+def test_vec_symm(device):
     rng = torch.Generator().manual_seed(0)
     n = 5
-    x = torch.randn(cone_lib.symm_size_to_dim(n), generator=rng, dtype=torch.float64)
-    np.testing.assert_allclose(cone_lib.vec_symm(cone_lib.unvec_symm(x, n)), x)
+    x = torch.randn(cone_lib.symm_size_to_dim(n), generator=rng, dtype=torch.float64, device=device)
+    assert torch.allclose(cone_lib.vec_symm(cone_lib.unvec_symm(x, n)), x)
 
 
-def test_in_exp():
+@pytest.mark.parametrize("device", devices)
+def test_in_exp(device):
     in_vecs = [[0, 0, 1], [-1, 0, 0], [1, 1, 5]]
     for vec in in_vecs:
-        tensor = utils.to_tensor(vec, dtype=torch.float64)
+        tensor = utils.to_tensor(vec, dtype=torch.float64, device=device)
         assert in_exp(tensor)
     not_in_vecs = [[1, 0, 0], [-1, -1, 1], [-1, 0, -1]]
     for vec in not_in_vecs:
-        tensor = utils.to_tensor(vec, dtype=torch.float64)
+        tensor = utils.to_tensor(vec, dtype=torch.float64, device=device)
         assert not in_exp(tensor)
 
 
-def test_in_exp_dual():
+@pytest.mark.parametrize("device", devices)
+def test_in_exp_dual(device):
     in_vecs = [[0, 1, 1], [-1, 1, 5]]
     not_in_vecs = [[0, -1, 1], [0, 1, -1]]
     for vec in in_vecs:
-        tensor = utils.to_tensor(vec, dtype=torch.float64)
+        tensor = utils.to_tensor(vec, dtype=torch.float64, device=device)
         assert in_exp_dual(tensor)
     for vec in not_in_vecs:
-        tensor = utils.to_tensor(vec, dtype=torch.float64)
+        tensor = utils.to_tensor(vec, dtype=torch.float64, device=device)
         assert not in_exp_dual(tensor)
 
 # ==== CONE PROJECTION TESTS ====
 
-def test_proj_zero():
+@pytest.mark.parametrize("device", devices)
+def test_proj_zero(device):
     """Test projection onto zero cone and its dual (the free cone).
     """
     rng = torch.Generator().manual_seed(0)
     n = 100
     for _ in range(10):
-        x = torch.randn(n, generator=rng, dtype=torch.float64)
+        x = torch.randn(n, generator=rng, dtype=torch.float64, device=device)
         assert torch.allclose(x, cone_lib._proj(x, cone_lib.ZERO, dual=True))
         assert torch.allclose(torch.zeros(n, dtype=torch.float64),
                               cone_lib._proj(x, cone_lib.ZERO, dual=False))
         
 
-def test_proj_pos():
+@pytest.mark.parametrize("device", devices)
+def test_proj_pos(device):
     """Test projection onto nonnegative cone, which is self-dual.
     """
     rng = torch.Generator().manual_seed(0)
     n = 100
     for _ in range(15):
-        x = torch.randn(n, generator=rng, dtype=torch.float64)
+        x = torch.randn(n, generator=rng, dtype=torch.float64, device=device)
         p = cone_lib._proj(x, cone_lib.POS, dual=False)
-        assert torch.allclose(p, torch.maximum(x, torch.tensor(0)))
+        assert torch.allclose(p, torch.maximum(x, torch.tensor(0, device=device)))
         assert torch.allclose(cone_lib._proj(x, cone_lib.POS, dual=True), p) # self-dual
 
 
-def test_proj_soc():
+@pytest.mark.parametrize("device", devices)
+def test_proj_soc(device):
     """Test projection onto SOC, which is self-dual.
     """
     np.random.seed(0)
     n = 100
     for _ in range(15):
         x = np.random.randn(n)
-        x_tch = utils.to_tensor(x, dtype=torch.float64)
+        x_tch = utils.to_tensor(x, dtype=torch.float64, device=device)
         z = cp.Variable(n)
         objective = cp.Minimize(cp.sum_squares(z - x))
         constraints = [cp.norm(z[1:], 2) <= z[0]]
         prob = cp.Problem(objective, constraints)
         prob.solve(solver="SCS", eps=1e-10)
-        z_star_tch = utils.to_tensor(z.value, dtype=torch.float64)
+        z_star_tch = utils.to_tensor(z.value, dtype=torch.float64, device=device)
         p = cone_lib._proj(x_tch, cone_lib.SOC, dual=False)
         assert torch.allclose(p, z_star_tch)
         assert torch.allclose(p, cone_lib._proj(x_tch, cone_lib.SOC, dual=True))
         
 
-def test_proj_psd():
+@pytest.mark.parametrize("device", devices)
+def test_proj_psd(device):
     """Test projection onto PSD cone, which is self-dual.
     """
     np.random.seed(0)
@@ -121,13 +134,13 @@ def test_proj_psd():
     for _ in range(15):
         x = np.random.randn(n, n)
         x = x + x.T
-        x_tch = utils.to_tensor(x, dtype=torch.float64)
+        x_tch = utils.to_tensor(x, dtype=torch.float64, device=device)
         x_vec = cone_lib.vec_symm(x_tch)
         z = cp.Variable((n, n), PSD=True)
         objective = cp.Minimize(cp.sum_squares(z - x))
         prob = cp.Problem(objective)
         prob.solve(solver="SCS", eps=1e-10)
-        z_val = utils.to_tensor(z.value, dtype=torch.float64)
+        z_val = utils.to_tensor(z.value, dtype=torch.float64, device=device)
         p = cone_lib.unvec_symm(
             cone_lib._proj(x_vec, cone_lib.PSD, dual=False), n)
         assert torch.allclose(p, z_val, atol=1e-5, rtol=1e-5)
@@ -135,7 +148,8 @@ def test_proj_psd():
             cone_lib._proj(x_vec, cone_lib.PSD, dual=True), n))
         
 
-def test_proj_pow():
+@pytest.mark.parametrize("device", devices)
+def test_proj_pow(device):
     """Test projection onto POW cone, which is not self-dual.
     """
     np.random.seed(0)
@@ -143,18 +157,19 @@ def test_proj_pow():
     alphas = np.random.uniform(low=0, high=1, size=15)
     for alpha in alphas:
         x = np.random.randn(n)
-        x_tch = utils.to_tensor(x, dtype=torch.float64)
+        x_tch = utils.to_tensor(x, dtype=torch.float64, device=device)
         z = cp.Variable(n)
         objective = cp.Minimize(cp.sum_squares(z - x))
         constraints = [cp.PowCone3D(z[0], z[1], z[2], alpha)]
         prob = cp.Problem(objective, constraints)
         prob.solve(solver="SCS", eps=1e-10)
-        z_star_tch = utils.to_tensor(z.value, dtype=torch.float64)
+        z_star_tch = utils.to_tensor(z.value, dtype=torch.float64, device=device)
         p = cone_lib.proj(x_tch, cones=[(cone_lib.POW, [alpha])])
         assert torch.allclose(p, z_star_tch)
 
 
-def test_proj_pow_diffcpish():
+@pytest.mark.parametrize("device", devices)
+def test_proj_pow_diffcpish(device):
     """Modified from the exp cone test in diffcp.
     """
     np.random.seed(0)
@@ -164,7 +179,7 @@ def test_proj_pow_diffcpish():
     alphas3 = np.random.uniform(low=0, high=1, size=15)
     for i in range(alphas1.shape[0]):
         x = np.random.randn(9)
-        x_tch = utils.to_tensor(x, dtype=torch.float64)
+        x_tch = utils.to_tensor(x, dtype=torch.float64, device=device)
         var = cp.Variable(9)
         constr = [cp.PowCone3D(var[0], var[1], var[2], alphas1[i])]
         constr += [cp.PowCone3D(var[3], var[4], var[5], alphas2[i])]
@@ -174,7 +189,7 @@ def test_proj_pow_diffcpish():
                           cp.norm(var[6:9] - x[6:9]))
         prob = cp.Problem(obj, constr)
         prob.solve(solver="SCS")
-        var_star = utils.to_tensor(var.value, dtype=torch.float64)
+        var_star = utils.to_tensor(var.value, dtype=torch.float64, device=device)
         p = cone_lib.proj(x_tch,
                           [(cone_lib.POW, [alphas1[i], alphas2[i], alphas3[i]])],
                           dual=False)
@@ -189,60 +204,63 @@ def test_proj_pow_diffcpish():
                           cp.norm(var[6:9] + x[6:9]))
         prob = cp.Problem(obj, constr)
         prob.solve(solver="SCS")
-        var_star = utils.to_tensor(var.value, dtype=torch.float64)
+        var_star = utils.to_tensor(var.value, dtype=torch.float64, device=device)
         p_dual = cone_lib.proj(x_tch,
                           [(cone_lib.POW, [-alphas1[i], -alphas2[i], -alphas3[i]])],
                           dual=False)
         assert torch.allclose(p_dual, x_tch + var_star, atol=1e-4)
 
 
-def test_proj_pow_specific():
+@pytest.mark.parametrize("device", devices)
+def test_proj_pow_specific(device):
     n = 3
     x = np.array([1, 2, 3])
-    x_tch = utils.to_tensor(x, dtype=torch.float64)
+    x_tch = utils.to_tensor(x, dtype=torch.float64, device=device)
     alpha = 0.6
     z = cp.Variable(n)
     obj = cp.Minimize(cp.sum_squares(z - x))
     constrs = [cp.PowCone3D(*z, alpha)]
     prob = cp.Problem(obj, constrs)
     prob.solve(solver="SCS")
-    z_star_tch = utils.to_tensor(z.value, dtype=torch.float64)
+    z_star_tch = utils.to_tensor(z.value, dtype=torch.float64, device=device)
     p = cone_lib.proj(x_tch, cones=[(cone_lib.POW, [alpha])])
     assert torch.allclose(p, z_star_tch)
 
 
-def test_proj_exp():
+@pytest.mark.parametrize("device", devices)
+def test_proj_exp(device):
     """Test projection onto EXP cone, which is not self-dual.
     """
     np.random.seed(0)
     n = 3
     for _ in range(15):
         x = np.random.randn(n)
-        x_tch = utils.to_tensor(x, dtype=torch.float64)
+        x_tch = utils.to_tensor(x, dtype=torch.float64, device=device)
         z = cp.Variable(n)
         objective = cp.Minimize(cp.sum_squares(z - x))
         constraints = [cp.ExpCone(*z)]
         prob = cp.Problem(objective, constraints)
         prob.solve(solver="SCS")
-        z_star_tch = utils.to_tensor(z.value, dtype=torch.float64)
+        z_star_tch = utils.to_tensor(z.value, dtype=torch.float64, device=device)
         p = cone_lib._proj(x_tch, cone=cone_lib.EXP, dual=False)
         assert torch.allclose(p, z_star_tch, atol=1e-4)
 
 
-def test_proj_exp_dual():
+@pytest.mark.parametrize("device", devices)
+def test_proj_exp_dual(device):
     """Test projection onto EXP cone, which is not self-dual.
     """
     np.random.seed(0)
     n = 3
     for _ in range(15):
         x = np.random.randn(n)
-        x_tch = utils.to_tensor(x, dtype=torch.float64)
+        x_tch = utils.to_tensor(x, dtype=torch.float64, device=device)
         z = cp.Variable(n)
         objective = cp.Minimize(cp.sum_squares(x + z))
         constraints = [cp.ExpCone(*z)]
         prob = cp.Problem(objective, constraints)
         prob.solve(solver="SCS")
-        z_star_tch = utils.to_tensor(z.value, dtype=torch.float64)
+        z_star_tch = utils.to_tensor(z.value, dtype=torch.float64, device=device)
         # p = cone_lib._proj(x_tch, cone=cone_lib.EXP_DUAL, dual=False)
         p = proj_exp_cone(x_tch, primal=False)
         assert in_exp_dual(p), "p not in dual"
@@ -250,30 +268,31 @@ def test_proj_exp_dual():
         assert torch.allclose(p, z_star_tch + x_tch, atol=1e-4)
 
 
-def test_proj_exp_scs():
+@pytest.mark.parametrize("device", devices)
+def test_proj_exp_scs(device):
     """test values ported from scs/test/problems/test_exp_cone.h
     """
-    TOL = torch.tensor(1e-6, dtype=torch.float64)
+    TOL = torch.tensor(1e-6, dtype=torch.float64, device=device)
 
-    vs = [torch.tensor([1, 2, 3], dtype=torch.float64),
-          torch.tensor([0.14814832, 1.04294573, 0.67905585], dtype=torch.float64),
-          torch.tensor([-0.78301134, 1.82790084, -1.05417044], dtype=torch.float64),
-          torch.tensor([1.3282585, -0.43277314, 1.7468072], dtype=torch.float64),
-          torch.tensor([0.67905585, 0.14814832, 1.04294573], dtype=torch.float64),
-          torch.tensor([0.50210027, 0.12314491, -1.77568921], dtype=torch.float64)]
+    vs = [torch.tensor([1, 2, 3], dtype=torch.float64, device=device),
+          torch.tensor([0.14814832, 1.04294573, 0.67905585], dtype=torch.float64, device=device),
+          torch.tensor([-0.78301134, 1.82790084, -1.05417044], dtype=torch.float64, device=device),
+          torch.tensor([1.3282585, -0.43277314, 1.7468072], dtype=torch.float64, device=device),
+          torch.tensor([0.67905585, 0.14814832, 1.04294573], dtype=torch.float64, device=device),
+          torch.tensor([0.50210027, 0.12314491, -1.77568921], dtype=torch.float64, device=device)]
     
-    vp_true = [torch.tensor([0.8899428, 1.94041881, 3.06957226], dtype=torch.float64),
-               torch.tensor([-0.02001571, 0.8709169, 0.85112944], dtype=torch.float64),
-               torch.tensor([-1.17415616, 0.9567094, 0.280399], dtype=torch.float64),
-               torch.tensor([0.53160512, 0.2804836, 1.86652094], dtype=torch.float64),
-               torch.tensor([0.38322814, 0.27086569, 1.11482228], dtype=torch.float64),
-               torch.tensor([0, 0, 0], dtype=torch.float64)]
-    vd_true = [torch.tensor([-0., 2., 3.], dtype=torch.float64),
-               torch.tensor([-0., 1.04294573, 0.67905585], dtype=torch.float64),
-               torch.tensor([-0.68541419, 1.85424082, 0.01685653], dtype=torch.float64),
-               torch.tensor([-0.02277033, -0.12164823, 1.75085347], dtype=torch.float64),
-               torch.tensor([-0., 0.14814832, 1.04294573], dtype=torch.float64),
-               torch.tensor([-0., 0.12314491, -0.], dtype=torch.float64)]
+    vp_true = [torch.tensor([0.8899428, 1.94041881, 3.06957226], dtype=torch.float64, device=device),
+               torch.tensor([-0.02001571, 0.8709169, 0.85112944], dtype=torch.float64, device=device),
+               torch.tensor([-1.17415616, 0.9567094, 0.280399], dtype=torch.float64, device=device),
+               torch.tensor([0.53160512, 0.2804836, 1.86652094], dtype=torch.float64, device=device),
+               torch.tensor([0.38322814, 0.27086569, 1.11482228], dtype=torch.float64, device=device),
+               torch.tensor([0, 0, 0], dtype=torch.float64, device=device)]
+    vd_true = [torch.tensor([-0., 2., 3.], dtype=torch.float64, device=device),
+               torch.tensor([-0., 1.04294573, 0.67905585], dtype=torch.float64, device=device),
+               torch.tensor([-0.68541419, 1.85424082, 0.01685653], dtype=torch.float64, device=device),
+               torch.tensor([-0.02277033, -0.12164823, 1.75085347], dtype=torch.float64, device=device),
+               torch.tensor([-0., 0.14814832, 1.04294573], dtype=torch.float64, device=device),
+               torch.tensor([-0., 0.12314491, -0.], dtype=torch.float64, device=device)]
     
     for i in range(len(vs)):
         v = vs[i]
@@ -296,13 +315,14 @@ def test_proj_exp_scs():
     assert torch.allclose(pd, vd_true, atol=TOL)
 
 
-def test_proj_exp_diffcp():
+@pytest.mark.parametrize("device", devices)
+def test_proj_exp_diffcp(device):
     """port from diffcp.
     """
     np.random.seed(0)
     for _ in range(15):
         x = np.random.randn(9)
-        x_tch = utils.to_tensor(x, dtype=torch.float64)
+        x_tch = utils.to_tensor(x, dtype=torch.float64, device=device)
         var = cp.Variable(9)
         constr = [cp.constraints.ExpCone(var[0], var[1], var[2])]
         constr += [cp.constraints.ExpCone(var[3], var[4], var[5])]
@@ -312,7 +332,7 @@ def test_proj_exp_diffcp():
                           cp.norm(var[6:9] - x[6:9]))
         prob = cp.Problem(obj, constr)
         prob.solve(solver="SCS", eps=1e-12, max_iters=10_000)
-        var_star = utils.to_tensor(var.value, dtype=torch.float64)
+        var_star = utils.to_tensor(var.value, dtype=torch.float64, device=device)
         p = cone_lib.proj(x_tch, [(cone_lib.EXP, 3)], dual=False)
         assert torch.allclose(p, var_star, atol=1e-4, rtol=1e-7)
 
@@ -325,12 +345,13 @@ def test_proj_exp_diffcp():
                           cp.norm(var[6:9] + x[6:9]))
         prob = cp.Problem(obj, constr)
         prob.solve(solver="SCS", eps=1e-12)
-        var_star = utils.to_tensor(var.value, dtype=torch.float64)
+        var_star = utils.to_tensor(var.value, dtype=torch.float64, device=device)
         p_dual = cone_lib.proj(x_tch, [(cone_lib.EXP_DUAL, 3)], dual=False)
         assert torch.allclose(p_dual, x_tch + var_star, atol=1e-6)
 
 
-def test_projection():
+@pytest.mark.parametrize("device", devices)
+def test_projection(device):
     """Test projection onto cartesian product of atom cones.
     """
     np.random.seed(0)
@@ -352,7 +373,7 @@ def test_projection():
                  (cone_lib.PSD, psd_dim), (cone_lib.EXP_DUAL, exp_dim)]
         size = zero_dim + pos_dim + sum(soc_dim) + sum([cone_lib.symm_size_to_dim(d) for d in psd_dim])\
                 + 2*3*len(pow_alpha) + 2*3*exp_dim
-        x = torch.randn(size, generator=rng, dtype=torch.float64)
+        x = torch.randn(size, generator=rng, dtype=torch.float64, device=device)
         for dual in [False, True]:
             proj = cone_lib.proj(x, cones, dual=dual)
 
@@ -405,20 +426,21 @@ def _test_Dproj(cone: str,
                 tol: float = 1e-8
 ) -> None:
     """
-    Helper function to test Jacobian-vector products for cone projections.
+    Helper function to test Jacobian-vector products for cone projections via finite differences.
 
     Note the function itself will make `assert` statements; nothing is returned.
     """
-    if x is None:
-        x = torch.randn(n, generator=rgen, dtype=torch.float64)
-    dx = 1e-6 * torch.randn(n, generator=rgen, dtype=torch.float64)
+    for device in devices:
+        if x is None:
+            x = torch.randn(n, generator=rgen, dtype=torch.float64, device=device)
+        dx = 1e-6 * torch.randn(n, generator=rgen, dtype=torch.float64, device=device)
 
-    proj_x = cone_lib._proj(x, cone, dual=dual)
+        proj_x = cone_lib._proj(x, cone, dual=dual)
 
-    dproj_x = cone_lib._proj(x + dx, cone, dual=dual) - proj_x
-    Dproj = _dprojection(x, cone, dual=dual)
+        dproj_x = cone_lib._proj(x + dx, cone, dual=dual) - proj_x
+        Dproj = _dprojection(x, cone, dual=dual)
 
-    assert torch.allclose(Dproj @ dx, dproj_x, atol=tol)
+        assert torch.allclose(Dproj @ dx, dproj_x, atol=tol)
 
 
 def test_dproj_zero():
@@ -477,20 +499,21 @@ def test_dprojection():
         pos_dim = np.random.randint(1, 10)
         soc_dim = [np.random.randint(1, 10) for _ in range(
             np.random.randint(1, 10))]
-        # psd_dim = [np.random.randint(1, 10) for _ in range(
-        #     np.random.randint(1, 10))]
+        psd_dim = [np.random.randint(1, 10) for _ in range(
+            np.random.randint(1, 10))]
         cones = [(cone_lib.ZERO, zero_dim), (cone_lib.POS, pos_dim),
-                 (cone_lib.SOC, soc_dim)] # (cone_lib.PSD, psd_dim)
+                 (cone_lib.SOC, soc_dim), (cone_lib.PSD, psd_dim)]
 
-        size = zero_dim + pos_dim + sum(soc_dim)
-        # + sum([cone_lib.vec_psd_dim(d) for d in psd_dim])
+        size = zero_dim + pos_dim + sum(soc_dim)\
+                + sum([cone_lib.symm_size_to_dim(d) for d in psd_dim])
         
-        x = torch.randn(size, dtype=torch.float64)
+        for device in devices:
+            x = torch.randn(size, dtype=torch.float64, device=device)
 
-        for dual in [False, True]:
-            proj_x = cone_lib.proj(x, cones, dual=dual)
-            dx = 1e-6 * torch.randn(size, dtype=torch.float64)
-            dproj_x = cone_lib.proj(x + dx, cones, dual=dual) - proj_x
-            Dproj = dprojection(x, cones, dual)
-            
-            assert torch.allclose(Dproj @ dx, dproj_x, atol=1e-8)
+            for dual in [False, True]:
+                proj_x = cone_lib.proj(x, cones, dual=dual)
+                dx = 1e-6 * torch.randn(size, dtype=torch.float64, device=device)
+                dproj_x = cone_lib.proj(x + dx, cones, dual=dual) - proj_x
+                Dproj = dprojection(x, cones, dual)
+                
+                assert torch.allclose(Dproj @ dx, dproj_x, atol=1e-8)

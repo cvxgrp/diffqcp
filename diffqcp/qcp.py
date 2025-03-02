@@ -169,6 +169,7 @@ def compute_derivative(P: torch.Tensor | spmatrix,
 
     Dz_Q_Pi_z: lo.LinearOperator = Du_Q(Pi_z, P_linop, A, q, b)
     # TODO?: Need to cache the following (this is 2nd repeat, essentially)
+    # TODO: or rather, batch compute projection stuff
     D_Pi_Kstar_v: lo.LinearOperator = dprojection(v, cones, dual=True)
     M: lo.LinearOperator = form_M(u, v, w, Dz_Q_Pi_z, cones)
 

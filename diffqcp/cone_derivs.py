@@ -22,7 +22,6 @@ def _dprojection_psd(x: torch.Tensor) -> lo.LinearOperator:
     Notes
     -----
     - see BMB'18 for derivative and its derivation
-    - TODO: CURRENTLY IN DEBUG STATE
     - TODO: cache Q and lambd from projection
     - TODO: optimize computation for GPU
     """

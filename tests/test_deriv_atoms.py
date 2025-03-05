@@ -27,7 +27,10 @@ from diffqcp.utils import Q
 
 devices = [torch.device('cpu')]
 if torch.cuda.is_available():
+    print("CUDA is available; adding a cuda device to the tests.")
     devices += [torch.device('cuda')]
+else:
+    print("CUDA is not available; testing solely on CPU.")
 
 @pytest.mark.parametrize("device", devices)
 def test_dData_Q_is_approximation(device):

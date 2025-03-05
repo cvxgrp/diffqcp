@@ -36,6 +36,7 @@ def _test_DS(prob: cp.Problem,
     P_upper, A = prob_data[0], prob_data[1]
     q, b = prob_data[2], prob_data[3]
     cone_dict, soln, clarabel_cones = prob_data[4], prob_data[5], prob_data[6]
+    # x, y, s, derivative, adjoint_derivative = diffcp.solve_and_derivative(A, b, q, cone_dict)
     
     for device in devices:
         DS = compute_derivative(P_upper, A, q, b, cone_dict,
@@ -65,6 +66,14 @@ def _test_DS(prob: cp.Problem,
         print(f"delta_y: {delta_y} \n dy: {dy} \n === ===")
         print(f"delta_s: {delta_s} \n ds: {ds} \n === ===")
 
+        # dx2, dy2, ds2 = derivative(dA, db, dq)
+        # print("dx2: ", dx2)
+        # print("dy2: ", dy2)
+        # print("ds2: ", ds2)
+        # dx2 = utils.to_tensor(dx2, dtype=torch.float64)
+        # dy2 = utils.to_tensor(dy2, dtype=torch.float64)
+        # ds2 = utils.to_tensor(ds2, dtype=torch.float64)
+        
         assert torch.allclose(delta_x, dx, atol=tol)
         assert torch.allclose(delta_y, dy, atol=tol)
         assert torch.allclose(delta_s, ds, atol=tol)

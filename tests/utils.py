@@ -209,12 +209,6 @@ def get_zeros_like(A: csr_matrix | torch.Tensor
     return csr_matrix((data, nonzeros), shape=A.shape)
 
 
-def get_torch_zeros_like(A: torch.Tensor) -> torch.Tensor:
-    r"""
-    Not a performant function. Only use during testing.
-    """
-    A_dense = A.to_dense()
-
 def data_and_soln_from_cvxpy_problem(problem: cp.Problem,
                                      cone_type: str = 'scs'
 ) -> Tuple[csc_matrix,
@@ -303,12 +297,15 @@ def dottest(Op: lo.LinearOperator,
 
     Notes
     -----
+    The test is performed on whatever device the LinearOperator requires its vectors to be on.
+
     See https://pylops.readthedocs.io/en/stable/adding.html#addingoperator
     for the mathematical basis of this test, and
     https://github.com/PyLops/pylops/blob/6c92032519eb778e5f801abc88e8b0cbdafff8aa/pylops/utils/dottest.py#L10
     for the code which this implementation is based on.
     """
-    rng = torch.Generator().manual_seed(0)
+    device = Op.device
+    rng = torch.Generator(device).manual_seed(0)
 
     is_linop = True
 
@@ -316,10 +313,10 @@ def dottest(Op: lo.LinearOperator,
 
         n, m = Op.shape[0], Op.shape[1]
 
-        u = torch.randn(n, generator=rng, dtype=dtype)
-        v = torch.randn(m, generator=rng, dtype=dtype)
+        u = torch.randn(n, generator=rng, dtype=dtype, device=device)
+        v = torch.randn(m, generator=rng, dtype=dtype, device=device)
 
-        is_linop = math.isclose( (Op @ u) @ v, u @ (Op.T @ v), rel_tol=rtol, abs_tol=atol)
+        is_linop = math.isclose( ((Op @ u) @ v).item(), (u @ (Op.T @ v)).item(), rel_tol=rtol, abs_tol=atol)
 
         if not is_linop:
             return False

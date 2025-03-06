@@ -16,7 +16,7 @@ import pytest
 
 import diffqcp.qcp as cone_prog
 from diffqcp.utils import to_tensor
-from tests.utils import data_and_soln_from_cvxpy_problem, get_zeros_like, get_random_like
+from tests.utils import data_and_soln_from_cvxpy_problem, get_zeros_like
 
 devices = [torch.device('cpu')]
 if torch.cuda.is_available():
@@ -53,7 +53,7 @@ def test_least_squares_small(device):
     """
 
     np.random.seed(0)
-    rng = torch.Generator().manual_seed(0)
+    rng = torch.Generator(device=device).manual_seed(0)
 
     for _ in range(10):
         n = np.random.randint(low=10, high=15)
@@ -97,7 +97,7 @@ def test_least_squares_larger(device):
     """
 
     np.random.seed(0)
-    rng = torch.Generator().manual_seed(0)
+    rng = torch.Generator(device=device).manual_seed(0)
 
     for _ in range(10):
         n = np.random.randint(low=100, high=150)
@@ -157,7 +157,7 @@ def test_least_squares_soln_of_eqns_small(device):
     """
 
     np.random.seed(0)
-    rng = torch.Generator().manual_seed(0)
+    rng = torch.Generator(device=device).manual_seed(0)
 
     for _ in range(10):
         m = np.random.randint(low=10, high=15)
@@ -168,7 +168,8 @@ def test_least_squares_soln_of_eqns_small(device):
         while np.linalg.matrix_rank(A) < m and count < 100:
             A = np.random.randn(m, n)
             count += 1
-        if count == 100 : assert True == False
+        if count == 100:
+            assert False
         b = np.random.randn(m)
 
         x = cp.Variable(n)
@@ -200,7 +201,7 @@ def test_least_squares_soln_of_eqns_larger(device):
     """
 
     np.random.seed(0)
-    rng = torch.Generator().manual_seed(0)
+    rng = torch.Generator(device=device).manual_seed(0)
 
     for _ in range(10):
         m = np.random.randint(low=100, high=150)
@@ -211,7 +212,8 @@ def test_least_squares_soln_of_eqns_larger(device):
         while np.linalg.matrix_rank(A) < m and count < 100:
             A = np.random.randn(m, n)
             count += 1
-        if count == 100 : assert True == False
+        if count == 100:
+            assert False
         b = np.random.randn(m)
 
         x = cp.Variable(n)
@@ -241,7 +243,6 @@ def test_least_squares_soln_of_eqns_larger(device):
 @pytest.mark.parametrize("device", devices)
 def test_constrained_least_squares(device):
     np.random.seed(0)
-    rng = torch.Generator().manual_seed(0)
     EPS = 1e-6
 
     num_optimal = 0
@@ -306,8 +307,8 @@ def test_constrained_least_squares(device):
         
         dx_b_analytic = dx_b_analytical(db)
         
-        print("dx: ", dx[m:])
-        print("analytical: ", dx_b_analytic)
+        print("dx: ", dx[m:].to(device=None))
+        print("analytical: ", dx_b_analytic.to(device=None))
         print("NUM OPTIMAL:", num_optimal)
         assert torch.allclose(dx_b_analytic, dx[m:], atol=1e-8)
 

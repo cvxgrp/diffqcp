@@ -7,11 +7,10 @@ import numpy as np
 from scipy.sparse import spmatrix
 import torch
 import linops as lo
-# from linops.lsqr import lsqr # TODO: re-add once fixes are released
+from linops.lsqr import lsqr
 import clarabel
 
 from diffqcp.linops import SymmetricOperator
-from diffqcp.lsqr import lsqr
 import diffqcp.cones as cone_utils
 from diffqcp.cone_derivs import dprojection
 from diffqcp.qcp_derivs import Du_Q, form_M, dData_Q

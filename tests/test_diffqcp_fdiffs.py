@@ -14,7 +14,7 @@ import torch
 import cvxpy as cp
 import clarabel
 
-from tests.utils import data_and_soln_from_cvxpy_problem, get_random_like, get_zeros_like
+from tests.utils import data_and_soln_from_cvxpy_problem, get_random_like
 from diffqcp import compute_derivative
 from diffqcp import utils
 
@@ -62,9 +62,9 @@ def _test_DS(prob: cp.Problem,
 
         dx, dy, ds = DS(dP_upper, dA, dq, db)
 
-        print(f"delta_x: {delta_x} \n dx: {dx} \n === ===")
-        print(f"delta_y: {delta_y} \n dy: {dy} \n === ===")
-        print(f"delta_s: {delta_s} \n ds: {ds} \n === ===")
+        print(f"delta_x: {delta_x.to(device=None)} \n dx: {dx} \n === ===")
+        print(f"delta_y: {delta_y.to(device=None)} \n dy: {dy} \n === ===")
+        print(f"delta_s: {delta_s.to(device=None)} \n ds: {ds} \n === ===")
 
         # dx2, dy2, ds2 = derivative(dA, db, dq)
         # print("dx2: ", dx2)

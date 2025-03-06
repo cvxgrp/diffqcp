@@ -14,14 +14,11 @@ at the nonlinear transform Q).
 
 import numpy as np
 import scipy.sparse as sparse
-from scipy.sparse import csr_matrix
 import torch
-import linops as lo
-from linops.lsqr import lsqr as lsqr2
+from linops.lsqr import lsqr
 import pytest
 
 from diffqcp.qcp_derivs import Du_Q, dData_Q
-from diffqcp.lsqr import lsqr
 import tests.utils as utils
 from diffqcp.utils import Q
 
@@ -31,6 +28,7 @@ if torch.cuda.is_available():
     devices += [torch.device('cuda')]
 else:
     print("CUDA is not available; testing solely on CPU.")
+
 
 @pytest.mark.parametrize("device", devices)
 def test_dData_Q_is_approximation(device):
@@ -48,7 +46,7 @@ def test_dData_Q_is_approximation(device):
     Can also test with P in S^n (symmetric, but not PSD).
     """
     np.random.seed(0)
-    rng = torch.Generator().manual_seed(0)
+    rng = torch.Generator(device=device).manual_seed(0)
 
     for i in range(10):
         m = np.random.randint(low=10, high=20)
@@ -80,7 +78,8 @@ def test_dData_Q_is_approximation(device):
         assert torch.allclose(dQ, dData_Q(u, dP_op, dA, dq, db))
 
 
-def test_Du_Q_is_approximation():
+@pytest.mark.parametrize("device", devices)
+def test_Du_Q_is_approximation(device):
     """Test implementation of DQ(u) w.r.t. u.
 
     Taking u in R^N and a small perturbation du in R^N, test if
@@ -94,7 +93,7 @@ def test_Du_Q_is_approximation():
     When attempted with atol=1e-6, test fails.
     """
     np.random.seed(0)
-    rng = torch.Generator().manual_seed(0)
+    rng = torch.Generator(device=device).manual_seed(0)
 
     for _ in range(10):
         n = np.random.randint(low=10, high=20)
@@ -164,7 +163,8 @@ def test_Du_Q_is_approximation():
 #         assert torch.allclose(du, deriv_op.T @ dQ, atol=1e-6)
 
 
-def test_Du_Q_is_linop():
+@pytest.mark.parametrize("device", devices)
+def test_Du_Q_is_linop(device):
     """Test if Du_Q is a linear operator.
 
     Another way of testing if Du_Q_T is implemented correctly.
@@ -179,7 +179,7 @@ def test_Du_Q_is_linop():
     https://pylops.readthedocs.io/en/stable/adding.html#addingoperator
     """
     np.random.seed(0)
-    rng = torch.Generator().manual_seed(0)
+    rng = torch.Generator(device=device).manual_seed(0)
 
     for i in range(10):
         m = np.random.randint(low=10, high=20)
@@ -190,9 +190,10 @@ def test_Du_Q_is_linop():
                                                                    m,
                                                                    sparse.random,
                                                                    np.random.randn,
-                                                                   dtype=torch.float64)
-        u = torch.randn(N, generator=rng,dtype=torch.float64)
-        u[-1] = torch.tensor(1, dtype=torch.float64) # always the case when differentiating at soln.
+                                                                   dtype=torch.float64,
+                                                                   device=device)
+        u = torch.randn(N, generator=rng, dtype=torch.float64, device=device)
+        u[-1] = torch.tensor(1, dtype=torch.float64, device=device) # always the case when differentiating at soln.
 
         deriv_op = Du_Q(u, P_op, A, q, b)
 
@@ -200,14 +201,14 @@ def test_Du_Q_is_linop():
         assert utils.dottest(deriv_op)
 
 
-def test_Du_Q_lsqr():
+@pytest.mark.parametrize("device", devices)
+def test_Du_Q_lsqr(device):
     """Test lsqr performance for Du_Q.
 
-    For some u
-
+    Test fails, but close enough for our purposes (hopefully). TODO: re-evaluate later.
     """
     np.random.seed(0)
-    rng = torch.Generator().manual_seed(0)
+    rng = torch.Generator(device=device).manual_seed(0)
 
     for i in range(10):
         m = np.random.randint(low=10, high=20)
@@ -218,50 +219,17 @@ def test_Du_Q_lsqr():
                                                                    m,
                                                                    sparse.random,
                                                                    np.random.randn,
-                                                                   dtype=torch.float64)
-        u = torch.randn(N, generator=rng, dtype=torch.float64)
-        u[-1] = torch.tensor(1.0, dtype=torch.float64) # always the case when differentiating at soln.
+                                                                   dtype=torch.float64,
+                                                                   device=device)
+        u = torch.randn(N, generator=rng, dtype=torch.float64, device=device)
+        u[-1] = torch.tensor(1.0, dtype=torch.float64, device=device) # always the case when differentiating at soln.
 
         deriv_op = Du_Q(u, P_op, A, q, b)
 
-        x = 1e-6*torch.randn(N, generator=rng, dtype=torch.float64)
+        x = 1e-6*torch.randn(N, generator=rng, dtype=torch.float64, device=device)
         xlsqr = lsqr(deriv_op, deriv_op @ x)
 
-        print("x: ", x)
-        print("xlsqr: ", xlsqr)
+        print("x: ", x.to(device=None))
+        print("xlsqr: ", xlsqr.to(device=None))
 
-        # np.testing.assert_allclose(x, xlsqr, atol=1e-4)
-        assert torch.allclose(x, xlsqr, atol=1e-8)
-
-def test_Du_Q_lsqr2():
-    """Test lsqr performance for Du_Q.
-
-    For some u
-
-    """
-    np.random.seed(0)
-    rng = torch.Generator().manual_seed(0)
-
-    for i in range(10):
-        m = np.random.randint(low=10, high=20)
-        n = m + np.random.randint(low=5, high=15)
-        N = n + m + 1
-
-        P_upper, P_op, A, q, b = utils.generate_torch_problem_data(n,
-                                                                   m,
-                                                                   sparse.random,
-                                                                   np.random.randn,
-                                                                   dtype=torch.float64)
-        u = torch.randn(N, generator=rng, dtype=torch.float64)
-        u[-1] = torch.tensor(1.0, dtype=torch.float64) # always the case when differentiating at soln.
-
-        deriv_op = Du_Q(u, P_op, A, q, b)
-
-        x = 1e-6*torch.randn(N, generator=rng, dtype=torch.float64)
-        xlsqr = lsqr2(deriv_op, deriv_op @ x)
-
-        print("x: ", x)
-        print("xlsqr: ", xlsqr)
-
-        # np.testing.assert_allclose(x, xlsqr, atol=1e-4)
         assert torch.allclose(x, xlsqr, atol=1e-8)

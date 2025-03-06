@@ -48,7 +48,7 @@ def test_unvec_symm(device):
 
 @pytest.mark.parametrize("device", devices)
 def test_vec_symm(device):
-    rng = torch.Generator().manual_seed(0)
+    rng = torch.Generator(device=device).manual_seed(0)
     n = 5
     x = torch.randn(cone_lib.symm_size_to_dim(n), generator=rng, dtype=torch.float64, device=device)
     assert torch.allclose(cone_lib.vec_symm(cone_lib.unvec_symm(x, n)), x)
@@ -83,7 +83,7 @@ def test_in_exp_dual(device):
 def test_proj_zero(device):
     """Test projection onto zero cone and its dual (the free cone).
     """
-    rng = torch.Generator().manual_seed(0)
+    rng = torch.Generator(device=device).manual_seed(0)
     n = 100
     for _ in range(10):
         x = torch.randn(n, generator=rng, dtype=torch.float64, device=device)
@@ -96,7 +96,7 @@ def test_proj_zero(device):
 def test_proj_pos(device):
     """Test projection onto nonnegative cone, which is self-dual.
     """
-    rng = torch.Generator().manual_seed(0)
+    rng = torch.Generator(device=device).manual_seed(0)
     n = 100
     for _ in range(15):
         x = torch.randn(n, generator=rng, dtype=torch.float64, device=device)
@@ -173,7 +173,6 @@ def test_proj_pow_diffcpish(device):
     """Modified from the exp cone test in diffcp.
     """
     np.random.seed(0)
-    n = 3
     alphas1 = np.random.uniform(low=0, high=1, size=15)
     alphas2 = np.random.uniform(low=0, high=1, size=15)
     alphas3 = np.random.uniform(low=0, high=1, size=15)
@@ -355,7 +354,7 @@ def test_projection(device):
     """Test projection onto cartesian product of atom cones.
     """
     np.random.seed(0)
-    rng = torch.Generator().manual_seed(0)
+    rng = torch.Generator(device=device).manual_seed(0)
 
     for _ in range(10):
         zero_dim = np.random.randint(1, 10)
@@ -421,6 +420,7 @@ def test_projection(device):
 def _test_Dproj(cone: str,
                 n: int,
                 rgen: torch.Generator,
+                device: torch.device,
                 x: torch.Tensor = None,
                 dual: bool = False,
                 tol: float = 1e-8
@@ -430,68 +430,71 @@ def _test_Dproj(cone: str,
 
     Note the function itself will make `assert` statements; nothing is returned.
     """
-    for device in devices:
-        if x is None:
-            x = torch.randn(n, generator=rgen, dtype=torch.float64, device=device)
-        dx = 1e-6 * torch.randn(n, generator=rgen, dtype=torch.float64, device=device)
+    if x is None:
+        x = torch.randn(n, generator=rgen, dtype=torch.float64, device=device)
+    dx = 1e-6 * torch.randn(n, generator=rgen, dtype=torch.float64, device=device)
 
-        proj_x = cone_lib._proj(x, cone, dual=dual)
+    proj_x = cone_lib._proj(x, cone, dual=dual)
 
-        dproj_x = cone_lib._proj(x + dx, cone, dual=dual) - proj_x
-        Dproj = _dprojection(x, cone, dual=dual)
+    dproj_x = cone_lib._proj(x + dx, cone, dual=dual) - proj_x
+    Dproj = _dprojection(x, cone, dual=dual)
 
-        assert torch.allclose(Dproj @ dx, dproj_x, atol=tol)
+    assert torch.allclose(Dproj @ dx, dproj_x, atol=tol)
 
 
-def test_dproj_zero():
+@pytest.mark.parametrize("device", devices)
+def test_dproj_zero(device):
     """JVPs for Dproj onto zero and free cones.
     """
     np.random.seed(0)
-    rng = torch.Generator().manual_seed(0)
+    rng = torch.Generator(device=device).manual_seed(0)
     for _ in range(10):
         dim = np.random.randint(25, 75)
-        _test_Dproj(cone_lib.ZERO, dim, rng, dual=True)
-        _test_Dproj(cone_lib.ZERO, dim, rng, dual=False)
+        _test_Dproj(cone_lib.ZERO, dim, rng, device=device, dual=True)
+        _test_Dproj(cone_lib.ZERO, dim, rng, device=device, dual=False)
 
 
-def test_dproj_pos():
+@pytest.mark.parametrize("device", devices)
+def test_dproj_pos(device):
     """JVPs for Dproj onto nonnegative cone.
     """
     np.random.seed(0)
-    rng = torch.Generator().manual_seed(0)
+    rng = torch.Generator(device=device).manual_seed(0)
     for _ in range(10):
         dim = np.random.randint(25, 75)
-        _test_Dproj(cone_lib.POS, dim, rng, dual=True)
-        _test_Dproj(cone_lib.POS, dim, rng, dual=False)
+        _test_Dproj(cone_lib.POS, dim, rng, device=device, dual=True)
+        _test_Dproj(cone_lib.POS, dim, rng, device=device, dual=False)
 
 
-def test_dproj_soc():
+@pytest.mark.parametrize("device", devices)
+def test_dproj_soc(device):
     """JVPs for Dproj onto the SOC.
     """
     np.random.seed(0)
-    rng = torch.Generator().manual_seed(0)
+    rng = torch.Generator(device=device).manual_seed(0)
     for _ in range(10):
         dim = np.random.randint(25, 75)
-        _test_Dproj(cone_lib.SOC, dim, rng, dual=True)
-        _test_Dproj(cone_lib.SOC, dim, rng, dual=False)
+        _test_Dproj(cone_lib.SOC, dim, rng, device=device, dual=True)
+        _test_Dproj(cone_lib.SOC, dim, rng, device=device, dual=False)
 
 
-def test_dproj_psd():
+@pytest.mark.parametrize("device", devices)
+def test_dproj_psd(device):
     """JVPs for Dproj onto the PSD cone.
-
-    TODO: not passing
     """
     np.random.seed(0)
-    rng = torch.Generator().manual_seed(0)
+    rng = torch.Generator(device=device).manual_seed(0)
     for _ in range(10):
         size = np.random.randint(5, 15)
         dim = cone_lib.symm_size_to_dim(size)
-        _test_Dproj(cone_lib.PSD, dim, rng, dual=True)
-        _test_Dproj(cone_lib.PSD, dim, rng, dual=False)
+        _test_Dproj(cone_lib.PSD, dim, rng, device=device, dual=True)
+        _test_Dproj(cone_lib.PSD, dim, rng, device=device, dual=False)
 
 
 def test_dprojection():
     """Test projection onto cartesian product of cones.
+
+    TODO: add JVPs for POW and EXP cones once supported.
     """
     np.random.seed(0)
     for _ in range(10):

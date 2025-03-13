@@ -191,7 +191,7 @@ def get_random_like(A: csr_matrix | torch.Tensor,
     with a prescribed length.
     """
     if isinstance(A, torch.Tensor):
-        A = csr_matrix(A.to_dense())
+        A = csr_matrix(A.to_dense().cpu().numpy())
 
     rows, cols = A.nonzero()
     values = randomness(A.nnz)
@@ -202,7 +202,7 @@ def get_zeros_like(A: csr_matrix | torch.Tensor
 ) -> csr_matrix:
 
     if isinstance(A, torch.Tensor):
-        A = csr_matrix(A.to_dense())
+        A = csr_matrix(A.to_dense().to_cpu().numpy())
 
     nonzeros = A.nonzero()
     data = np.zeros(A.size)

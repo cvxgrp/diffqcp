@@ -191,7 +191,7 @@ def dprojection(x: torch.Tensor,
             ops.append(_dprojection(x[offset:offset + cone_dim], cone, dual=dual))
             offset += cone_dim
 
-    return BlockDiag(ops)
+    return BlockDiag(ops, device=x.device)
 
 
 def dpi(u: torch.Tensor,
@@ -230,4 +230,4 @@ def dpi(u: torch.Tensor,
            dprojection(v, cones, dual=True),
            ScalarOperator(scale_val)]
 
-    return BlockDiag(ops)
+    return BlockDiag(ops, device=w.device)

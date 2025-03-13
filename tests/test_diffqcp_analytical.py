@@ -184,9 +184,10 @@ def test_least_squares_soln_of_eqns_small(device):
         dP = get_zeros_like(P_can)
         dA = get_zeros_like(A_can)
         db = 1e-2 * torch.randn(b_can.size, generator=rng, dtype=torch.float64, device=device)
-
+        db_np = db.cpu().numpy()
+        
         AT = A.T
-        Dxb_db = to_tensor(AT @ la.solve(A @ AT, db), dtype=torch.float64, device=device)
+        Dxb_db = to_tensor(AT @ la.solve(A @ AT, db_np), dtype=torch.float64, device=device)
 
         DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
         dx, dy, ds = DS(dP, dA, np.zeros(q_can.size), db) # leave zero creation with numpy to see if gpu conversion worked
@@ -228,9 +229,10 @@ def test_least_squares_soln_of_eqns_larger(device):
         dP = get_zeros_like(P_can)
         dA = get_zeros_like(A_can)
         db = 1e-2 * torch.randn(b_can.size, generator=rng, dtype=torch.float64, device=device)
+        db_np = db.cpu().numpy()
 
         AT = A.T
-        Dxb_db = to_tensor(AT @ la.solve(A @ AT, db), dtype=torch.float64, device=device)
+        Dxb_db = to_tensor(AT @ la.solve(A @ AT, db_np), dtype=torch.float64, device=device)
 
         DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
         dx, dy, ds = DS(dP, dA, np.zeros(q_can.size), db)

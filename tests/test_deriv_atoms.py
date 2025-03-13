@@ -69,8 +69,8 @@ def test_dData_Q_is_approximation(device):
 
         dP_upper = utils.get_random_like(P_upper, lambda n: np.random.normal(0, 1e-6, size=n))
         dA = utils.get_random_like(A, lambda n: np.random.normal(0, 1e-6, size=n))
-        dq = torch.randn(q.shape[0], generator=rng)
-        db = torch.randn(b.shape[0], generator=rng)
+        dq = torch.randn(q.shape[0], generator=rng, device=device)
+        db = torch.randn(b.shape[0], generator=rng, device=device)
         dP_op, dA, dq, db = utils.convert_prob_data_to_torch(dP_upper, dA, dq, db, dtype=torch.float64, device=device)
 
         dQ = Q(P_op + dP_op, A + dA, q + dq, b + db, x, y, tau) - z
@@ -104,16 +104,17 @@ def test_Du_Q_is_approximation(device):
                                                                    m,
                                                                    sparse.random,
                                                                    np.random.randn,
-                                                                   dtype=torch.float64)
+                                                                   dtype=torch.float64,
+                                                                   device=device)
 
-        u = torch.randn(N, generator=rng, dtype=torch.float64)
-        u[-1] = torch.tensor(1, dtype=torch.float64) # always the case when differentiating at soln.
+        u = torch.randn(N, generator=rng, dtype=torch.float64, device=device)
+        u[-1] = torch.tensor(1, dtype=torch.float64, device=device) # always the case when differentiating at soln.
 
         x, y, tau = u[:n], u[n: -1], u[-1]
         tau = tau.unsqueeze(0)
         z = Q(P_op, A, q, b, x, y, tau)
 
-        du = 1e-5*torch.randn(N, generator=rng, dtype=torch.float64)
+        du = 1e-5*torch.randn(N, generator=rng, dtype=torch.float64, device=device)
         dx, dy, dtau = du[:n], du[n: -1], du[-1]
         dtau = dtau.unsqueeze(0)
         dQ = Q(P_op, A, q, b, x + dx, y + dy, tau + dtau) - z

@@ -117,7 +117,8 @@ class BlockDiag(lo.LinearOperator):
     """
     def __init__(self,
                  ops: Sequence[lo.LinearOperator],
-                 adjoint: lo.LinearOperator | None = None
+                 adjoint: lo.LinearOperator | None = None,
+                 device: torch.device | None = None
     ) -> None:
         """Initialize the BlockDiag object.
 
@@ -130,19 +131,16 @@ class BlockDiag(lo.LinearOperator):
             There's no reason to provide this; it exists
             as a parameter purely so the `BlockDiag` object
             being created can create its own adjoint.
-
-        Notes
-        -----
-        The device the operator requires tensors to be on is whatever device the first
-        operator in `ops` requires tensors to be on. If any of the operators have a different
-        device requirement there will be a runtime error.
+        device : torch.device, optional
+            The device that this operator expects tensors to be on.
         """
         self._ops = ops
         m = 0
         n = 0
         self.supports_operator_matrix = True
-        self.device = ops[0].device
-        print("BLOCK DIAG DEVICE")
+        self.device = device
+        # print("fist op type", type(ops[0]))
+        # print("BLOCK DIAG DEVICE", self.device) # DEBUG
 
         for op in ops:
             assert isinstance(op, lo.LinearOperator)
@@ -155,7 +153,7 @@ class BlockDiag(lo.LinearOperator):
 
         self._shape = (m, n)
         if adjoint is None:
-            self._adjoint = BlockDiag([op.T for op in ops], self)
+            self._adjoint = BlockDiag([op.T for op in ops], self, device=device)
         else:
             self._adjoint = adjoint
 

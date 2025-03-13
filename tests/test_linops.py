@@ -100,7 +100,7 @@ def test_block_diag_operator(device):
         op1: lo.LinearOperator = lo.DiagonalOperator(x)
         op2 : lo.LinearOperator = lo.MatrixOperator(A)
         op3 : lo.LinearOperator = ScalarOperator(torch.tensor(2, device=device))
-        block_op = BlockDiag([op1, op2, op3])
+        block_op = BlockDiag([op1, op2, op3], device=device)
 
         v = torch.randn(N, generator=rng, device=device)
         x, y, tau = v[0:n], v[n:2*n], v[-1]

@@ -72,7 +72,7 @@ def Du_Q(u: torch.Tensor,
 
         return out
 
-    return _sLinearOperator(N, N, mv, rv)
+    return _sLinearOperator(N, N, mv, rv, device=A.device)
 
 
 def dData_Q(u: torch.Tensor,

@@ -142,6 +142,7 @@ class BlockDiag(lo.LinearOperator):
         n = 0
         self.supports_operator_matrix = True
         self.device = ops[0].device
+        print("BLOCK DIAG DEVICE")
 
         for op in ops:
             assert isinstance(op, lo.LinearOperator)

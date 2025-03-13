@@ -88,7 +88,7 @@ def test_proj_zero(device):
     for _ in range(10):
         x = torch.randn(n, generator=rng, dtype=torch.float64, device=device)
         assert torch.allclose(x, cone_lib._proj(x, cone_lib.ZERO, dual=True))
-        assert torch.allclose(torch.zeros(n, dtype=torch.float64),
+        assert torch.allclose(torch.zeros(n, dtype=torch.float64, device=device),
                               cone_lib._proj(x, cone_lib.ZERO, dual=False))
         
 

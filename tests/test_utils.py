@@ -50,8 +50,8 @@ def test_to_sparse_csc_tensor(device):
     assert P.dtype == np.dtype("float64")
     assert A.dtype == np.dtype("float64")
 
-    P_tch = utils.to_sparse_csc_tensor(P)
-    A_tch = utils.to_sparse_csc_tensor(A)
+    P_tch = utils.to_sparse_csc_tensor(P, device=device)
+    A_tch = utils.to_sparse_csc_tensor(A, device=device)
 
     assert P_tch.dtype == torch.float32
     assert A_tch.dtype == torch.float32

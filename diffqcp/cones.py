@@ -5,9 +5,11 @@ The derivative of these projections and the exponential cone projection are in s
 import math
 
 import torch
+import linops as lo
 
 from diffqcp.pow_cone import proj_power_cone
 from diffqcp.exp_cone import proj_exp_cone
+from diffqcp.linops import SymmetricOperator, BlockDiag
 
 # TODO: need to check for alternative to distutils, which was deprecated starting in Python 3.12
 
@@ -163,6 +165,199 @@ def unvec_symm(x: torch.Tensor,
     X[diag_indices, diag_indices] /= sqrt2
     return X
 
+
+def _proj_psd_dproj_psd(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperator]:
+    """Self-dual."""
+    assert len(x.shape) == 1, "PSD projection: x must be vectorized."
+
+    dim = x.shape[0]
+    size = symm_dim_to_size(dim)
+    X = unvec_symm(x, size)
+    lambd, Q = torch.linalg.eigh(X)
+    zero = torch.tensor(0, dtype=x.dtype, device=x.device)
+
+    if lambd[0] >= zero:
+        return (x, lo.IdentityOperator(dim))
+    
+    lambd_pos = torch.clamp(lambd, min=zero)
+    proj_X = Q @ (lambd_pos.unsqueeze(-1) * Q.T)
+    proj_x = vec_symm(proj_X)
+
+    k = -1
+    i = 0
+    while i < lambd.shape[0]:
+        if lambd[i] < 0:
+            k += 1
+        else:
+            break
+        i += 1
+
+    def mv(dx: torch.Tensor) -> torch.Tensor:
+        Q_T_DX_Q = Q.T @ unvec_symm(dx) @ Q
+
+        # Hadamard product w/o forming B matrix
+        # So Q_T_DX_Q becomes (B hadamard Q_T_DX_Q) after double for loop.
+        for i in range(Q_T_DX_Q.shape[0]):
+            for j in range(Q_T_DX_Q.shape[1]):
+                if i <= k and j <= k:
+                    Q_T_DX_Q[i, j] = 0
+                elif i > k and j <= k:
+                    lambda_i_pos = torch.maximum(lambd[i], zero)
+                    lambda_j_neg = -torch.minimum(lambd[j], zero)
+                    Q_T_DX_Q[i, j] *= lambda_i_pos / (lambda_j_neg + lambda_i_pos)
+                elif i <= k and j > k:
+                    lambda_i_neg = -torch.minimum(lambd[i], zero)
+                    lambd_j_pos = torch.maximum(lambd[j], zero)
+                    Q_T_DX_Q[i, j] *= lambd_j_pos / (lambda_i_neg + lambd_j_pos)
+
+        DPiX_DX = Q @ Q_T_DX_Q @ Q.T
+        return vec_symm(DPiX_DX)
+    
+    return (proj_x, SymmetricOperator(dim, mv, device=x.device))
+
+
+def _proj_soc_dproj_soc(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperator]:
+    """Self-dual."""
+    n = x.shape[0]
+    t, z = x[0], x[1:]
+    norm_z = torch.norm(z)
+    if norm_z <= t or torch.isclose(norm_z, t, atol=1e-8):
+        return (x, lo.IdentityOperator(n))
+    elif norm_z <= -t:
+        return (torch.zeros(x.shape[0], dtype=x.dtype, device=x.device),
+                lo.ZeroOperator((n, n)))
+    else:
+        proj_x = 0.5 * (1 + t / norm_z) * torch.cat((norm_z.unsqueeze(0), z))
+        unit_z = z / norm_z
+
+        def mv(dx: torch.Tensor) -> torch.Tensor:
+            dt, dz = dx[0], dx[1:dx.shape[0]]
+            first_entry = dt*norm_z + z @ dz
+            second_chunk = dt*z + (t + norm_z)*dz \
+                            - t * unit_z * (unit_z @ dz)
+            output = torch.empty_like(dx)
+            output[0] = first_entry
+            output[1:] = second_chunk
+            return (1.0 / (2.0 * norm_z)) * output
+        
+        return (proj_x, SymmetricOperator(x.shape[0], mv, device=x.device))
+
+
+def _proj_pos_dproj_pos(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperator]:
+    """Self-dual."""
+    proj_x = torch.maximum(x, torch.tensor(0, dtype=x.dtype, device=x.device))
+    Dproj_x = lo.DiagonalOperator(0.5 * (torch.sign(x).to(dtype=x.dtype, device=x.device) + 1.0))
+    return (proj_x, Dproj_x)
+
+
+def _proj_zero_dproj_zero(x: torch.Tensor,
+                          dual: bool
+) -> tuple[torch.Tensor, lo.LinearOperator]:
+    n = x.shape[0]
+    if dual:
+        return (x, lo.IdentityOperator(n))
+    else:
+        return (torch.zeros(x.shape[0], dtype=x.dtype, device=x.device),
+                lo.ZeroOperator(n, n))
+
+
+def _proj_and_dproj(x: torch.Tensor,
+                    cone: str,
+                    dual: bool=False
+) -> tuple[torch.Tensor, lo.LinearOperator]:
+    if cone == EXP_DUAL:
+        cone = EXP
+        dual = not dual
+
+    if cone == ZERO:
+        return _proj_zero_dproj_zero(x, dual)
+    elif cone == POS:
+        return _proj_pos_dproj_pos(x)
+    elif cone == SOC:
+        return _proj_soc_dproj_soc(x)
+    elif cone == PSD:
+        return _proj_psd_dproj_psd(x)
+    else:
+        raise NotImplementedError("%s not implemented" % cone)
+
+
+def proj_and_dproj(x: torch.Tensor,
+                   cones: list[tuple[str, int | list[int]]],
+                   dual: bool=False
+) -> tuple[torch.Tensor, lo.LinearOperator]:
+    """Returns the projection of x onto a convex cone (or its dual) and the derivative of the projection.
+    
+    Parameters
+    ----------
+    x : torch.Tensor
+        The tensor to project and evaluate the derivative of the projection at.
+    cones : list[tuple[str, int | list[int]]]
+        A list of cones in the format specified in the docstrings of `proj`
+        in `cones.py`, whose cartesian product is the cone this function
+        returns the derivative of the projection onto at x.
+    dual : bool, optional
+        Whether the projection of x is onto the cone or dual cone.
+        Default is True <=> project x onto the cone.
+
+    Returns
+    -------
+    torch.Tensor
+        x projected onto cones.
+    lo.LinearOperator
+        The derivative of the projection onto a convex cone (or its dual) at x.
+    """
+    projection = torch.empty(x.shape[0], dtype=x.dtype, device=x.device)
+    ops = []
+    offset = torch.tensor(0, dtype=torch.int32, device=x.device)
+    for cone, sz in cones:
+        assert cone in CONES, f"{cone} is not a known cone."
+        sz = sz if isinstance(sz, (tuple, list)) else (sz,)
+        if sum(sz) == 0:
+            continue
+
+        for cone_dim in sz:
+
+            if cone == POW:
+                # cone_dim is actually the alpha defining K_pow, alpha
+                if cone_dim < 0:
+                    # dual case
+                    # via Moreau: Pi_K^*(v) = v + Pi_K(-v)
+                    projection[offset:offset+3] = x[offset:offset+3] + proj_power_cone(-x[offset:offset+3], -cone_dim)
+                    # ops.append(deriv)
+                else:
+                    # primal case
+                    projection[offset:offset+3] = proj_power_cone(x[offset:offset+3], cone_dim)
+                    # ops.append(deriv)
+                offset += 3
+                continue
+            
+            if cone == EXP or cone == EXP_DUAL:
+                cone_dim *= 3
+            elif cone == PSD:
+                cone_dim = symm_size_to_dim(cone_dim)
+            
+            proj_x_i, Dproj_x_i = _proj_and_dproj(x[offset:offset+cone_dim],
+                                                  cone,
+                                                  dual=dual)
+            projection[offset:offset+cone_dim] = proj_x_i
+            ops.append(Dproj_x_i)
+            offset += cone_dim
+            print(f"offset = {offset} after cone: {cone} with dim {cone_dim}")
+
+    return projection, BlockDiag(ops, device=x.device)
+            
+
+def pi_and_dpi(z: tuple[torch.Tensor,
+                        torch.Tensor,
+                        torch.Tensor],
+                cones: list[tuple[str, int | list[int]]]
+) -> tuple[torch.Tensor, lo.LinearOperator]:
+    pass
+    # u, v, w = z
+    # n = u.shape[0]
+    # out = torch.empty(n + v.shape[0] + 1, dtype=u.dtype, device=u.device)
+    # out[0:n] = u
+    # out[n:-1], D_Pi_Kstar_v
 
 def _proj(x: torch.Tensor,
           cone: str,

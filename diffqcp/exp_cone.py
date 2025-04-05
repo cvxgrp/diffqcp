@@ -13,6 +13,9 @@ The derivative of the projection is a port from https://github.com/cvxgrp/diffcp
 """
 import torch
 from linops import LinearOperator
+import linops as lo
+
+from diffqcp.linops import SymmetricOperator, BlockDiag
 
 EXP_CONE_INF_VALUE = 1e15
 
@@ -554,7 +557,46 @@ def dproj_exp_cone(x: torch.Tensor,
     - port from diffcp
     
     """
-    pass
+    num_cones = int(x.shape[0] / 3)
+    ops = [None] * num_cones
+    offset = 0
+    for i in range(num_cones):
+        x_i = torch.empty(3, dtype=x.dtype, device=x.device)
+        if dual:
+            x_i = -1 * x[offset:offset+3]
+        else:
+            x_i = x[offset:offset+3]
+        offset += 3
+
+        if in_exp(x_i):
+            ops[i] = lo.IdentityOperator(3)
+        elif in_exp_dual(-x_i):
+            ops[i] = lo.ZeroOperator(3)
+        elif x_i[0] < 0 and x_i[1] < 0:
+            
+            def mv(dx: torch.Tensor) -> torch.Tensor:
+                out = torch.empty(3, dtype=x.dtype, device=x.device)
+                out_3 = torch.tensor(0, dtype=x.dtype, device=x.device)
+                if x_i[2] >= out_3:
+                    out_3 = dx[2]
+                out[0] = dx[0]
+                out[1] = torch.tensor(0, dtype=x.dtype, device=x.device)
+                out[2] = out_3
+            
+            ops[i] = SymmetricOperator(n=3, op=mv, device=x.device)
+        else:
+            t = torch.tensor(0, dtype=x.dtype, device=x.device)
+            rs = proj_exp_cone(x_i)
+            r = rs[0]
+            s = rs[1]
+            if s == 0:
+                # TODO: log warning? (<- noted in diffcp)
+                s = torch.abs(r)
+            l = rs[2] - x_i[2]
+            alpha = torch.exp(r / s)
+            beta = l * r / (s * s) * alpha
+            
+
     # num_cones = int(x.shape[0] / 3)
     # ops = [None] * num_cones
     # offset = 0

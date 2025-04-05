@@ -104,7 +104,7 @@ class SymmetricOperator(lo.LinearOperator):
             self.device = device
 
         self._shape = (n, n)
-        self._adjoint = self        
+        self._adjoint = self
 
     def _matmul_impl(self, v: torch.Tensor) -> torch.Tensor:
         return self._mv(v)
@@ -139,8 +139,6 @@ class BlockDiag(lo.LinearOperator):
         n = 0
         self.supports_operator_matrix = True
         self.device = device
-        # print("fist op type", type(ops[0]))
-        # print("BLOCK DIAG DEVICE", self.device) # DEBUG
 
         for op in ops:
             assert isinstance(op, lo.LinearOperator)

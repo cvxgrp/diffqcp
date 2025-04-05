@@ -10,10 +10,9 @@ import linops as lo
 from linops.lsqr import lsqr
 import clarabel
 
-from diffqcp.linops import SymmetricOperator
+from diffqcp.linops import SymmetricOperator, BlockDiag, ScalarOperator
 import diffqcp.cones as cone_utils
-from diffqcp.cone_derivs import dprojection
-from diffqcp.qcp_derivs import Du_Q, form_M, dData_Q
+from diffqcp.qcp_derivs import Du_Q, dData_Q
 from diffqcp.utils import to_tensor, _convert_problem_data, _get_GPU_settings
 
 
@@ -156,21 +155,24 @@ def compute_derivative(P: torch.Tensor | spmatrix,
     x = to_tensor(x, DTYPE, DEVICE)
     y = to_tensor(y, DTYPE, DEVICE)
     s = to_tensor(s, DTYPE, DEVICE)
+    one = torch.tensor(1.0, dtype=DTYPE, device=DEVICE)
 
     n = x.shape[0]
     m = y.shape[0]
 
     cones : list[tuple[str, int | list[int]]] = cone_utils.parse_cone_dict(cone_dict)
 
-    z = (x, y - s, torch.tensor(1.0, dtype=DTYPE, device=DEVICE))
-    u, v, w, = z
-    Pi_z = cone_utils.pi(z, cones)
+    Pi_Kstar_v, D_Pi_Kstar_v = cone_utils.proj_and_dproj(y-s, cones, dual=True)
+    Pi_z = torch.cat((x,
+                      Pi_Kstar_v,
+                      one.unsqueeze(-1)
+                      ))
+    DPi_z = BlockDiag([lo.IdentityOperator(n),
+                       D_Pi_Kstar_v,
+                       ScalarOperator(one)])
 
     Dz_Q_Pi_z: lo.LinearOperator = Du_Q(Pi_z, P_linop, A, q, b)
-    # TODO?: Need to cache the following (this is 2nd repeat, essentially)
-    # TODO: or rather, batch compute projection stuff
-    D_Pi_Kstar_v: lo.LinearOperator = dprojection(v, cones, dual=True)
-    M: lo.LinearOperator = form_M(u, v, w, Dz_Q_Pi_z, cones)
+    M = (Dz_Q_Pi_z @ DPi_z) - DPi_z + lo.IdentityOperator(n + m + 1)
 
     def derivative(dP: torch.Tensor | spmatrix,
                    dA: torch.Tensor | spmatrix,
@@ -196,6 +198,12 @@ def compute_derivative(P: torch.Tensor | spmatrix,
         dy = D_Pi_Kstar_v @ dw - y * dz_N
         ds = D_Pi_Kstar_v @ dw - dw - s * dz_N
         return dx, dy, ds
+    
+    def adjoint(dx: torch.Tensor,
+                dy: torch.Tensor,
+                ds: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        pass
 
     return derivative
 

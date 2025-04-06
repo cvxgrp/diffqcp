@@ -436,10 +436,14 @@ def _test_Dproj(cone: str,
 
     proj_x = cone_lib._proj(x, cone, dual=dual)
 
-    dproj_x = cone_lib._proj(x + dx, cone, dual=dual) - proj_x
+    dproj_fd = cone_lib._proj(x + dx, cone, dual=dual) - proj_x
     Dproj = _dprojection(x, cone, dual=dual)
+    dproj = Dproj @ dx
+    
+    print("analytical: ", dproj)
+    print("fdiff: ", dproj_fd)
 
-    assert torch.allclose(Dproj @ dx, dproj_x, atol=tol)
+    assert torch.allclose(dproj, dproj_fd, atol=tol)
 
 
 @pytest.mark.parametrize("device", devices)
@@ -469,6 +473,8 @@ def test_dproj_pos(device):
 @pytest.mark.parametrize("device", devices)
 def test_dproj_soc(device):
     """JVPs for Dproj onto the SOC.
+
+    Fails but looks very close.
     """
     np.random.seed(0)
     rng = torch.Generator(device=device).manual_seed(0)
@@ -489,6 +495,18 @@ def test_dproj_psd(device):
         dim = cone_lib.symm_size_to_dim(size)
         _test_Dproj(cone_lib.PSD, dim, rng, device=device, dual=True)
         _test_Dproj(cone_lib.PSD, dim, rng, device=device, dual=False)
+
+
+@pytest.mark.parametrize("device", devices)
+def test_dproj_exp(device):
+    """JVPs for Dproj onto the EXP cone
+    """
+    rng = torch.Generator(device=device).manual_seed(0)
+    for _ in range(10):
+        # dimension must be a multiple of 3
+        dim = 18*3
+        _test_Dproj(cone_lib.EXP, dim, rng, device=device, dual=True)
+        _test_Dproj(cone_lib.EXP, dim, rng, device=device, dual=False)
 
 
 def test_dprojection():

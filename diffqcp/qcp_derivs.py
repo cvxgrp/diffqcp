@@ -1,10 +1,11 @@
 """
 Non-cone derivative atoms composing the QCP solution map derivative.
+
+File used purely 
 """
 import torch
 import linops as lo
 
-from diffqcp.cone_derivs import dpi
 from diffqcp.utils import sparse_tensor_transpose
 from diffqcp.linops import _sLinearOperator
 
@@ -111,19 +112,11 @@ def dData_Q(u: torch.Tensor,
     return out
 
 
-def form_M(u: torch.Tensor,
-           v: torch.Tensor,
-           w: torch.Tensor,
-           Dz_Q_Pi_z: lo.LinearOperator,
-           cones: list[tuple[str, int | list[int]]]
-) -> lo.LinearOperator:
-    """Form the derivative composition M as given in diffqcp implementation section.
-
-    Notes
-    -----
-    We don't divide by 1/z_N (or w, in this namespace) since at the solution z_N == 1.
-    """
-    N = u.shape[0] + v.shape[0] + 1
-    Dz_Pi_z = dpi(u, v, w, cones)
-    M = (Dz_Q_Pi_z @ Dz_Pi_z) - Dz_Pi_z + lo.IdentityOperator(N)
-    return M
+def dData_Q_adjoint(u: torch.Tensor,
+                    q1: torch.Tensor,
+                    q2: torch.Tensor,
+                    q3: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    # what happens with sparse data matrices?
+    # => just linops?
+    pass

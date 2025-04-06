@@ -136,6 +136,8 @@ def compute_derivative(P: torch.Tensor | spmatrix,
         tensor computations.
         - If a device parameter is not provided and P is not a torch.Tensor, then
         the device defaults to None (i.e., the CPU).
+    - TODO(quill): most likely will need to allow users to specify if they want to use
+    sparse matrices...some DL/ML workflows may not support sparsity
     """
 
     DTYPE, DEVICE = _get_GPU_settings(P, dtype=dtype, device=device)
@@ -169,7 +171,7 @@ def compute_derivative(P: torch.Tensor | spmatrix,
                       ))
     DPi_z = BlockDiag([lo.IdentityOperator(n),
                        D_Pi_Kstar_v,
-                       ScalarOperator(one)])
+                       ScalarOperator(one)], device=DEVICE)
 
     Dz_Q_Pi_z: lo.LinearOperator = Du_Q(Pi_z, P_linop, A, q, b)
     M = (Dz_Q_Pi_z @ DPi_z) - DPi_z + lo.IdentityOperator(n + m + 1)

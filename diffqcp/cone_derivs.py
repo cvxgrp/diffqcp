@@ -4,6 +4,7 @@ import linops as lo
 from diffqcp.linops import ScalarOperator, BlockDiag, SymmetricOperator
 from diffqcp.cones import (ZERO, POS, SOC, PSD, EXP, EXP_DUAL, POW, CONES,
                            symm_size_to_dim, vec_symm, unvec_symm)
+from diffqcp.exp_cone import dproj_exp_cone
 
 def _dprojection_psd(x: torch.Tensor) -> lo.LinearOperator:
     """Returns the derivative of the projection onto the PSD cone at x.
@@ -140,6 +141,8 @@ def _dprojection(x: torch.Tensor,
         return _dprojection_soc(x)
     elif cone == PSD:
         return _dprojection_psd(x)
+    elif cone == EXP:
+        return dproj_exp_cone(x, dual)
     else:
         raise NotImplementedError("%s not implemented" % cone)
 

@@ -293,7 +293,7 @@ def dottest(Op: lo.LinearOperator,
     Returns
     -------
     bool
-        Whether the provided operator
+        Whether the provided operator is a linear operator.
 
     Notes
     -----
@@ -306,8 +306,6 @@ def dottest(Op: lo.LinearOperator,
     """
     device = Op.device
     rng = torch.Generator(device).manual_seed(0)
-
-    is_linop = True
 
     for _ in range(10):
 

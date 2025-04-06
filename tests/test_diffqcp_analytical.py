@@ -10,13 +10,14 @@ allows that respective test to pass.
 
 import numpy as np
 import scipy.linalg as la
+import scipy.sparse as sparse
 import cvxpy as cp
 import torch
 import pytest
 
 import diffqcp.qcp as cone_prog
 from diffqcp.utils import to_tensor
-from tests.utils import data_and_soln_from_cvxpy_problem, get_zeros_like
+from tests.utils import data_and_soln_from_cvxpy_problem, get_zeros_like, get_random_like
 
 devices = [torch.device('cpu')]
 if torch.cuda.is_available():
@@ -240,7 +241,7 @@ def test_least_squares_soln_of_eqns_larger(device):
         assert torch.allclose(Dxb_db, dx, atol=1e-5)
 
 
-### A more complicated example ###
+### More complicated examples ###
 
 @pytest.mark.parametrize("device", devices)
 def test_constrained_least_squares(device):
@@ -315,3 +316,39 @@ def test_constrained_least_squares(device):
         assert torch.allclose(dx_b_analytic, dx[m:], atol=1e-8)
 
     assert num_optimal == 10, "No derivative testing was actually performed."
+
+
+@pytest.mark.parametrize("device", devices)
+def test_dprojection_exp(device):
+    x = cp.Variable()
+    lam = cp.Parameter(1, nonneg=True)
+    lam.value = np.ones(1)
+
+    f0 = x + lam * (cp.log(1 + x) + cp.log(1 - x))
+    problem = cp.Problem(cp.Maximize(f0))
+
+    data = data_and_soln_from_cvxpy_problem(problem)
+    P_can, A_can = data[0], data[1]
+    q_can, b_can = data[2], data[3]
+    cone_dict, soln = data[4], data[5]
+
+    DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
+
+    dlam = 1e-6
+    dP = get_zeros_like(P_can)
+    # dA = get_random_like(A_can, lambda n: np.random.normal(0, 1e-6, size=n))
+    dA = get_zeros_like(A_can)
+    db = torch.zeros(b_can.shape[0])
+    dq = torch.zeros(q_can.shape[0])
+    dq[1] = -dlam
+    dq[2] = -dlam
+
+    dx, dy, ds = DS(dP, dA, dq, db)
+
+    analytical = -1 + lam.value / np.sqrt(lam.value**2 + 1)
+
+    print("dx: ", (dx[0]).item())
+    print("analytical: ", analytical[0] * dlam)
+
+    # assert abs(analytical[0] - (dx[0]).item()/dlam) < 1e-6
+    np.testing.assert_allclose(analytical[0] * dlam, (dx[0]).item(), atol=1e-8)

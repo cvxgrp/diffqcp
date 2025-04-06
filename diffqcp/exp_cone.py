@@ -15,7 +15,7 @@ import torch
 from linops import LinearOperator
 import linops as lo
 
-from diffqcp.linops import SymmetricOperator, BlockDiag
+from diffqcp.linops import SymmetricOperator, BlockDiag, _sLinearOperator
 
 EXP_CONE_INF_VALUE = 1e15
 
@@ -548,13 +548,15 @@ def in_exp_dual(z: torch.Tensor) -> bool:
 #  === Derivative Subroutine ===
 
 def dproj_exp_cone(x: torch.Tensor,
-                   dual: bool
+                   dual: bool,
+                   proj_x: torch.Tensor | None = None
 ) -> LinearOperator:
     """
 
     Notes
     -----
     - port from diffcp
+    - form proj_dproj so this function can use exp call
     
     """
     num_cones = int(x.shape[0] / 3)
@@ -571,7 +573,7 @@ def dproj_exp_cone(x: torch.Tensor,
         if in_exp(x_i):
             ops[i] = lo.IdentityOperator(3)
         elif in_exp_dual(-x_i):
-            ops[i] = lo.ZeroOperator(3)
+            ops[i] = lo.ZeroOperator((3, 3))
         elif x_i[0] < 0 and x_i[1] < 0:
             
             def mv(dx: torch.Tensor) -> torch.Tensor:
@@ -582,10 +584,10 @@ def dproj_exp_cone(x: torch.Tensor,
                 out[0] = dx[0]
                 out[1] = torch.tensor(0, dtype=x.dtype, device=x.device)
                 out[2] = out_3
+                return out
             
             ops[i] = SymmetricOperator(n=3, op=mv, device=x.device)
         else:
-            t = torch.tensor(0, dtype=x.dtype, device=x.device)
             rs = proj_exp_cone(x_i)
             r = rs[0]
             s = rs[1]
@@ -595,8 +597,27 @@ def dproj_exp_cone(x: torch.Tensor,
             l = rs[2] - x_i[2]
             alpha = torch.exp(r / s)
             beta = l * r / (s * s) * alpha
-            
+            J = torch.tensor(
+                    [[alpha, (-r + s) / s * alpha, -1, 0],
+                    [1 + l / s * alpha, -beta, 0, alpha],
+                    [-beta, 1 + beta * r / s, 0, (1 - r / s) * alpha],
+                    [0, 0, 1, -1]],
+                    dtype=x.dtype, device=x.device)
+            J_inv = torch.inverse(J) # TODO(quill): do algebra to make solve call
+            J_inv = J_inv[0:3, 1:4]
+            ops[i] = lo.aslinearoperator(J_inv)
+    
+    D = BlockDiag(ops, device=x.device)
+    if dual:
+        def mv(dx: torch.Tensor) -> torch.Tensor:
+            return dx - D @ dx
 
+        def rv(dx: torch.Tensor) -> torch.Tensor:
+            return dx - D.T @ dx
+        
+        return _sLinearOperator(n = D.shape[0], m=D.shape[1], mv=mv, rv=rv, device=x.device)
+
+    return D
     # num_cones = int(x.shape[0] / 3)
     # ops = [None] * num_cones
     # offset = 0

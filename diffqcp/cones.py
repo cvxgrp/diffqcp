@@ -8,7 +8,7 @@ import torch
 import linops as lo
 
 from diffqcp.pow_cone import proj_power_cone
-from diffqcp.exp_cone import proj_exp_cone
+from diffqcp.exp_cone import proj_exp_cone, dproj_exp_cone
 from diffqcp.linops import SymmetricOperator, BlockDiag
 
 # TODO: need to check for alternative to distutils, which was deprecated starting in Python 3.12
@@ -166,8 +166,21 @@ def unvec_symm(x: torch.Tensor,
     return X
 
 
+def _proj_exp_dproj_exp(x: torch.Tensor,
+                        dual: bool
+) -> tuple[torch.Tensor, lo.LinearOperator]:
+    num_cones = int(x.shape[0] / 3)
+    out = torch.empty_like(x)
+    offset = 0
+    for _ in range(num_cones):
+        x_i = x[offset:offset+3]
+        out[offset:offset+3] = proj_exp_cone(x_i, primal=not dual)
+        offset += 3
+
+    return (out, dproj_exp_cone(x, dual))
+
 def _proj_psd_dproj_psd(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperator]:
-    """Self-dual."""
+    """Self-adjoint."""
     assert len(x.shape) == 1, "PSD projection: x must be vectorized."
 
     dim = x.shape[0]
@@ -217,7 +230,7 @@ def _proj_psd_dproj_psd(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperato
 
 
 def _proj_soc_dproj_soc(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperator]:
-    """Self-dual."""
+    """Self-adjoint."""
     n = x.shape[0]
     t, z = x[0], x[1:]
     norm_z = torch.norm(z)
@@ -244,7 +257,7 @@ def _proj_soc_dproj_soc(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperato
 
 
 def _proj_pos_dproj_pos(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperator]:
-    """Self-dual."""
+    """Self-adjoint."""
     proj_x = torch.maximum(x, torch.tensor(0, dtype=x.dtype, device=x.device))
     Dproj_x = lo.DiagonalOperator(0.5 * (torch.sign(x).to(dtype=x.dtype, device=x.device) + 1.0))
     return (proj_x, Dproj_x)
@@ -277,6 +290,8 @@ def _proj_and_dproj(x: torch.Tensor,
         return _proj_soc_dproj_soc(x)
     elif cone == PSD:
         return _proj_psd_dproj_psd(x)
+    elif cone == EXP:
+        return _proj_exp_dproj_exp(x, dual)
     else:
         raise NotImplementedError("%s not implemented" % cone)
 
@@ -347,18 +362,6 @@ def proj_and_dproj(x: torch.Tensor,
     return projection, BlockDiag(ops, device=x.device)
             
 
-def pi_and_dpi(z: tuple[torch.Tensor,
-                        torch.Tensor,
-                        torch.Tensor],
-                cones: list[tuple[str, int | list[int]]]
-) -> tuple[torch.Tensor, lo.LinearOperator]:
-    pass
-    # u, v, w = z
-    # n = u.shape[0]
-    # out = torch.empty(n + v.shape[0] + 1, dtype=u.dtype, device=u.device)
-    # out[0:n] = u
-    # out[n:-1], D_Pi_Kstar_v
-
 def _proj(x: torch.Tensor,
           cone: str,
           dual=False
@@ -395,7 +398,7 @@ def _proj(x: torch.Tensor,
         lambd.clamp_(min=0)
         PiX = Q @ (lambd.unsqueeze(-1) * Q.T)
         return vec_symm(PiX)
-    elif cone == EXP:
+    elif cone == EXP or cone == EXP_DUAL:
         num_cones = int(x.shape[0] / 3)
         out = torch.empty_like(x)
         offset = 0

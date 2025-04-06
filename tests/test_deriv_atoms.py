@@ -122,47 +122,7 @@ def test_Du_Q_is_approximation(device):
         deriv_op = Du_Q(u, P_op, A, q, b)
 
         assert torch.allclose(dQ, deriv_op @ du)
-
-
-# def test_Du_Q_T_is_approximation():
-#     """Test adjoint implementation of DQ(u) w.r.t. u.
-
-#     Taking u in R^N and a small perturbation du in R^N, test if
-
-#         du approx. equal DQ(u, D)_T(Q(u + du, D) - Q(u, D)),
-
-#     where DQ(u, D)_T is obtained from `diffqcp.qcp_deriv.Du_Q`.
-
-#     Notes
-#     -----
-#     """
-#     np.random.seed(0)
-#     rng = torch.Generator().manual_seed(0)
-
-#     for i in range(10):
-#         m = np.random.randint(low=10, high=20)
-#         n = m + np.random.randint(low=5, high=15)
-#         N = n + m + 1
-
-#         P_upper, P_op, A, q, b = utils.generate_torch_problem_data(n,
-#                                                                    m,
-#                                                                    sparse.random,
-#                                                                    np.random.randn,
-#                                                                    dtype=torch.float64)
-
-#         u = torch.randn(N, generator=rng, dtype=torch.float64)
-#         u[-1] = torch.tensor(1.0, dtype=torch.float64) # always the case when differentiating at soln.
-#         x, y, tau = u[:n], u[n: -1], u[-1]
-#         z = Q(P_op, A, q, b, x, y, tau)
-
-#         du = 1e-2*torch.randn(N, generator=rng, dtype=torch.float64)
-#         dx, dy, dtau = du[:n], du[n: -1], du[-1]
-#         dQ = Q(P_op, A, q, b, x + dx, y + dy, tau + dtau) - z
-
-#         deriv_op = Du_Q(u, P_op, A, q, b)
-
-#         assert torch.allclose(du, deriv_op.T @ dQ, atol=1e-6)
-
+        
 
 @pytest.mark.parametrize("device", devices)
 def test_Du_Q_is_linop(device):

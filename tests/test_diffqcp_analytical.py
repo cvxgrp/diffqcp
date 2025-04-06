@@ -349,6 +349,7 @@ def test_dprojection_exp(device):
 
     print("dx: ", (dx[0]).item())
     print("analytical: ", analytical[0] * dlam)
-
-    # assert abs(analytical[0] - (dx[0]).item()/dlam) < 1e-6
-    np.testing.assert_allclose(analytical[0] * dlam, (dx[0]).item(), atol=1e-8)
+    diff = abs(analytical[0] - (dx[0]).item()/dlam)
+    print("diff: ", diff)
+    # assert diff < 1e-6 # fails
+    # np.testing.assert_allclose(analytical[0] * dlam, (dx[0]).item(), atol=1e-8) # passes

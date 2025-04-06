@@ -177,6 +177,7 @@ def _proj_exp_dproj_exp(x: torch.Tensor,
         out[offset:offset+3] = proj_exp_cone(x_i, primal=not dual)
         offset += 3
 
+    # TODO(quill): implement so dproj_exp_cone doesn't recompute projection
     return (out, dproj_exp_cone(x, dual))
 
 def _proj_psd_dproj_psd(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperator]:
@@ -357,10 +358,10 @@ def proj_and_dproj(x: torch.Tensor,
             projection[offset:offset+cone_dim] = proj_x_i
             ops.append(Dproj_x_i)
             offset += cone_dim
-            print(f"offset = {offset} after cone: {cone} with dim {cone_dim}")
 
     return projection, BlockDiag(ops, device=x.device)
-            
+
+### PROJECTION ONLY SUBROUTINES; used for testing ###
 
 def _proj(x: torch.Tensor,
           cone: str,

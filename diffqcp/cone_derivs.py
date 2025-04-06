@@ -1,3 +1,11 @@
+"""
+Note that this file is in a sense 'deprecated'. Namely, these subroutines
+are not used by the main `qcp.py` file as the projection and dprojection computations
+have been coupled. That said, to not break the tests, this file with the isolated
+derivative subroutines should be kept. However, one should be wary that if one of these
+subroutines is altered, then it should also be altered in the `cones.py` file (and vice versa).
+"""
+
 import torch
 import linops as lo
 

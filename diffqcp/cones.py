@@ -152,6 +152,13 @@ def unvec_symm(x: torch.Tensor,
     -------
     torch.Tensor
         A size-by-size symmetric matrix.
+
+    Notes
+    -----
+    TODO: Be sure all solvers are using this canonicalization.
+    TODO: ensure operating with upper triangular matrices is fine.
+        diffcp returns `lower_triangular_from_matrix`, which is just
+        a vector...so probably fine. Still look into.
     """
     assert len(x.shape) == 1
     size = size if size > 0 else symm_dim_to_size(x.shape[0])
@@ -166,8 +173,31 @@ def unvec_symm(x: torch.Tensor,
     return X
 
 
-def _proj_exp_dproj_exp(x: torch.Tensor,
-                        dual: bool
+def form_B_block(v1: torch.Tensor,
+                 v2: torch.Tensor
+) -> torch.Tensor:
+    """Helper function for `_proj_dproj_psd`.
+
+    Parameters
+    ----------
+    v1: torch.Tensor, 1D
+        The nonnegative eigenvalues.
+    v2: torch.Tensor, 1D
+        The negative eigenvalues.
+
+    Returns
+    -------
+    torch.Tensor
+        The upper right corner of the B matrix for the proj. PSD jvp.
+    """
+    v1 = v1.unsqueeze(0).expand(v2.numel(), v1.numel())
+    block = v1 - v2.unsqueeze(1)
+    block = v1 / block
+    return block
+
+
+def _proj_dproj_exp(x: torch.Tensor,
+                    dual: bool
 ) -> tuple[torch.Tensor, lo.LinearOperator]:
     num_cones = int(x.shape[0] / 3)
     out = torch.empty_like(x)
@@ -180,8 +210,11 @@ def _proj_exp_dproj_exp(x: torch.Tensor,
     # TODO(quill): implement so dproj_exp_cone doesn't recompute projection
     return (out, dproj_exp_cone(x, dual))
 
-def _proj_psd_dproj_psd(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperator]:
-    """Self-adjoint."""
+
+def _proj_dproj_psd(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperator]:
+    """Self-adjoint.
+    TODO: PyTest vectorization vs. double for loop.
+    """
     assert len(x.shape) == 1, "PSD projection: x must be vectorized."
 
     dim = x.shape[0]
@@ -193,44 +226,38 @@ def _proj_psd_dproj_psd(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperato
     if lambd[0] >= zero:
         return (x, lo.IdentityOperator(dim))
     
+    if lambd[-1] < zero:
+        return (torch.zeros(dim, dtype=x.dtype, device=x.device), lo.ZeroOperator((dim, dim)))
+    
     lambd_pos = torch.clamp(lambd, min=zero)
     proj_X = Q @ (lambd_pos.unsqueeze(-1) * Q.T)
     proj_x = vec_symm(proj_X)
 
-    k = -1
-    i = 0
-    while i < lambd.shape[0]:
-        if lambd[i] < 0:
-            k += 1
-        else:
-            break
-        i += 1
+    # k is the index of the last negative eigenvalue
+    # in the 1D, monotonically increasing array of eigenvalues.
+    k = (lambd < 0).nonzero(as_tuple=True)[0][-1].item()
+    lam_neg = lambd[0:k+1]
+    lam_pos = lambd[k+1:]
+    B = torch.zeros((size, size))
+    B[k+1:, k+1:] = 1
+    top_right_block = form_B_block(lam_pos, lam_neg)
+    B[0:k+1, k+1:] = top_right_block
+    B[k+1:, 0:k+1] = top_right_block.T # use symmetry
 
     def mv(dx: torch.Tensor) -> torch.Tensor:
-        Q_T_DX_Q = Q.T @ unvec_symm(dx) @ Q
-
-        # Hadamard product w/o forming B matrix
-        # So Q_T_DX_Q becomes (B hadamard Q_T_DX_Q) after double for loop.
-        for i in range(Q_T_DX_Q.shape[0]):
-            for j in range(Q_T_DX_Q.shape[1]):
-                if i <= k and j <= k:
-                    Q_T_DX_Q[i, j] = 0
-                elif i > k and j <= k:
-                    lambda_i_pos = torch.maximum(lambd[i], zero)
-                    lambda_j_neg = -torch.minimum(lambd[j], zero)
-                    Q_T_DX_Q[i, j] *= lambda_i_pos / (lambda_j_neg + lambda_i_pos)
-                elif i <= k and j > k:
-                    lambda_i_neg = -torch.minimum(lambd[i], zero)
-                    lambd_j_pos = torch.maximum(lambd[j], zero)
-                    Q_T_DX_Q[i, j] *= lambd_j_pos / (lambda_i_neg + lambd_j_pos)
-
-        DPiX_DX = Q @ Q_T_DX_Q @ Q.T
-        return vec_symm(DPiX_DX)
+        dX = unvec_symm(dx)
+        out = dX @ Q
+        out = Q.T @ out
+        out = B * out
+        out = out @ Q.T
+        out = Q @ out
+        
+        return vec_symm(out)
     
     return (proj_x, SymmetricOperator(dim, mv, device=x.device))
 
 
-def _proj_soc_dproj_soc(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperator]:
+def _proj_dproj_soc(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperator]:
     """Self-adjoint."""
     n = x.shape[0]
     t, z = x[0], x[1:]
@@ -257,15 +284,15 @@ def _proj_soc_dproj_soc(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperato
         return (proj_x, SymmetricOperator(x.shape[0], mv, device=x.device))
 
 
-def _proj_pos_dproj_pos(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperator]:
+def _proj_dproj_pos(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperator]:
     """Self-adjoint."""
     proj_x = torch.maximum(x, torch.tensor(0, dtype=x.dtype, device=x.device))
     Dproj_x = lo.DiagonalOperator(0.5 * (torch.sign(x).to(dtype=x.dtype, device=x.device) + 1.0))
     return (proj_x, Dproj_x)
 
 
-def _proj_zero_dproj_zero(x: torch.Tensor,
-                          dual: bool
+def _proj_dproj_zero(x: torch.Tensor,
+                     dual: bool
 ) -> tuple[torch.Tensor, lo.LinearOperator]:
     n = x.shape[0]
     if dual:
@@ -284,15 +311,15 @@ def _proj_and_dproj(x: torch.Tensor,
         dual = not dual
 
     if cone == ZERO:
-        return _proj_zero_dproj_zero(x, dual)
+        return _proj_dproj_zero(x, dual)
     elif cone == POS:
-        return _proj_pos_dproj_pos(x)
+        return _proj_dproj_pos(x)
     elif cone == SOC:
-        return _proj_soc_dproj_soc(x)
+        return _proj_dproj_soc(x)
     elif cone == PSD:
-        return _proj_psd_dproj_psd(x)
+        return _proj_dproj_psd(x)
     elif cone == EXP:
-        return _proj_exp_dproj_exp(x, dual)
+        return _proj_dproj_exp(x, dual)
     else:
         raise NotImplementedError("%s not implemented" % cone)
 

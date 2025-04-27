@@ -11,7 +11,7 @@ import linops as lo
 
 from diffqcp.linops import ScalarOperator, BlockDiag, SymmetricOperator
 from diffqcp.cones import (ZERO, POS, SOC, PSD, EXP, EXP_DUAL, POW, CONES,
-                           symm_size_to_dim, vec_symm, unvec_symm)
+                           symm_size_to_dim, vec_symm, unvec_symm, form_B_block)
 from diffqcp.exp_cone import dproj_exp_cone
 
 def _dprojection_psd(x: torch.Tensor) -> lo.LinearOperator:
@@ -38,42 +38,61 @@ def _dprojection_psd(x: torch.Tensor) -> lo.LinearOperator:
 
     dim = x.shape[0]
     X = unvec_symm(x)
+    size = X.shape[0]
     lambd, Q = torch.linalg.eigh(X)
     zero = torch.tensor(0, dtype=x.dtype, device=x.device)
 
     # eigenvalues assorted in ascending order
     if lambd[0] >= zero:
         return lo.IdentityOperator(dim)
+    
+    if lambd[-1] < zero:
+        return lo.ZeroOperator((dim, dim))
 
-    k = -1
-    i = 0
-    while i < lambd.shape[0]:
-        if lambd[i] < 0:
-            k += 1
-        else:
-            break
-        i += 1
+    k = (lambd < 0).nonzero(as_tuple=True)[0][-1].item()
+
+    lam_neg = lambd[0:k+1]
+    lam_pos = lambd[k+1:]
+    B = torch.zeros((size, size))
+    B[k+1:, k+1:] = 1
+    top_right_block = form_B_block(lam_pos, lam_neg)
+    B[0:k+1, k+1:] = top_right_block
+    B[k+1:, 0:k+1] = top_right_block.T # use symmetry
 
     def mv(dx: torch.Tensor) -> torch.Tensor:
-        Q_T_DX_Q = Q.T @ unvec_symm(dx) @ Q
+        dX = unvec_symm(dx)
+        out = dX @ Q
+        out = Q.T @ out
+        out = B * out
+        out = out @ Q.T
+        out = Q @ out
+        
+        return vec_symm(out)
 
-        # Hadamard product w/o forming B matrix
-        # So Q_T_DX_Q becomes (B hadamard Q_T_DX_Q) after double for loop.
-        for i in range(Q_T_DX_Q.shape[0]):
-            for j in range(Q_T_DX_Q.shape[1]):
-                if i <= k and j <= k:
-                    Q_T_DX_Q[i, j] = 0
-                elif i > k and j <= k:
-                    lambda_i_pos = torch.maximum(lambd[i], zero)
-                    lambda_j_neg = -torch.minimum(lambd[j], zero)
-                    Q_T_DX_Q[i, j] *= lambda_i_pos / (lambda_j_neg + lambda_i_pos)
-                elif i <= k and j > k:
-                    lambda_i_neg = -torch.minimum(lambd[i], zero)
-                    lambd_j_pos = torch.maximum(lambd[j], zero)
-                    Q_T_DX_Q[i, j] *= lambd_j_pos / (lambda_i_neg + lambd_j_pos)
+    # def mv(dx: torch.Tensor) -> torch.Tensor:
+    #     Q_T_DX_Q = Q.T @ unvec_symm(dx) @ Q
 
-        DPiX_DX = Q @ Q_T_DX_Q @ Q.T
-        return vec_symm(DPiX_DX)
+    #     # Hadamard product w/o forming B matrix
+    #     # So Q_T_DX_Q becomes (B hadamard Q_T_DX_Q) after double for loop.
+    #     for i in range(Q_T_DX_Q.shape[0]):
+    #         for j in range(Q_T_DX_Q.shape[1]):
+    #             if i <= k and j <= k:
+    #                 Q_T_DX_Q[i, j] = 0
+    #             elif i > k and j <= k:
+    #                 # lambda_i_pos = torch.maximum(lambd[i], zero)
+    #                 # lambda_j_neg = -torch.minimum(lambd[j], zero)
+    #                 lambda_i_pos = lambd[i]
+    #                 lambda_j_neg = -lambd[j]
+    #                 Q_T_DX_Q[i, j] *= lambda_i_pos / (lambda_j_neg + lambda_i_pos)
+    #             elif i <= k and j > k:
+    #                 # lambda_i_neg = -torch.minimum(lambd[i], zero)
+    #                 # lambd_j_pos = torch.maximum(lambd[j], zero)
+    #                 lambda_i_neg = -lambd[i]
+    #                 lambd_j_pos = lambd[j]
+    #                 Q_T_DX_Q[i, j] *= lambd_j_pos / (lambda_i_neg + lambd_j_pos)
+
+    #     DPiX_DX = Q @ Q_T_DX_Q @ Q.T
+    #     return vec_symm(DPiX_DX)
 
     return SymmetricOperator(dim, mv, device=x.device)
 

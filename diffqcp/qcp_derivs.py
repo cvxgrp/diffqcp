@@ -119,4 +119,8 @@ def dData_Q_adjoint(u: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     # what happens with sparse data matrices?
     # => just linops?
+    # still need to consider how diffcp only calculates required entries.
+    # TODO: this can be used as a helper function for testing, but probably
+    # will have to implement directly in adjoint.
+    # or provide info about sparsity.
     pass

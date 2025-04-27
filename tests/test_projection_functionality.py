@@ -484,6 +484,69 @@ def test_dproj_soc(device):
         _test_Dproj(cone_lib.SOC, dim, rng, device=device, dual=False)
 
 
+def test_vectorized_psd_B_creation():
+    np.random.seed(0)
+
+    count = 0
+    for _ in range(10):
+        size = np.random.randint(5, 15)
+        dim = cone_lib.symm_size_to_dim(size)
+        X = np.random.randn(size, size)
+        X = utils.to_tensor(X)
+        lambd, Q = torch.linalg.eigh(X)
+        dx = np.random.randn(dim)
+        dx = utils.to_tensor(dx)
+
+        if lambd[0] >= 0:
+            continue
+
+        if lambd[-1] < 0:
+            continue
+
+        count += 1
+
+        k = (lambd < 0).nonzero(as_tuple=True)[0][-1].item()
+
+        Q_T_DX_Q = Q.T @ cone_lib.unvec_symm(dx) @ Q
+        # Hadamard product w/o forming B matrix
+        # TODO: if it is important to not form all of B, then try sparse package.
+        #   Probably unimportant though as we are storing whole eigendecomposition already.
+        # So Q_T_DX_Q becomes (B hadamard Q_T_DX_Q) after double for loop.
+        for i in range(Q_T_DX_Q.shape[0]):
+            for j in range(Q_T_DX_Q.shape[1]):
+                if i <= k and j <= k:
+                    Q_T_DX_Q[i, j] = 0
+                elif i > k and j <= k:
+                    lambda_i_pos = lambd[i]
+                    lambda_j_neg = -lambd[j]
+                    Q_T_DX_Q[i, j] *= lambda_i_pos / (lambda_j_neg + lambda_i_pos)
+                elif i <= k and j > k:
+                    lambda_i_neg = -lambd[i]
+                    lambd_j_pos = lambd[j]
+                    Q_T_DX_Q[i, j] *= lambd_j_pos / (lambda_i_neg + lambd_j_pos)
+        
+        lam_neg = lambd[0:k+1]
+        lam_pos = lambd[k+1:]
+        B = torch.zeros((size, size))
+        B[k+1:, k+1:] = 1
+        top_right_block = cone_lib.form_B_block(lam_pos, lam_neg)
+        B[0:k+1, k+1:] = top_right_block
+        B[k+1:, 0:k+1] = top_right_block.T # use symmetry
+        
+        assert torch.allclose(Q_T_DX_Q, (B * (Q.T @ cone_lib.unvec_symm(dx) @ Q)))
+    
+    assert count > 0
+
+
+def test_form_B_block_edge_cases():
+    v1 = torch.tensor([1.0, 1.5, 3.0])
+    v2 = torch.tensor([-3.0])
+    out1 = cone_lib.form_B_block(v1, v2)
+    out2 = cone_lib.form_B_block(v2, v1)
+    assert len(out1.shape) == 2
+    assert len(out2.shape) == 2
+
+
 @pytest.mark.parametrize("device", devices)
 def test_dproj_psd(device):
     """JVPs for Dproj onto the PSD cone.

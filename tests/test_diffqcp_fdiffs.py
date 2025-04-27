@@ -269,6 +269,8 @@ def test_socp2():
 def test_psd():
     """
     SDP generation from https://www.cvxpy.org/examples/basic/sdp.html#basic-examples.
+
+    Fails for diffqcp and diffcp. Need to check in a non-finite-differences manner.
     """
     n = 3
     p = 3

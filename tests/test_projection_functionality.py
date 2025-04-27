@@ -7,8 +7,6 @@ More specifically, this file contains tests for
 3. and the derivatives of projections onto cones.
 
 Lots of ported tests from diffcp/tests/test_cone_prog_diff.py.
-
-# TODO: add functionality to test these on device
 """
 import cvxpy as cp
 import numpy as np
@@ -16,7 +14,6 @@ import torch
 import pytest
 
 import diffqcp.cones as cone_lib
-from diffqcp.cone_derivs import _dprojection, dprojection
 from diffqcp.pow_cone import proj_power_cone
 from diffqcp.exp_cone import proj_exp_cone, in_exp, in_exp_dual
 import diffqcp.utils as utils
@@ -434,10 +431,13 @@ def _test_Dproj(cone: str,
         x = torch.randn(n, generator=rgen, dtype=torch.float64, device=device)
     dx = 1e-6 * torch.randn(n, generator=rgen, dtype=torch.float64, device=device)
 
-    proj_x = cone_lib._proj(x, cone, dual=dual)
+    # proj_x = cone_lib._proj(x, cone, dual=dual)
+    proj_x, Dproj = cone_lib._proj_and_dproj(x, cone, dual=dual)
 
-    dproj_fd = cone_lib._proj(x + dx, cone, dual=dual) - proj_x
-    Dproj = _dprojection(x, cone, dual=dual)
+    proj_x_plus_dx, _ = cone_lib._proj_and_dproj(x + dx, cone, dual=dual)
+    # print("proj x plus dx: ", proj_x_plus_dx)
+    dproj_fd = proj_x_plus_dx - proj_x
+    # Dproj = _dprojection(x, cone, dual=dual)
     dproj = Dproj @ dx
     
     print("analytical: ", dproj)
@@ -595,9 +595,10 @@ def test_dprojection():
             x = torch.randn(size, dtype=torch.float64, device=device)
 
             for dual in [False, True]:
-                proj_x = cone_lib.proj(x, cones, dual=dual)
+                # proj_x = cone_lib.proj(x, cones, dual=dual)
+                proj_x, Dproj = cone_lib.proj_and_dproj(x, cones, dual=dual)
                 dx = 1e-6 * torch.randn(size, dtype=torch.float64, device=device)
-                dproj_x = cone_lib.proj(x + dx, cones, dual=dual) - proj_x
-                Dproj = dprojection(x, cones, dual)
+                dproj_x = cone_lib.proj_and_dproj(x + dx, cones, dual=dual)[0] - proj_x
+                # Dproj = dprojection(x, cones, dual)
                 
                 assert torch.allclose(Dproj @ dx, dproj_x, atol=1e-8)

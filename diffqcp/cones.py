@@ -213,7 +213,11 @@ def _proj_dproj_exp(x: torch.Tensor,
 
 def _proj_dproj_psd(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperator]:
     """Self-adjoint.
-    TODO: PyTest vectorization vs. double for loop.
+    
+    Notes
+    -----
+    - see BMB'18 for derivative and its derivation
+    - TODO: create wrappers and subfunctions and batch computations of same sized PSD cones.
     """
     assert len(x.shape) == 1, "PSD projection: x must be vectorized."
 
@@ -299,7 +303,7 @@ def _proj_dproj_zero(x: torch.Tensor,
         return (x, lo.IdentityOperator(n))
     else:
         return (torch.zeros(x.shape[0], dtype=x.dtype, device=x.device),
-                lo.ZeroOperator(n, n))
+                lo.ZeroOperator((n, n)))
 
 
 def _proj_and_dproj(x: torch.Tensor,

@@ -86,6 +86,61 @@ def test_least_squares_small(device):
         
         assert torch.allclose( Dx_b @ db, dx[m:], atol=1e-8)
 
+@pytest.mark.parametrize("device", devices)
+def test_nonneg_least_squares(device):
+    """
+    The least squares (approximation) problem
+
+        minimize    1/2 ||x - q||^2
+        subject to  x >= 0,
+
+    where q > 0
+    the analytical solution is
+
+        x^star = q
+
+    Considering x^star as a function of q, we know
+
+        Dx^star(q) = I.
+
+    This test checks the accuracy of `diffqcp`'s derivative computations by
+    comparing DS(Data)dData to Dx^star(q)dq.
+
+    Notes
+    ------
+    dData == (0, dq, 0, 0), and other canonicalization considerations must be made
+    (hence the `data_and_soln_from_cvxpy_problem` function call and associated data declaration.)
+    """
+
+    np.random.seed(0)
+    rng = torch.Generator(device=device).manual_seed(0)
+
+    for _ in range(10):
+        n = np.random.randint(low=10, high=15)
+
+        P = sparse.csc_matrix(np.eye(n))
+        q = -np.ones(n)
+
+        A = -sparse.csc_matrix(np.eye(n))
+
+        b = np.zeros(n)
+
+        # Define cones
+        cones = {'z': 0, 'l': n, 'ep': 0, 'q': [], 's': [], 'p': []}
+
+        dP = get_zeros_like(P)
+        dA = get_zeros_like(A)
+        dq = 1e-6 * torch.randn(q.size, generator=rng, dtype=torch.float64, device=device)
+        soln = torch.ones(n, device=device)
+
+        Dx_q = to_tensor(np.eye(n), dtype=torch.float64, device=device)
+
+        DS = cone_prog.compute_derivative(P, A, q, b, cones, (soln, soln, 1e-9 * np.ones(n)), dtype=torch.float64, device=device)
+        dx, dy, ds = DS(dP, dA, -dq, torch.zeros(b.size, device=device))
+        
+        assert torch.allclose( Dx_q @ dq, dx, atol=1e-8)
+
+
 
 @pytest.mark.parametrize("device", devices)
 def test_least_squares_larger(device):

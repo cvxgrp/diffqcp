@@ -9,15 +9,28 @@ POW_CONE_TOL = 1e-9
 POW_CONE_MAX_ITERS = 20
 
 def pow_calc_x_i(r: torch.Tensor,
-                 x0: torch.Tensor,
+                 x_i: torch.Tensor,
                  z0: torch.Tensor,
                  alpha_i: torch.Tensor
 ) -> torch.Tensor:
     """x_i from eq 4. from Hien paper.
     """
-    x = 0.5 * (x0 + torch.sqrt(x0*x0 + 4 * alpha_i * (z0 - r)*r))
-    return torch.maximum(x, torch.tensor(1e-12, dtype=x0.dtype, device=x0.device))
+    x = 0.5 * (x_i + torch.sqrt(x_i*x_i + 4 * alpha_i * (z0 - r)*r))
+    return torch.maximum(x, torch.tensor(1e-12, dtype=x_i.dtype, device=x_i.device))
 
+
+def g_i(r: torch.Tensor,
+        x_i: torch.Tensor,
+        z0: torch.Tensor,
+        alpha_i: torch.Tensor
+) -> torch.Tensor:
+    """g_i from diffqcp paper.
+    """
+    return 2 * pow_calc_x_i(r, x_i, z0, alpha_i) - x_i
+
+
+def d():
+    pass
 
 def pow_calc_f(x: torch.Tensor,
                y: torch.Tensor,
@@ -50,9 +63,40 @@ def pow_calc_fp(x: torch.Tensor,
     return torch.pow(x, alpha) * torch.pow(y, alphac) * (alpha * dxdr / x + alphac * dydr / y) - 1
 
 
-def proj_power_cone(v: torch.Tensor,
-                    alpha: float | torch.Tensor
-) -> torch.Tensor:
+def in_K_pow(alpha: torch.Tensor,
+             alphac: torch.Tensor,
+             x0: torch.Tensor,
+             y0: torch.Tensor,
+             z0: torch.Tensor,
+             tol: torch.Tensor
+) -> bool:
+    return (x0 >= 0 and y0 >= 0 and
+        tol + torch.pow(x0, alpha) * torch.pow(y0, alphac) >= z0)
+
+
+def in_K_pow_polar(alpha: torch.Tensor,
+                   alphac: torch.Tensor,
+                   x0: torch.Tensor,
+                   y0: torch.Tensor,
+                   z0: torch.Tensor,
+                   tol: torch.Tensor
+) -> bool:
+    return (x0 <= 0 and y0 <= 0 and
+        tol + torch.pow(-x0, alpha) * torch.pow(-y0, alphac) >=
+            z0 * torch.pow(alpha, alpha) * torch.pow(alphac, alphac))
+
+
+def construct_z_not_zero_Jacobian():
+    pass
+
+
+def construct_z_zero_Jacobian():
+    pass
+
+
+def proj_dproj_power_cone(v: torch.Tensor,
+                          alpha: float | torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Projection onto 3D power cone.
 
     The 3D power cone is defined as
@@ -76,6 +120,8 @@ def proj_power_cone(v: torch.Tensor,
     -------
     torch.Tensor
         The output of P_power(v) <=> the projection of v onto the 3D power cone.
+    torch.Tensor
+        The Jacobian of P_power at v <=> DP_power(v) in R^{3 x 3}
     """
     POW_CONE_TOL_DEV = torch.tensor(POW_CONE_TOL, dtype=v.dtype, device=v.device)
 
@@ -85,16 +131,11 @@ def proj_power_cone(v: torch.Tensor,
     ac_device = 1 - a_device
     zero = torch.tensor(0, dtype=v.dtype, device=v.device)
 
-    # v in K_pow(alpha)
-    if (x0 >= zero and y0 >= zero and
-        POW_CONE_TOL_DEV + torch.pow(x0, a_device) * torch.pow(y0, ac_device) >= z0):
-        return v
+    if in_K_pow(a_device, ac_device, x0, y0, z0, POW_CONE_TOL_DEV):
+        return (v, torch.eye(3, dtype=v.dtype, device=v.device))
     
-    # -v in K_pow(alpha)^* <=> v is in the polar cone of K_pow(alpha)
-    if (x0 <= zero and y0 <= zero and
-        POW_CONE_TOL_DEV + torch.pow(-x0, a_device) * torch.pow(-y0, ac_device) >=
-            z0 * torch.pow(a_device, a_device) * torch.pow(ac_device, ac_device)):
-        return torch.zeros(3, dtype=v.dtype, device=v.device)
+    if in_K_pow_polar(a_device, ac_device, x0, y0, z0, POW_CONE_TOL_DEV):
+        return (torch.zeros(3, dtype=v.dtype, device=v.device), torch.zeros((3, 3), dtype=v.dtype, device=v.device))
 
     x = torch.tensor(0, dtype=v.dtype, device=v.device)
     y = torch.tensor(0, dtype=v.dtype, device=v.device)
@@ -120,6 +161,34 @@ def proj_power_cone(v: torch.Tensor,
     out[0] = x
     out[1] = y
     out[2] = -r if v[2] < 0 else r
-    return out
+    
+    abs_z = torch.abs(z0)
+    if abs_z > POW_CONE_TOL_DEV:
+        two_r = 2 * r
+        sign_z = torch.sign(z0)
+        gx = g_i(r, x0, z0, a_device)
+        gy = g_i(r, y0, z0, ac_device)
+        frac_x = (a_device * x0) / gx
+        frac_y = (ac_device * y0) / gy
+        T = - ( frac_x + frac_y )
+        L = 2 * abs_z - two_r
+        L /= abs_z + (abs_z - two_r) * (frac_x + frac_y)
+        J = torch.empty((3, 3), dtype=v.dtype, device=v.device)
+        a_device_squared = a_device*a_device
+        alpha_alphac = a_device - a_device_squared
+        gxgy = gx*gy
+        rL = r * L
+        J[0, 0] = 0.5 + x0/(2*gx) + ((a_device_squared) * (abs_z - two_r) * rL ) / (gx*gx)
+        J[1, 1] = 0.5 + y0/(2*gy) + ((ac_device*ac_device) * (abs_z - two_r) * rL ) / (gy*gy)
+        J[2, 2] = r/abs_z + (r/abs_z) * T * L
+        J[0, 1] = rL*alpha_alphac*(abs_z - two_r) / gxgy
+        J[1, 0] = J[0, 1]
+        J[0, 2] = sign_z * a_device * rL / gx
+        J[2, 0] = J[0, 2]
+        J[1, 2] = sign_z * ac_device * rL / gy
+        J[2, 1] = J[1, 2]
+    # TODO: add other case 
+    # if z0 
+    return (out, J)
 
 

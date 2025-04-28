@@ -14,7 +14,7 @@ import torch
 import pytest
 
 import diffqcp.cones as cone_lib
-from diffqcp.pow_cone import proj_power_cone
+from diffqcp.pow_cone import proj_dproj_power_cone
 from diffqcp.exp_cone import proj_exp_cone, in_exp, in_exp_dual
 import diffqcp.utils as utils
 
@@ -377,7 +377,7 @@ def test_projection(device):
             for alpha in pow_alpha_neg:
                 v = -x[offset:offset + 3]
                 assert torch.allclose(proj[offset:offset+3],
-                                      x[offset:offset+3]+ proj_power_cone(v,-alpha))
+                                      x[offset:offset+3]+ proj_dproj_power_cone(v,-alpha)[0])
                 offset += 3
             
             assert torch.allclose(proj[offset:zero_dim], cone_lib._proj(x[offset:zero_dim], cone_lib.ZERO, dual=dual))
@@ -398,7 +398,7 @@ def test_projection(device):
                 offset += dim
 
             for alpha in pow_alpha:
-                assert torch.allclose(proj[offset:offset+3], proj_power_cone(x[offset:offset + 3], alpha))
+                assert torch.allclose(proj[offset:offset+3], proj_dproj_power_cone(x[offset:offset + 3], alpha)[0])
                 offset += 3
             
             for dim in psd_dim:

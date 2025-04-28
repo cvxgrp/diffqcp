@@ -7,9 +7,9 @@ import math
 import torch
 import linops as lo
 
-from diffqcp.pow_cone import proj_power_cone
+from diffqcp.pow_cone import proj_dproj_power_cone
 from diffqcp.exp_cone import proj_exp_cone, dproj_exp_cone
-from diffqcp.linops import SymmetricOperator, BlockDiag
+from diffqcp.linops import SymmetricOperator, BlockDiag, _sLinearOperator
 
 # TODO: need to check for alternative to distutils, which was deprecated starting in Python 3.12
 
@@ -218,6 +218,7 @@ def _proj_dproj_psd(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperator]:
     -----
     - see BMB'18 for derivative and its derivation
     - TODO: create wrappers and subfunctions and batch computations of same sized PSD cones.
+    - TODO: explain difference between Dproj(x)[dx] implemented here and paper
     """
     assert len(x.shape) == 1, "PSD projection: x must be vectorized."
 
@@ -238,7 +239,7 @@ def _proj_dproj_psd(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperator]:
     proj_x = vec_symm(proj_X)
 
     # k is the index of the last negative eigenvalue
-    # in the 1D, monotonically increasing array of eigenvalues.
+    #   in the 1D, monotonically increasing array of eigenvalues.
     k = (lambd < 0).nonzero(as_tuple=True)[0][-1].item()
     lam_neg = lambd[0:k+1]
     lam_pos = lambd[k+1:]
@@ -310,9 +311,15 @@ def _proj_and_dproj(x: torch.Tensor,
                     cone: str,
                     dual: bool=False
 ) -> tuple[torch.Tensor, lo.LinearOperator]:
+    """
+    Notes
+    -----
+    - The projection onto the power cone is done in `proj_and_dproj` for ease of implementation.
+        (Not worth re-working all of this since the whole codebase will be blown up soon anyway.)
+    """
     if cone == EXP_DUAL:
         cone = EXP
-        dual = not dual
+        dual = not dual        
 
     if cone == ZERO:
         return _proj_dproj_zero(x, dual)
@@ -363,21 +370,34 @@ def proj_and_dproj(x: torch.Tensor,
             continue
 
         for cone_dim in sz:
-
+            
             if cone == POW:
-                # cone_dim is actually the alpha defining K_pow, alpha
+                # cone_dim is actually the alpha defining K_pow
                 if cone_dim < 0:
-                    # dual case
-                    # via Moreau: Pi_K^*(v) = v + Pi_K(-v)
-                    projection[offset:offset+3] = x[offset:offset+3] + proj_power_cone(-x[offset:offset+3], -cone_dim)
-                    # ops.append(deriv)
-                else:
-                    # primal case
-                    projection[offset:offset+3] = proj_power_cone(x[offset:offset+3], cone_dim)
-                    # ops.append(deriv)
+                    cone_dim = -cone_dim
+                    dual = not dual                    
+
+                if not dual:
+                    proj_pow, J = proj_dproj_power_cone(x[offset:offset+3], cone_dim)
+                    projection[offset:offset+3] = proj_pow
+                    ops.append(lo.aslinearoperator(J))
+                if dual:
+                    # via Moreau: Pi_K^*(v) = v + Pi_K(-v),
+                    #   so DPi_K^*(v)[dv] = dv - DPi_K(-v)[dv]
+                    proj_pow, J = proj_dproj_power_cone(-x[offset:offset+3], cone_dim)
+                    projection[offset:offset+3] = x[offset:offset+3] + proj_pow
+                    
+                    def mv(dx: torch.Tensor) -> torch.Tensor:
+                        return dx - J @ dx
+                    
+                    def rv(dx: torch.Tensor) -> torch.Tensor:
+                        return dx - J.T @ dx
+                    
+                    ops.append(_sLinearOperator(n=3, m=3, mv=mv, rv=rv, device=x.device))
+
                 offset += 3
                 continue
-            
+                
             if cone == EXP or cone == EXP_DUAL:
                 cone_dim *= 3
             elif cone == PSD:
@@ -490,10 +510,10 @@ def proj(x,
                 if cone_dim < 0:
                     # dual case
                     # via Moreau: Pi_K^*(v) = v + Pi_K(-v)
-                    projection[offset:offset+3] = x[offset:offset+3] + proj_power_cone(-x[offset:offset+3], -cone_dim)
+                    projection[offset:offset+3] = x[offset:offset+3] + proj_dproj_power_cone(-x[offset:offset+3], -cone_dim)[0]
                 else:
                     # primal case
-                    projection[offset:offset+3] = proj_power_cone(x[offset:offset+3], cone_dim)
+                    projection[offset:offset+3] = proj_dproj_power_cone(x[offset:offset+3], cone_dim)[0]
                 
                 offset += 3
                 continue

@@ -108,7 +108,7 @@ def test_nonneg_least_squares(device):
 
     Notes
     ------
-    dData == (0, dq, 0, 0), and other canonicalization considerations must be made
+    dData == (0, 0, dq, 0), and other canonicalization considerations must be made
     (hence the `data_and_soln_from_cvxpy_problem` function call and associated data declaration.)
     """
 
@@ -141,6 +141,38 @@ def test_nonneg_least_squares(device):
         assert torch.allclose( Dx_q @ dq, dx, atol=1e-8)
 
 
+@pytest.mark.parametrize("device", devices)
+def test_nonneg_least_squares_cvxpy(device):
+    np.random.seed(0)
+    count = 0
+    for _ in range(10):
+        n = np.random.randint(low=10, high=15)
+
+        q_np = np.ones(n)
+
+        x = cp.Variable(n)
+        f0 = 0.5 * cp.sum_squares(x - q_np)
+        problem = cp.Problem(cp.Minimize(f0), [x >= 0])
+
+        data = data_and_soln_from_cvxpy_problem(problem)
+        P_can, A_can = data[0], data[1]
+        q_can, b_can = data[2], data[3]
+        cone_dict, soln = data[4], data[5]
+
+        dP = get_zeros_like(P_can)
+        dA = get_zeros_like(A_can)
+        dq = 1e-2 * np.random.randn(n)
+        dq_tch = to_tensor(dq, dtype=torch.float64, device=device)
+        db = np.zeros(b_can.size)
+        db[0:n] = dq
+        
+        DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
+        # q is canonicalized to b
+        dx, dy, ds = DS(dP, dA, np.zeros(q_can.size), db)
+
+        assert torch.allclose(dq_tch, dx[n:], atol=1e-5)
+        count += 1
+    assert count == 10
 
 @pytest.mark.parametrize("device", devices)
 def test_least_squares_larger(device):

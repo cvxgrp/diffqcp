@@ -187,8 +187,19 @@ def proj_dproj_power_cone(v: torch.Tensor,
         J[2, 0] = J[0, 2]
         J[1, 2] = sign_z * ac_device * rL / gy
         J[2, 1] = J[1, 2]
-    # TODO: add other case 
-    # if z0 
+    if abs_z <= POW_CONE_TOL: # and x, y not equal 0 # TODO (quill): confirm with Part this is OK
+        J = torch.zeros((3, 3), dtype=v.dtype, device=v.device)
+        J[0, 0] = 0.5 * (torch.sign(x0).to(dtype=v.dtype, device=v.device) + 1.0)
+        J[1, 1] = 0.5 * (torch.sign(y0).to(dtype=v.dtype, device=v.device) + 1.0)
+        if (x0 > 0 and y0 < 0 and a_device > 0.5) or (y0 > 0 and x0 < 0 and a_device < 0.5):
+            J[2, 2] = 1
+        elif (x0 > 0 and y0 < 0 and a_device < 0.5) or (y0 > 0 and x0 < 0 and a_device > 0.5):
+            J[2, 2] = 0
+        elif a_device == 0.5 and x0 > 0 and y0 < 0:
+            J[2, 2] = x0 / (2 * torch.abs(y0) + x0)
+        else:
+            J[2, 2] = y0 / (2 * torch.abs(x0) + y0)
+            
     return (out, J)
 
 

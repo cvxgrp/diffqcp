@@ -12,11 +12,13 @@ import cvxpy as cp
 import numpy as np
 import torch
 import pytest
+import linops as lo
 
 import diffqcp.cones as cone_lib
 from diffqcp.pow_cone import proj_dproj_power_cone
 from diffqcp.exp_cone import proj_exp_cone, in_exp, in_exp_dual
 import diffqcp.utils as utils
+from diffqcp.linops import _sLinearOperator, BlockDiag
 
 devices = [torch.device('cpu')]
 if torch.cuda.is_available():
@@ -570,6 +572,60 @@ def test_dproj_exp(device):
         dim = 18*3
         _test_Dproj(cone_lib.EXP, dim, rng, device=device, dual=True)
         _test_Dproj(cone_lib.EXP, dim, rng, device=device, dual=False)
+
+
+@pytest.mark.parametrize("device", devices)
+def test_dproj_pow(device):
+    """JVPs for Dproj onto the POW cone
+    """
+    rng = torch.Generator(device=device).manual_seed(0)
+    np.random.seed(0)
+    for i in range(10):
+        # dimension must be a multiple of 3
+        num_cones = np.random.randint(3, 10)
+        dim = 3 * num_cones
+        x = torch.randn(dim, generator=rng, dtype=torch.float64, device=device)
+        dx = 1e-6 * torch.randn(dim, generator=rng, dtype=torch.float64, device=device)
+        alphas = [np.random.uniform(0, 1) for _ in range(num_cones)]
+        for dual in [True, False]:
+            offset = 0
+            projection = torch.zeros(dim, dtype=torch.float64, device=device)
+            projection_dx = torch.zeros(dim, dtype=torch.float64, device=device)
+            ops = []
+            for alpha in alphas:
+
+                if not dual:
+                    proj_pow, J = proj_dproj_power_cone(x[offset:offset+3], alpha)
+                    proj_pow_dx, _ = proj_dproj_power_cone(x[offset:offset+3] + dx[offset:offset+3],
+                                                        alpha)
+                    projection[offset:offset+3] = proj_pow
+                    projection_dx[offset:offset+3] = proj_pow_dx
+                    ops.append(lo.aslinearoperator(J))
+                if dual:
+                    proj_pow, J = proj_dproj_power_cone(-x[offset:offset+3], alpha)
+                    proj_pow_dx, _ = proj_dproj_power_cone(-x[offset:offset+3] - dx[offset:offset+3],
+                                                           alpha)
+                    projection[offset:offset+3] = x[offset:offset+3] + proj_pow
+                    projection_dx[offset:offset+3] = (x[offset:offset+3] + dx[offset:offset+3]) + proj_pow_dx
+                    
+                    def mv(dx: torch.Tensor) -> torch.Tensor:
+                        return dx - J @ dx
+                    
+                    def rv(dx: torch.Tensor) -> torch.Tensor:
+                        return dx - J.T @ dx
+                    
+                    ops.append(_sLinearOperator(n=3, m=3, mv=mv, rv=rv, device=x.device))
+
+                offset += 3
+            # check where the points lie
+            dproj_fd = projection_dx - projection
+            dproj = BlockDiag(ops) @ dx
+            print("count = ", i)
+            print("autodiff: ", dproj)
+            print("finite differences: ", dproj_fd)
+
+            assert torch.allclose(dproj, dproj_fd, atol=1e-8)
+
 
 
 def test_dprojection():

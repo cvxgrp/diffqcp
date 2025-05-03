@@ -570,8 +570,9 @@ def test_dproj_exp(device):
     for _ in range(10):
         # dimension must be a multiple of 3
         dim = 18*3
-        _test_Dproj(cone_lib.EXP, dim, rng, device=device, dual=True)
         _test_Dproj(cone_lib.EXP, dim, rng, device=device, dual=False)
+        _test_Dproj(cone_lib.EXP, dim, rng, device=device, dual=True)
+        
 
 
 @pytest.mark.parametrize("device", devices)
@@ -587,7 +588,7 @@ def test_dproj_pow(device):
         x = torch.randn(dim, generator=rng, dtype=torch.float64, device=device)
         dx = 1e-6 * torch.randn(dim, generator=rng, dtype=torch.float64, device=device)
         alphas = [np.random.uniform(0, 1) for _ in range(num_cones)]
-        for dual in [True, False]:
+        for dual in [False, True]:
             offset = 0
             projection = torch.zeros(dim, dtype=torch.float64, device=device)
             projection_dx = torch.zeros(dim, dtype=torch.float64, device=device)
@@ -621,6 +622,7 @@ def test_dproj_pow(device):
             dproj_fd = projection_dx - projection
             dproj = BlockDiag(ops) @ dx
             print("count = ", i)
+            print("is dual: ", dual)
             print("autodiff: ", dproj)
             print("finite differences: ", dproj_fd)
 

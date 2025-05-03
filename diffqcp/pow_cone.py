@@ -86,14 +86,6 @@ def in_K_pow_polar(alpha: torch.Tensor,
             z0 * torch.pow(alpha, alpha) * torch.pow(alphac, alphac))
 
 
-def construct_z_not_zero_Jacobian():
-    pass
-
-
-def construct_z_zero_Jacobian():
-    pass
-
-
 def proj_dproj_power_cone(v: torch.Tensor,
                           alpha: float | torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -137,6 +129,28 @@ def proj_dproj_power_cone(v: torch.Tensor,
     if in_K_pow_polar(a_device, ac_device, x0, y0, z0, POW_CONE_TOL_DEV):
         return (torch.zeros(3, dtype=v.dtype, device=v.device), torch.zeros((3, 3), dtype=v.dtype, device=v.device))
 
+    abs_z = torch.abs(z0)
+    
+    if abs_z <= POW_CONE_TOL: # and x, y not equal 0 # TODO (quill): confirm with Part this is OK
+        out = torch.empty_like(v)
+        out[0] = torch.maximum(x0, 0)
+        out[1] = torch.maximum(y0, 0)
+        out[2] = 0
+        
+        J = torch.zeros((3, 3), dtype=v.dtype, device=v.device)
+        J[0, 0] = 0.5 * (torch.sign(x0).to(dtype=v.dtype, device=v.device) + 1.0)
+        J[1, 1] = 0.5 * (torch.sign(y0).to(dtype=v.dtype, device=v.device) + 1.0)
+        if (x0 > 0 and y0 < 0 and a_device > 0.5) or (y0 > 0 and x0 < 0 and a_device < 0.5):
+            J[2, 2] = 1
+        elif (x0 > 0 and y0 < 0 and a_device < 0.5) or (y0 > 0 and x0 < 0 and a_device > 0.5):
+            J[2, 2] = 0
+        elif a_device == 0.5 and x0 > 0 and y0 < 0:
+            J[2, 2] = x0 / (2 * torch.abs(y0) + x0)
+        else:
+            J[2, 2] = y0 / (2 * torch.abs(x0) + y0)
+
+        return (out, J)
+    
     x = torch.tensor(0, dtype=v.dtype, device=v.device)
     y = torch.tensor(0, dtype=v.dtype, device=v.device)
     r = z0 / 2
@@ -162,43 +176,29 @@ def proj_dproj_power_cone(v: torch.Tensor,
     out[1] = y
     out[2] = -r if v[2] < 0 else r
     
-    abs_z = torch.abs(z0)
-    if abs_z > POW_CONE_TOL_DEV:
-        two_r = 2 * r
-        sign_z = torch.sign(z0)
-        gx = g_i(r, x0, z0, a_device)
-        gy = g_i(r, y0, z0, ac_device)
-        frac_x = (a_device * x0) / gx
-        frac_y = (ac_device * y0) / gy
-        T = - ( frac_x + frac_y )
-        L = 2 * abs_z - two_r
-        L /= abs_z + (abs_z - two_r) * (frac_x + frac_y)
-        J = torch.empty((3, 3), dtype=v.dtype, device=v.device)
-        a_device_squared = a_device*a_device
-        alpha_alphac = a_device - a_device_squared
-        gxgy = gx*gy
-        rL = r * L
-        J[0, 0] = 0.5 + x0/(2*gx) + ((a_device_squared) * (abs_z - two_r) * rL ) / (gx*gx)
-        J[1, 1] = 0.5 + y0/(2*gy) + ((ac_device*ac_device) * (abs_z - two_r) * rL ) / (gy*gy)
-        J[2, 2] = r/abs_z + (r/abs_z) * T * L
-        J[0, 1] = rL*alpha_alphac*(abs_z - two_r) / gxgy
-        J[1, 0] = J[0, 1]
-        J[0, 2] = sign_z * a_device * rL / gx
-        J[2, 0] = J[0, 2]
-        J[1, 2] = sign_z * ac_device * rL / gy
-        J[2, 1] = J[1, 2]
-    if abs_z <= POW_CONE_TOL: # and x, y not equal 0 # TODO (quill): confirm with Part this is OK
-        J = torch.zeros((3, 3), dtype=v.dtype, device=v.device)
-        J[0, 0] = 0.5 * (torch.sign(x0).to(dtype=v.dtype, device=v.device) + 1.0)
-        J[1, 1] = 0.5 * (torch.sign(y0).to(dtype=v.dtype, device=v.device) + 1.0)
-        if (x0 > 0 and y0 < 0 and a_device > 0.5) or (y0 > 0 and x0 < 0 and a_device < 0.5):
-            J[2, 2] = 1
-        elif (x0 > 0 and y0 < 0 and a_device < 0.5) or (y0 > 0 and x0 < 0 and a_device > 0.5):
-            J[2, 2] = 0
-        elif a_device == 0.5 and x0 > 0 and y0 < 0:
-            J[2, 2] = x0 / (2 * torch.abs(y0) + x0)
-        else:
-            J[2, 2] = y0 / (2 * torch.abs(x0) + y0)
+    two_r = 2 * r
+    sign_z = torch.sign(z0)
+    gx = g_i(r, x0, z0, a_device)
+    gy = g_i(r, y0, z0, ac_device)
+    frac_x = (a_device * x0) / gx
+    frac_y = (ac_device * y0) / gy
+    T = - ( frac_x + frac_y )
+    L = 2 * abs_z - two_r
+    L /= abs_z + (abs_z - two_r) * (frac_x + frac_y)
+    J = torch.empty((3, 3), dtype=v.dtype, device=v.device)
+    a_device_squared = a_device*a_device
+    alpha_alphac = a_device - a_device_squared
+    gxgy = gx*gy
+    rL = r * L
+    J[0, 0] = 0.5 + x0/(2*gx) + ((a_device_squared) * (abs_z - two_r) * rL ) / (gx*gx)
+    J[1, 1] = 0.5 + y0/(2*gy) + ((ac_device*ac_device) * (abs_z - two_r) * rL ) / (gy*gy)
+    J[2, 2] = r/abs_z + (r/abs_z) * T * L
+    J[0, 1] = rL*alpha_alphac*(abs_z - two_r) / gxgy
+    J[1, 0] = J[0, 1]
+    J[0, 2] = sign_z * a_device * rL / gx
+    J[2, 0] = J[0, 2]
+    J[1, 2] = sign_z * ac_device * rL / gy
+    J[2, 1] = J[1, 2]
             
     return (out, J)
 

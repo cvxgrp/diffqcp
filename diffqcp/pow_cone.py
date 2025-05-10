@@ -29,9 +29,6 @@ def g_i(r: torch.Tensor,
     return 2 * pow_calc_x_i(r, x_i, z0, alpha_i) - x_i
 
 
-def d():
-    pass
-
 def pow_calc_f(x: torch.Tensor,
                y: torch.Tensor,
                r: torch.Tensor,
@@ -124,14 +121,16 @@ def proj_dproj_power_cone(v: torch.Tensor,
     zero = torch.tensor(0, dtype=v.dtype, device=v.device)
 
     if in_K_pow(a_device, ac_device, x0, y0, z0, POW_CONE_TOL_DEV):
+        print("IN POWER CONE") # DEBUG
         return (v, torch.eye(3, dtype=v.dtype, device=v.device))
     
     if in_K_pow_polar(a_device, ac_device, x0, y0, z0, POW_CONE_TOL_DEV):
+        print("IN POLAR POWER CONE") # DEBUG
         return (torch.zeros(3, dtype=v.dtype, device=v.device), torch.zeros((3, 3), dtype=v.dtype, device=v.device))
 
     abs_z = torch.abs(z0)
     
-    if abs_z <= POW_CONE_TOL: # and x, y not equal 0 # TODO (quill): confirm with Part this is OK
+    if abs_z <= POW_CONE_TOL_DEV: # and x0, y0 not equal 0 # TODO (quill): confirm with Part this is OK
         out = torch.empty_like(v)
         out[0] = torch.maximum(x0, 0)
         out[1] = torch.maximum(y0, 0)
@@ -149,6 +148,7 @@ def proj_dproj_power_cone(v: torch.Tensor,
         else:
             J[2, 2] = y0 / (2 * torch.abs(x0) + y0)
 
+        print("IN FIRST COMPLICATED CASE") # DEBUG
         return (out, J)
     
     x = torch.tensor(0, dtype=v.dtype, device=v.device)
@@ -184,7 +184,7 @@ def proj_dproj_power_cone(v: torch.Tensor,
     frac_y = (ac_device * y0) / gy
     T = - ( frac_x + frac_y )
     L = 2 * abs_z - two_r
-    L /= abs_z + (abs_z - two_r) * (frac_x + frac_y)
+    L = L / (abs_z + (abs_z - two_r) * (frac_x + frac_y))
     J = torch.empty((3, 3), dtype=v.dtype, device=v.device)
     a_device_squared = a_device*a_device
     alpha_alphac = a_device - a_device_squared
@@ -199,7 +199,7 @@ def proj_dproj_power_cone(v: torch.Tensor,
     J[2, 0] = J[0, 2]
     J[1, 2] = sign_z * ac_device * rL / gy
     J[2, 1] = J[1, 2]
-            
+    print("IN NEWTON SOLVE CASE") # DEBUG   
     return (out, J)
 
 

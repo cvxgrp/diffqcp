@@ -268,7 +268,6 @@ def torch_data_and_soln_from_cvxpy_problem(problem: cp.Problem,
     return P_tch, A_tch, q_tch, b_tch, cone_dict, soln
 
 
-
 def dottest(Op: lo.LinearOperator,
             rtol: float = 1e-6,
             atol: float = 1e-21,

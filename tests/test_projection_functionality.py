@@ -7,6 +7,9 @@ More specifically, this file contains tests for
 3. and the derivatives of projections onto cones.
 
 Lots of ported tests from diffcp/tests/test_cone_prog_diff.py.
+
+The tests verifying the JVP functionality are almost all done via finite differences.
+The power cone JVP functionality is verified via the gradient descent test.
 """
 import cvxpy as cp
 import numpy as np
@@ -579,6 +582,7 @@ def test_dproj_exp(device):
 def test_dproj_pow(device):
     """JVPs for Dproj onto the POW cone
     """
+    torch.set_printoptions(precision=10)
     rng = torch.Generator(device=device).manual_seed(0)
     np.random.seed(0)
     for i in range(10):
@@ -588,24 +592,49 @@ def test_dproj_pow(device):
         x = torch.randn(dim, generator=rng, dtype=torch.float64, device=device)
         dx = 1e-6 * torch.randn(dim, generator=rng, dtype=torch.float64, device=device)
         alphas = [np.random.uniform(0, 1) for _ in range(num_cones)]
+        print("x = ", x) # DEBUG
+        print("dx = ", dx) # DEBUG
         for dual in [False, True]:
             offset = 0
             projection = torch.zeros(dim, dtype=torch.float64, device=device)
             projection_dx = torch.zeros(dim, dtype=torch.float64, device=device)
             ops = []
-            for alpha in alphas:
+            for i, alpha in enumerate(alphas):
+
+                print(f"=== iteration: i = {i+1} === ") # DEBUG
+                print("alpha = ", alpha)
 
                 if not dual:
+                    point = x[offset:offset+3]
+                    perturbed_point = x[offset:offset+3] + dx[offset:offset+3]
+                    print("point: ", point)
+                    print("perturbed point: ", perturbed_point)
+                    print("are inputs same: ", torch.allclose(point, perturbed_point, atol=1e-8))
+                    
                     proj_pow, J = proj_dproj_power_cone(x[offset:offset+3], alpha)
                     proj_pow_dx, _ = proj_dproj_power_cone(x[offset:offset+3] + dx[offset:offset+3],
                                                         alpha)
+                    print("Jacobian: ", J) # DEBUG
                     projection[offset:offset+3] = proj_pow
                     projection_dx[offset:offset+3] = proj_pow_dx
+                    print("proj pow: ", proj_pow)
+                    print("proj_pow_dx: ", proj_pow_dx)
+                    print("are same in primal: ", torch.allclose(proj_pow, proj_pow_dx))
                     ops.append(lo.aslinearoperator(J))
                 if dual:
+                    print("point: ", -x[offset:offset+3])
+                    print("dx: ", -dx[offset:offset+3])
                     proj_pow, J = proj_dproj_power_cone(-x[offset:offset+3], alpha)
-                    proj_pow_dx, _ = proj_dproj_power_cone(-x[offset:offset+3] - dx[offset:offset+3],
+                    print("Jacobian: ", J) # DEBUG
+
+                    perturbed_point = -x[offset:offset+3] - dx[offset:offset+3]
+                    print("perturbed point: ", perturbed_point)
+                    print("ARE SAME: ", torch.allclose(-x[offset:offset+3], perturbed_point))
+                    proj_pow_dx, _ = proj_dproj_power_cone(perturbed_point,
                                                            alpha)
+                    print("proj pow: ", proj_pow) # DEBUG
+                    print("proj_pow_dx: ", proj_pow_dx)
+                    print("ARE SAME 2: ", torch.allclose(proj_pow, proj_pow_dx))
                     projection[offset:offset+3] = x[offset:offset+3] + proj_pow
                     projection_dx[offset:offset+3] = (x[offset:offset+3] + dx[offset:offset+3]) + proj_pow_dx
                     
@@ -615,12 +644,22 @@ def test_dproj_pow(device):
                     def rv(dx: torch.Tensor) -> torch.Tensor:
                         return dx - J.T @ dx
                     
-                    ops.append(_sLinearOperator(n=3, m=3, mv=mv, rv=rv, device=x.device))
+                    expected_output = mv(dx[offset:offset+3])
+                    print("EXPECTED OUT = ", expected_output)
+
+                    op = _sLinearOperator(n=3, m=3, mv=mv, rv=rv, device=x.device)
+                    print("EXPECTED OUT 2 = ", op@(dx[offset:offset+3]))
+                    print("ops len before add: ", len(ops))
+                    ops.append(op)
+                    print("ops len after add: ", len(ops))
 
                 offset += 3
             # check where the points lie
-            dproj_fd = projection_dx - projection
-            dproj = BlockDiag(ops) @ dx
+            print("projection: ", projection)
+            print("perturbed projection: ", projection_dx)
+            dproj_fd = projection_dx - projection # this is wrong for in pow cone...should be 
+            dproj = BlockDiag(ops, device=device) @ dx
+            print("first out = ", ops[0]@dx[0:3])
             print("count = ", i)
             print("is dual: ", dual)
             print("autodiff: ", dproj)
@@ -657,6 +696,5 @@ def test_dprojection():
                 proj_x, Dproj = cone_lib.proj_and_dproj(x, cones, dual=dual)
                 dx = 1e-6 * torch.randn(size, dtype=torch.float64, device=device)
                 dproj_x = cone_lib.proj_and_dproj(x + dx, cones, dual=dual)[0] - proj_x
-                # Dproj = dprojection(x, cones, dual)
                 
                 assert torch.allclose(Dproj @ dx, dproj_x, atol=1e-8)

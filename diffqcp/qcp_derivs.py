@@ -91,10 +91,6 @@ def dData_Q(u: torch.Tensor,
     u, dP, dA, dq, and db are the exact objects defined in the diffqcp paper.
     Specifically, note that dP should be the true perturbation to the matrix P,
     **not just the upper triangular part.**
-
-    Notes
-    -----
-    Potentially refactor into lo.LinearOperator once we have the adjoint.
     """
     n = dP.shape[0]
     N = n + dA.shape[0] + 1
@@ -117,10 +113,22 @@ def dData_Q_adjoint(u: torch.Tensor,
                     q2: torch.Tensor,
                     q3: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    # what happens with sparse data matrices?
-    # => just linops?
-    # still need to consider how diffcp only calculates required entries.
-    # TODO: this can be used as a helper function for testing, but probably
-    # will have to implement directly in adjoint.
-    # or provide info about sparsity.
-    pass
+    # so take in parameters which specify the entries to fill in.
+    n = q1.shape[0]
+    m = q2.shape[0]
+
+    q1 = q1.reshape((n, 1))
+    q2 = q2.reshape((m, 1))
+
+    x = u[:n].reshape((n, 1))
+    y = u[n:-1].reshape((m, 1))
+    tau = u[-1]
+
+    dP = q1 @ x.T  - (q3 / tau) * x @ x.T
+    dA = y @ q1.T - q2 @ x.T
+    dq = tau * q1 - q3 * x
+    db = tau*q2 - q3 * y
+
+    return (dP, dA, dq, db)
+    
+

@@ -142,6 +142,12 @@ def compute_derivative(P: torch.Tensor | spmatrix,
 
     DTYPE, DEVICE = _get_GPU_settings(P, dtype=dtype, device=device)
 
+    # TODO: will need to consider which sparsity pattern to use: CSC (if provided)
+    #   or CSR (or, in future, COO)
+    # TODO: write down state of sparsity in different libraries
+    # TODO: decide when to use sparsity
+    # TODO: how to handle sparsity between problem solving and differentiating
+    # remember, need to be good for both CPU and GPU 
     P, A, q, b = _convert_problem_data(P, A, q, b, dtype=DTYPE, device=DEVICE)
     P_linop = SymmetricOperator(P.shape[0], P, DEVICE)
 
@@ -174,7 +180,7 @@ def compute_derivative(P: torch.Tensor | spmatrix,
                        ScalarOperator(one)], device=DEVICE)
 
     Dz_Q_Pi_z: lo.LinearOperator = Du_Q(Pi_z, P_linop, A, q, b)
-    M = (Dz_Q_Pi_z @ DPi_z) - DPi_z + lo.IdentityOperator(n + m + 1)
+    F = (Dz_Q_Pi_z @ DPi_z) - DPi_z + lo.IdentityOperator(n + m + 1)
 
     def derivative(dP: torch.Tensor | spmatrix,
                    dA: torch.Tensor | spmatrix,
@@ -193,7 +199,7 @@ def compute_derivative(P: torch.Tensor | spmatrix,
         if torch.allclose(d_DN, torch.tensor(0, dtype=dtype, device=DEVICE)):
             dz = torch.zeros(d_DN.shape[0])
         else:
-            dz = lsqr(M, -d_DN)
+            dz = lsqr(F, -d_DN)
 
         dr, dw, dz_N = dz[:n], dz[n:n+m], dz[-1]
         dx = dr - x * dz_N
@@ -205,6 +211,7 @@ def compute_derivative(P: torch.Tensor | spmatrix,
                 dy: torch.Tensor,
                 ds: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        # assumes same sparsity pattern as
         pass
 
     return derivative

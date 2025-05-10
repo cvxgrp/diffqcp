@@ -11,6 +11,7 @@ allows that respective test to pass.
 yields more accurate derivative approximations (this makes sense when looking
 at the nonlinear transform Q).
 """
+import math
 
 import numpy as np
 import scipy.sparse as sparse
@@ -18,7 +19,7 @@ import torch
 from linops.lsqr import lsqr
 import pytest
 
-from diffqcp.qcp_derivs import Du_Q, dData_Q
+from diffqcp.qcp_derivs import Du_Q, dData_Q, dData_Q_adjoint
 import tests.utils as utils
 from diffqcp.utils import Q
 
@@ -31,7 +32,7 @@ else:
 
 
 @pytest.mark.parametrize("device", devices)
-def test_dData_Q_is_approximation(device):
+def test_Ddata_Q_is_approximation(device):
     """Test implementation of DQ(u) w.r.t. Data.
 
     Taking D in S^n_+ x R^(n x m) x R^n x R^m and a small perturbation
@@ -160,6 +161,46 @@ def test_Du_Q_is_linop(device):
 
         # default dtype of dottest is float64
         assert utils.dottest(deriv_op)
+
+
+@pytest.mark.parametrize("device", devices)
+def test_Ddata_Q_is_linop(device):
+    # can't use linop librarty since cannot taken in arbitrary vectors.
+    np.random.seed(0)
+    rng = torch.Generator(device=device).manual_seed(0)
+
+    for i in range(10):
+        m = np.random.randint(low=10, high=20)
+        n = m + np.random.randint(low=5, high=15)
+        N = n + m + 1
+
+        u = torch.randn(N, generator=rng, dtype=torch.float64, device=device)
+
+        _, dP_op, dA, dq, db = utils.generate_torch_problem_data(n,
+                                                                 m,
+                                                                 sparse.random,
+                                                                 np.random.randn,
+                                                                 dtype=torch.float64,
+                                                                 device=device)
+        dP = dP_op @ torch.eye(n, dtype=torch.float64, device=device)
+        dQ = torch.randn(N, generator=rng, dtype=torch.float64, device=device)
+        dQ1, dQ2, dQ3 = dQ[:n], dQ[n:-1], dQ[-1]
+
+        dDataQ = dData_Q(u=u, dP=dP_op, dA=dA, dq=dq, db=db)
+        deltaP, deltaA, delta_q, delta_b = dData_Q_adjoint(u, dQ1, dQ2, dQ3)
+
+        lhs = ( dQ @ dDataQ ).item()
+        prod1 = torch.trace(dP @ deltaP).item()
+        prod2 = torch.trace(deltaA.T @ dA).item()
+        prod3 = (dq @ delta_q).item()
+        prod4 = (db @ delta_b).item()
+        rhs = prod1 + prod2 + prod3 + prod4
+        print("lhs: ", lhs)
+        print("rhs: ", rhs)
+        assert math.isclose(lhs, rhs, rel_tol=1e-6, abs_tol=1e-21)
+        
+
+# TODO test dData_Q is linop sparse
 
 
 @pytest.mark.parametrize("device", devices)

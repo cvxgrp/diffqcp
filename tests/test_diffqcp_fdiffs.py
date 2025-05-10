@@ -79,6 +79,8 @@ def _test_DS(prob: cp.Problem,
         assert torch.allclose(delta_s, ds, atol=tol)
 
 
+# ==== PASSING ====
+
 def test_least_squares():
     """
     See `test_least_squares_small` for more information.
@@ -137,6 +139,70 @@ def test_least_norm():
         assert False, "test_least_norm was never actually checked"
 
 
+def test_nonneg_cone():
+    """
+    Test DS(data)d_data for the problem
+
+        minimize    c^Tx + ||x||
+        subject to  x >= 0,
+
+    where >= is componentwise.
+    """
+    np.random.seed(0)
+    failed = 0
+    for _ in range(NUM_TRIALS):
+        n = np.random.randint(25, 75)
+        c = np.random.randn(n)
+        
+        x = cp.Variable(n)
+        f0 = c @ x + cp.sum_squares(x)
+        prob = cp.Problem(cp.Minimize(f0), [x >= 0])
+        prob.solve()
+        if prob.status == 'optimal':
+            _test_DS(prob)
+        else:
+            failed += 1
+    
+    if failed == NUM_TRIALS:
+        assert False, "test_nonneg_cone was never actually checked"
+
+
+def test_socp():
+    x = cp.Variable(shape=(3,))
+    y = cp.Variable()
+    soc = cp.constraints.second_order.SOC(y, x)
+    constraints = [soc,
+                   x[0] + x[1] + 3 * x[2] >= 1.0,
+                   y <= 5]
+    obj = cp.Minimize(3 * x[0] + 2 * x[1] + x[2])
+    prob = cp.Problem(obj, constraints)
+    prob.solve()
+    if prob.status == 'optimal':
+        _test_DS(prob)
+    else:
+        assert False, "test_socp wasn't run because problem was infeasible"
+
+
+def test_socp2():
+    """Now with quadratic objective.
+    """
+    x = cp.Variable(shape=(3,))
+    y = cp.Variable()
+    soc = cp.constraints.second_order.SOC(y, x)
+    constraints = [soc,
+                   x[0] + x[1] + 3 * x[2] >= 1.0,
+                   y <= 5]
+    obj = cp.Minimize(3 * x[0]**2 + 2 * x[1] + x[2])
+    prob = cp.Problem(obj, constraints)
+    prob.solve()
+    if prob.status == 'optimal':
+        _test_DS(prob)
+    else:
+        assert False, "test_socp2 wasn't run because problem was infeasible"
+
+
+# ==== FAILING ====
+
 def test_ls_nonneg_cone():
     """
     Test DS(data)d_data for the problem
@@ -177,34 +243,6 @@ def test_ls_nonneg_cone():
         assert False, "test_ls_nonneg_cone was never actually checked"
 
 
-def test_nonneg_cone():
-    """
-    Test DS(data)d_data for the problem
-
-        minimize    c^Tx + ||x||
-        subject to  x >= 0,
-
-    where >= is componentwise.
-    """
-    np.random.seed(0)
-    failed = 0
-    for _ in range(NUM_TRIALS):
-        n = np.random.randint(25, 75)
-        c = np.random.randn(n)
-        
-        x = cp.Variable(n)
-        f0 = c @ x + cp.sum_squares(x)
-        prob = cp.Problem(cp.Minimize(f0), [x >= 0])
-        prob.solve()
-        if prob.status == 'optimal':
-            _test_DS(prob)
-        else:
-            failed += 1
-    
-    if failed == NUM_TRIALS:
-        assert False, "test_nonneg_cone was never actually checked"
-
-
 def test_socp_proj_deriv():
     """
     First iteration of the following fails, but the values are quite close.
@@ -230,40 +268,6 @@ def test_socp_proj_deriv():
             failed += 1
     if failed == NUM_TRIALS:
         assert False, "test_socp_proj_deriv was never actually checked"
-
-
-def test_socp():
-    x = cp.Variable(shape=(3,))
-    y = cp.Variable()
-    soc = cp.constraints.second_order.SOC(y, x)
-    constraints = [soc,
-                   x[0] + x[1] + 3 * x[2] >= 1.0,
-                   y <= 5]
-    obj = cp.Minimize(3 * x[0] + 2 * x[1] + x[2])
-    prob = cp.Problem(obj, constraints)
-    prob.solve()
-    if prob.status == 'optimal':
-        _test_DS(prob)
-    else:
-        assert False, "test_socp wasn't run because problem was infeasible"
-
-
-def test_socp2():
-    """Now with quadratic objective.
-    """
-    x = cp.Variable(shape=(3,))
-    y = cp.Variable()
-    soc = cp.constraints.second_order.SOC(y, x)
-    constraints = [soc,
-                   x[0] + x[1] + 3 * x[2] >= 1.0,
-                   y <= 5]
-    obj = cp.Minimize(3 * x[0]**2 + 2 * x[1] + x[2])
-    prob = cp.Problem(obj, constraints)
-    prob.solve()
-    if prob.status == 'optimal':
-        _test_DS(prob)
-    else:
-        assert False, "test_socp2 wasn't run because problem was infeasible"
 
 
 def test_psd():

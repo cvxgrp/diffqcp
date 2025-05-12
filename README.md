@@ -12,6 +12,7 @@
 ## smaller items
 - remove `matplotlib` from dependencies
 - remember need to be careful finding adjoint of $DQ$ w.r.t. data; inner product for symmetric matrices (vectorization)
+- fix PSD finite differences test (need to pass in a symmetric matrix)
 
 # Running the code
 

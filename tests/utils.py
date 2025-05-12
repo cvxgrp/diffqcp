@@ -324,7 +324,7 @@ def dottest(Op: lo.LinearOperator,
 
 
 @dataclass
-class grad_desc_test_result:
+class GradDescTestResult:
     passed : bool
     num_iterations : int
     final_pt : torch.Tensor
@@ -355,7 +355,7 @@ def grad_desc_test(f_and_Df: Callable[[torch.Tensor],
                    tol: float = 1e-6,
                    step_size: float = 0.1,
                    verbose: bool = False
-) -> grad_desc_test_result:
+) -> GradDescTestResult:
     """Gradient descent test specifically for projecting onto a cone.
 
     Given two distinct points p_target and p0, this function computes
@@ -421,11 +421,11 @@ def grad_desc_test(f_and_Df: Callable[[torch.Tensor],
     if verbose:
         f0_traj = f0s[0:curr_iter]
         del f0s
-        return grad_desc_test_result(passed=optimal, num_iterations=curr_iter,
+        return GradDescTestResult(passed=optimal, num_iterations=curr_iter,
                                      final_pt=pk, final_obj=f0_traj[-1].item(),
                                      verbose=True, obj_traj=f0_traj)
     
-    return grad_desc_test_result(passed=optimal, num_iterations=curr_iter,
+    return GradDescTestResult(passed=optimal, num_iterations=curr_iter,
                                  final_pt=pk, final_obj=f0_pk)
 
 

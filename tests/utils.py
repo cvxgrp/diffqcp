@@ -3,7 +3,8 @@ Helper functions for testing diffqcp derivative and derivative
 atom computations.
 """
 import math
-from typing import Dict, Tuple, List, Union, Callable
+from typing import Dict, Tuple, List, Union, Callable, Optional
+from dataclasses import dataclass
 
 import numpy as np
 import scipy.sparse as sparse
@@ -13,6 +14,7 @@ import clarabel
 from clarabel import DefaultSolution
 import linops as lo
 import torch
+import matplotlib.pyplot as plt
 
 import diffqcp.utils as qcp_utils
 from diffqcp.linops import SymmetricOperator
@@ -319,3 +321,118 @@ def dottest(Op: lo.LinearOperator,
             return False
 
     return True
+
+
+@dataclass
+class grad_desc_test_result:
+    passed : bool
+    num_iterations : int
+    final_pt : torch.Tensor
+    final_obj: float
+    verbose : Optional[bool] = False
+    obj_traj : Optional[torch.Tensor] = None
+
+    def plot_obj_traj(self):
+        if self.obj_traj is None:
+            raise ValueError("obj_traj is None. Cannot plot.")
+
+        # Move obj_traj to CPU if it's on a device
+        obj_traj_cpu = self.obj_traj.cpu().numpy() if self.obj_traj.is_cuda else self.obj_traj.numpy()
+
+        plt.figure(figsize=(8, 6))
+        plt.plot(range(len(obj_traj_cpu)), obj_traj_cpu, label="Objective Trajectory")
+        plt.xlabel("k")
+        plt.ylabel("$f_0(p^{k}) = 0.5 \\| z(p) - z^{\\star} \\|^2$")
+        plt.legend()
+        plt.show()
+
+
+def grad_desc_test(f_and_Df: Callable[[torch.Tensor],
+                                      tuple[torch.Tensor, torch.Tensor | lo.LinearOperator]],
+                   p_target: torch.Tensor,
+                   p0: torch.Tensor,
+                   num_iter: int = 100,
+                   tol: float = 1e-6,
+                   step_size: float = 0.1,
+                   verbose: bool = False
+) -> grad_desc_test_result:
+    """Gradient descent test specifically for projecting onto a cone.
+
+    Given two distinct points p_target and p0, this function computes
+            
+            z^star = projection(p_target) = argmin_z { ||z - p_target||_2 | z in cone } ,
+
+    and then attempts to solve the problem
+    
+        (1) minimize f0(p) = (1/2)||z(p) - z^star||_2^2,
+
+    where z(p) = argmin_z { ||z - p||_2 | z in cone }. Solving (1) can be thought of
+    as "learning" an equivalent projection problem to the one solved to find z^star.
+
+    To attempt to solve (1) we use gradient descent. The gradient of f0 w.r.t. p is
+
+        grad_f0(p) = Dz(p)^T (z(p) - z^star),
+    
+    where Dz(p)^T is the transpose of the Jacobian of the projection of p onto a cone. 
+    
+    Gradient descent steps:
+    1. Descent direction. delta_p = - grad_f0(p)
+    2. Update: p = p + step_size*delta_p.
+
+    Parameters
+    ----------
+    f_and_Df : Callable[[torch.Tensor], tuple[torch.Tensor, torch.Tensor | lo.LinearOperator]]
+        Given a point, returns the projection of that point onto a cone and the Jacobian of the
+        projection onto the cone at that point.
+    p : torch.Tensor
+        The point
+
+    Returns
+    --------
+    grad_desc_test_result
+    """
+    # optimal solution of problem we're learning
+    z_star, _ = f_and_Df(p_target)
+    curr_iter = 0    
+    optimal = False
+    f0 = lambda z_p : 0.5 * torch.linalg.norm(z_p - z_star)**2
+    pk = p0
+
+    if verbose:
+        f0s = torch.zeros(num_iter, dtype=p_target.dtype, device=p_target.device)
+
+    while curr_iter < num_iter:
+
+        z_pk, Dz_pk = f_and_Df(pk)
+        f0_pk = f0(z_pk)
+
+        if verbose:
+            f0s[curr_iter] = f0_pk
+
+        curr_iter += 1
+        
+        if f0_pk < tol:
+            optimal = True
+            break
+
+        delta_p = - Dz_pk.T @ (z_pk - z_star)
+        pk += step_size * delta_p
+    
+    if verbose:
+        f0_traj = f0s[0:curr_iter]
+        del f0s
+        return grad_desc_test_result(passed=optimal, num_iterations=curr_iter,
+                                     final_pt=pk, final_obj=f0_traj[-1].item(),
+                                     verbose=True, obj_traj=f0_traj)
+    
+    return grad_desc_test_result(passed=optimal, num_iterations=curr_iter,
+                                 final_pt=pk, final_obj=f0_pk)
+
+
+
+
+
+
+    
+
+

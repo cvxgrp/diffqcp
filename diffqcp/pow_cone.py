@@ -121,11 +121,11 @@ def proj_dproj_power_cone(v: torch.Tensor,
     zero = torch.tensor(0, dtype=v.dtype, device=v.device)
 
     if in_K_pow(a_device, ac_device, x0, y0, z0, POW_CONE_TOL_DEV):
-        print("IN POWER CONE") # DEBUG
+        # print("IN POWER CONE") # DEBUG
         return (v, torch.eye(3, dtype=v.dtype, device=v.device))
     
     if in_K_pow_polar(a_device, ac_device, x0, y0, z0, POW_CONE_TOL_DEV):
-        print("IN POLAR POWER CONE") # DEBUG
+        # print("IN POLAR POWER CONE") # DEBUG
         return (torch.zeros(3, dtype=v.dtype, device=v.device), torch.zeros((3, 3), dtype=v.dtype, device=v.device))
 
     abs_z = torch.abs(z0)
@@ -148,7 +148,7 @@ def proj_dproj_power_cone(v: torch.Tensor,
         else:
             J[2, 2] = y0 / (2 * torch.abs(x0) + y0)
 
-        print("IN FIRST COMPLICATED CASE") # DEBUG
+        # print("IN FIRST COMPLICATED CASE") # DEBUG
         return (out, J)
     
     x = torch.tensor(0, dtype=v.dtype, device=v.device)
@@ -199,7 +199,7 @@ def proj_dproj_power_cone(v: torch.Tensor,
     J[2, 0] = J[0, 2]
     J[1, 2] = sign_z * ac_device * rL / gy
     J[2, 1] = J[1, 2]
-    print("IN NEWTON SOLVE CASE") # DEBUG   
+    # print("IN NEWTON SOLVE CASE") # DEBUG
     return (out, J)
 
 

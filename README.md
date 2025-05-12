@@ -1,19 +1,17 @@
 # General
-(Update Apr. 5 2025)
-
-**Status.** `diffqcp` is almost ready to be released! Currently, the software is able to compute Jacobian-vector products (JVPs) of quadratic cone programs (QCPs) when $\mathcal{K}$ is an intersection of zero cones, nonnegative cones, second order cones, exponential cones, dual exponential
-cones, and positive semidefinite cones.
+(Update May 11 2025)
 
 # TODOS
 
 ## Next steps
-To publish our paper on arXiv we just need to
-1. Implement the JVPs and derive+implement the vector-Jacobian products (VJPs) for the power cone. **Quill** (will need **Parth** to review math results though)
-2. Implement the adjoint for QCPs. **Quill**
-3. Finish writing Implementation section with newly derived adjoint. **Quill**
-4. Aggregate projection onto cone and associated differential properties in the appendix of main diffqcp paper. **Quill**
-5. Finish rewriting/tidying up arXiv diffqcp pre-print (I think pre-print is the proper term?). **Parth**
-6. Choose a convex problem to use as an example in the paper (like how `diffcp` computes a gradient of some function of a SDP's solution).
+1. More gradient descent testing/debugging, particularly for power cone.
+2. Implement the adjoint for QCPs (just need to consider adding in sparsity to already implemented atom). **Quill**
+3. Add exponential cone info to paper appendix. **Quill**
+4. Paper edits. 
+
+## smaller items
+- remove `matplotlib` from dependencies
+- remember need to be careful finding adjoint of $DQ$ w.r.t. data; inner product for symmetric matrices (vectorization)
 
 # Running the code
 

@@ -13,6 +13,7 @@ dependencies = [
     "numpy<2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
     "numpy>=2.2.3; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     "torch-linops",
+    "matplotlib>=3.10.3",
 ]
 
 [tool.uv.sources]

@@ -45,6 +45,8 @@ if __name__ == '__main__':
     result.plot_obj_traj()
     
     # ==== PSD testing ====
+
+    n = np.random.randint(20, 100)
     
     x = np.random.randn(n, n)
     x = x + x.T
@@ -57,7 +59,7 @@ if __name__ == '__main__':
     x_tch = to_tensor(x, dtype=torch.float64)
     p0 = vec_symm(x_tch)
 
-    result = grad_desc_test(_proj_dproj_psd, p_target, p0, verbose=True, num_iter=500)
+    result = grad_desc_test(_proj_dproj_psd, p_target, p0, verbose=True, num_iter=500, step_size=0.5)
 
     # print("initial point: ", p_target)
     # print("found point: ", result.final_pt)

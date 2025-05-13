@@ -147,6 +147,7 @@ def compute_derivative(P: torch.Tensor | spmatrix,
     # TODO: write down state of sparsity in different libraries
     # TODO: decide when to use sparsity
     # TODO: how to handle sparsity between problem solving and differentiating
+    # TODO: allow sparsity pattern info to persist so don't have to recompute
     # remember, need to be good for both CPU and GPU 
     P, A, q, b = _convert_problem_data(P, A, q, b, dtype=DTYPE, device=DEVICE)
     P_linop = SymmetricOperator(P.shape[0], P, DEVICE)
@@ -191,9 +192,6 @@ def compute_derivative(P: torch.Tensor | spmatrix,
         dP, dA, dq, db = _convert_problem_data(dP, dA, dq, db, dtype=DTYPE, device=DEVICE)
         dP_linop = SymmetricOperator(n, dP, DEVICE)
 
-        # TODO: change dData_Q to return a linop and then move
-        # the creation to outside derivative, and then
-        # call operator here (this will require passing data as single tensor)
         d_DN = dData_Q(Pi_z, dP_linop, dA, dq, db)
 
         if torch.allclose(d_DN, torch.tensor(0, dtype=dtype, device=DEVICE)):
@@ -215,19 +213,3 @@ def compute_derivative(P: torch.Tensor | spmatrix,
         pass
 
     return derivative
-
-
-# Callable[[csc_matrix,
-#           csc_matrix,
-#           np.ndarray,
-#           np.ndarray
-#           ],
-#           tuple[np.ndarray,
-#                 np.ndarray,
-#                 np.ndarray]
-#         ]
-    # The derivative of a primal-dual conic problem at (P, A, q, b)
-    # as an abstract linear operator.
-
-# linops.LinearOperator
-    # The derivative and adjoint of the conic pair at the solution, (x^star, y^star, s^star).

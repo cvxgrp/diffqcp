@@ -50,6 +50,9 @@ def Du_Q(u: torch.Tensor,
 
     Px = P @ x
     xT_P_x = x @ Px
+    # TODO (quill): move this computation out of loop
+    # TODO (quill): create new subroutine so A remains in CSR format since we want it
+    # for matrix-vector multiplies
     AT = sparse_tensor_transpose(A) # If A was in csr format, AT is in csc format.
 
     def mv(du: torch.Tensor) -> torch.Tensor:

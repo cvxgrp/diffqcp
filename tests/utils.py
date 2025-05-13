@@ -384,14 +384,29 @@ def grad_desc_test(f_and_Df: Callable[[torch.Tensor],
     f_and_Df : Callable[[torch.Tensor], tuple[torch.Tensor, torch.Tensor | lo.LinearOperator]]
         Given a point, returns the projection of that point onto a cone and the Jacobian of the
         projection onto the cone at that point.
-    p : torch.Tensor
-        The point
+    p_target : torch.Tensor
+        The point used to generate z^star.
+    p0: torch.Tensor
+        A point != p_target to serve as the initial point when running
+        gradient descent on (1).
+    num_iter : int, optional
+        The number of iterations to run gradient descent on (1) before terminating.
+        Defaults to 100.
+    tol: float, optional
+        Gradient descent will terminate when f0(p) <= tol.
+        Defaults to 1e-6.
+    step_size: float, optional
+        The step size in the gradient descent algorith.
+        Must be greater than 0. Defaults to 0.1
+    verbose: bool, optional
+        Whether to record and return the objective function values
+        associated with the gradient descent iterates.
+        Defaults to False.
 
     Returns
     --------
-    grad_desc_test_result
+    GradDescTestResult
     """
-    # optimal solution of problem we're learning
     z_star, _ = f_and_Df(p_target)
     curr_iter = 0    
     optimal = False

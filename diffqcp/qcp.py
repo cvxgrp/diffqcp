@@ -1,5 +1,5 @@
 """
-Exposes the function `compute_derivative`, which computes the derivative of a QCP.
+TODO: functionality for efficiently evaluating adjoint applied to primal variable only.
 """
 from typing import Callable
 
@@ -14,7 +14,36 @@ from diffqcp.linops import SymmetricOperator, BlockDiag, ScalarOperator
 import diffqcp.cones as cone_utils
 from diffqcp.qcp_derivs import Du_Q, dData_Q
 from diffqcp.utils import to_tensor, _convert_problem_data, _get_GPU_settings
+from diffqcp.problem_data import Data
 
+
+class QCP:
+
+    # allow functionality to reduce computations in "forward pass"?
+    
+    def __init__(self):
+        # same init params as in compute derivative.
+        # use same logic for whether to use cpu or gpu.
+        pass
+
+    # any chance I could JIT jvp or vjp...or at least certain parts?
+    #   since problem data sizes will be fixed
+    #   If I could use proper conditionals and JIT linops lsqr that would
+    #   burn a lot of risk for head-to-head against diffcp.
+    
+    def jvp(self):
+        # would we assume data would be provided in same format?
+        pass
+
+    def vjp(self):
+        pass
+
+    @property
+    def P(self) -> torch.Tensor | SymmetricOperator:
+        return self.data.P
+    
+    # continue wrapping around data
+    #   this way don't force users to interact with multiple objects
 
 def compute_derivative(P: torch.Tensor | spmatrix,
                        A: torch.Tensor | spmatrix,
@@ -34,7 +63,6 @@ def compute_derivative(P: torch.Tensor | spmatrix,
                tuple[torch.Tensor,
                      torch.Tensor,
                      torch.Tensor]]:
-# ) -> lo.LinearOperator:
     r"""Returns the derivative of a cone program as an abstract linear map.
 
     Given a solution (x, y, s) to a quadratic convex cone program
@@ -136,19 +164,9 @@ def compute_derivative(P: torch.Tensor | spmatrix,
         tensor computations.
         - If a device parameter is not provided and P is not a torch.Tensor, then
         the device defaults to None (i.e., the CPU).
-    - TODO(quill): most likely will need to allow users to specify if they want to use
-    sparse matrices...some DL/ML workflows may not support sparsity
     """
 
     DTYPE, DEVICE = _get_GPU_settings(P, dtype=dtype, device=device)
-
-    # TODO: will need to consider which sparsity pattern to use: CSC (if provided)
-    #   or CSR (or, in future, COO)
-    # TODO: write down state of sparsity in different libraries
-    # TODO: decide when to use sparsity
-    # TODO: how to handle sparsity between problem solving and differentiating
-    # TODO: allow sparsity pattern info to persist so don't have to recompute
-    # remember, need to be good for both CPU and GPU 
     P, A, q, b = _convert_problem_data(P, A, q, b, dtype=DTYPE, device=DEVICE)
     P_linop = SymmetricOperator(P.shape[0], P, DEVICE)
 
@@ -204,12 +222,5 @@ def compute_derivative(P: torch.Tensor | spmatrix,
         dy = D_Pi_Kstar_v @ dw - y * dz_N
         ds = D_Pi_Kstar_v @ dw - dw - s * dz_N
         return dx, dy, ds
-    
-    def adjoint(dx: torch.Tensor,
-                dy: torch.Tensor,
-                ds: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        # assumes same sparsity pattern as
-        pass
 
     return derivative

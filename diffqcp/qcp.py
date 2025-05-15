@@ -12,38 +12,268 @@ import clarabel
 
 from diffqcp.linops import SymmetricOperator, BlockDiag, ScalarOperator
 import diffqcp.cones as cone_utils
-from diffqcp.qcp_derivs import Du_Q, dData_Q
+from diffqcp.qcp_derivs import Du_Q_efficient, dData_Q_efficient, Du_Q, dData_Q, dData_Q_adjoint
 from diffqcp.utils import to_tensor, _convert_problem_data, _get_GPU_settings
-from diffqcp.problem_data import Data
+from diffqcp.problem_data import ProblemData
 
 
 class QCP:
+    """Quadratic Cone Program.
 
-    # allow functionality to reduce computations in "forward pass"?
+    Represents the quadratic (convex) cone program given by
+    the primal-dual problems
+
+        (P) minimize    (1/2)x^T P x + q^T x
+            subject to  Ax + s = b
+                        s in K
+
+        (D) minimize    -(1/2)x^T P x - b^T y
+            subject to  A^T y + q = 0
+                        y in K^*,
     
-    def __init__(self):
-        # same init params as in compute derivative.
-        # use same logic for whether to use cpu or gpu.
-        pass
+    where P, A, q, b are mutable problem data, K and K^* are
+    immutable problem data, and (x, y, s) are the optimization
+    variables.
+
+    (IN PROGRESS)
+
+    Attributes 
+    ----------
+    data : ProblemData
+        Holds P, A, AT, q, b, cones, and other (very) useful information
+    x : torch.Tensor
+        Primal solution.
+    y : torch.Tensor
+        Dual solution.
+    s : torch.Tensor
+        Primal slack variable.
+    n : int
+        Size (length) of the vector x.
+    m : int
+        Size (length) of the vectors y and s.
+    N : int
+        Size (length) of the embedding variable (`== n + m + 1`)
+    dtype : torch.dtype
+    device : torch.device
+    reduce_fp_flops: bool
+
+
+    Raises
+    ------
+    
+    """
+
+    __slots__ = ('dtype', 'device', 'data', '_x', '_y', '_s', 'n', 'm', 'N', 'reduce_fp_flops',
+                    '_Pi_Kstar_v', '_D_Pi_kstar_v', '_Pi_z', '_Dpi_z', '_Dz_Q_Pi_z', '_F')
+    
+    def __init__(self,
+                 P: torch.Tensor | spmatrix,
+                 A: torch.Tensor | spmatrix,
+                 q: torch.Tensor | np.ndarray | list[float],
+                 b: torch.Tensor | np.ndarray | list[float],
+                 x: torch.Tensor | np.ndarray | list[float],
+                 y: torch.Tensor | np.ndarray | list[float],
+                 s: torch.Tensor | np.ndarray | list[float],
+                 cone_dict: dict[str, int | list[int]],
+                 P_is_upper: bool,
+                 dtype: torch.dtype | None = None,
+                 device: torch.device | None = None,
+                 reduce_fp_flops: bool = False
+    ) -> None:
+        """
+        
+        Parameters
+        ----------
+        P : torch.Tensor | scipy.sparse.spmatrix
+            The quadratic component of the objective function.
+        x : torch.Tensor | 
+            The primal solution variable.
+        
+        """
+        self.dtype, self.device = _get_GPU_settings(P, dtype=dtype, device=device)
+        self.data = ProblemData(
+            cone_dict=cone_dict, P=P, A=A, q=q, b=b, dtype=self.dtype, device=self.device, P_is_upper=P_is_upper
+        )
+        self._x = to_tensor(x, dtype=self.dtype, device=self.device)
+        self._y = to_tensor(y, dtype=self.dtype, device=self.device)
+        self._s = to_tensor(s, dtype=self.dtype, device=self.device)
+        self.n = x.shape[0]
+        self.m = y.shape[0]
+        self.N = self.n + self.m + 1
+        self.reduce_fp_flops = reduce_fp_flops
+        if not reduce_fp_flops:
+            self.form_atoms()
 
     # any chance I could JIT jvp or vjp...or at least certain parts?
     #   since problem data sizes will be fixed
     #   If I could use proper conditionals and JIT linops lsqr that would
     #   burn a lot of risk for head-to-head against diffcp.
+    # PROBABLY SEE PERFORMANCE BEFORE JIT (will eventually JIT, but may not need to for paper experiment)
     
-    def jvp(self):
-        # would we assume data would be provided in same format?
+    def form_atoms(self) -> None:
+        self._Pi_Kstar_v, self._D_Pi_kstar_v = cone_utils.proj_and_dproj(self._y - self._s, self.data.cones, dual=True)
+        # --- jit this part? ----
+        self._Pi_z = torch.cat((self._x,
+                               self._Pi_Kstar_v,
+                               torch.tensor(1.0, dtype=self.dtype, device=self.device)))
+        self._Dpi_z = BlockDiag([lo.IdentityOperator(self.n),
+                                self._D_Pi_kstar_v,
+                                ScalarOperator(torch.tensor(1.0, dtype=self.dtype, device=self.device))],
+                                device=self.device)
+        self._Dz_Q_Pi_z: lo.LinearOperator = Du_Q_efficient(self._Pi_z, self.data.P, self.data.A, self.data.AT, self.data.q, self.data.b)
+        self._F = (self._Dz_Q_Pi_z @ self._Dpi_z) - self._Dpi_z + lo.IdentityOperator(self.N)
+        # ----------------------
+    
+    def jvp(self,
+            dP: torch.Tensor | spmatrix,
+            dA: torch.Tensor | spmatrix,
+            dq: torch.Tensor | np.ndarray,
+            db: torch.Tensor | np.ndarray
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if self.reduce_fp_flops:
+            self.form_atoms()
+
+        # TODO (quill): data checks; see `problem_data.py`
         pass
 
-    def vjp(self):
+    def vjp(self,
+            dx: torch.Tensor | np.ndarray | list[float],
+            dy: torch.Tensor | np.ndarray | list[float],
+            ds: torch.Tensor | np.ndarray | list[float]
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        if self.reduce_fp_flops:
+            self.form_atoms()
         pass
+    
+    def update(self,
+               P: torch.Tensor | spmatrix,
+               A: torch.Tensor | spmatrix,
+               q: torch.Tensor | np.ndarray | list[float],
+               b: torch.Tensor | np.ndarray | list[float],
+               x: torch.Tensor | np.ndarray | list[float],
+               y: torch.Tensor | np.ndarray | list[float],
+               s: torch.Tensor | np.ndarray | list[float]
+    ) -> None:
+        self.data.P = P
+        self.data.A = A
+        self.data.q = q
+        self.data.b = b
+        self.update_solution(x, y, s)
+    
+    def update_data(self,
+                    P: torch.Tensor | spmatrix,
+                    A: torch.Tensor | spmatrix,
+                    q: torch.Tensor | np.ndarray | list[float],
+                    b: torch.Tensor | np.ndarray | list[float]
+    ) -> None:
+        # TODO (quill): make notes somewhere that
+        #   1. Make note that setting `reduce_fp_flops = True` can reduce overall possible flop count reductions
+        #       if it's possible to not redo all atoms.
+        #   2. assuming a user wouldn't do update_data and update_solution, else you redo some computation (doesn't break things).
+        self.data.P = P
+        self.data.A = A
+        self.data.q = q
+        self.data.b = b
+        
+        if not self.reduce_fp_flops:
+            self._Dz_Q_Pi_z: lo.LinearOperator = Du_Q_efficient(self._Pi_z, self.data.P, self.data.A, self.data.AT, self.data.q, self.data.b)
+            self._F = (self._Dz_Q_Pi_z @ self._Dpi_z) - self._Dpi_z + lo.IdentityOperator(self.N)
 
+
+    def update_solution(self,
+                        x: torch.Tensor | np.ndarray | list[float],
+                        y: torch.Tensor | np.ndarray | list[float],
+                        s: torch.Tensor | np.ndarray | list[float]
+    ) -> None:
+        # TODO: think about adding equality checks to previous values to see if we do need to recompute the projections?
+        self._x = to_tensor(x, dtype=self.dtype, device=self.device)
+        self._y = to_tensor(y, dtype=self.dtype, device=self.device)
+        self._s = to_tensor(s, dtype=self.dtype, device=self.device)
+
+        if not self.reduce_fp_flops:
+            self.form_atoms()
+    
+    def _update_data_dependent_atoms(self):
+        self._Dz_Q_Pi_z: lo.LinearOperator = Du_Q_efficient(self._Pi_z, self.data.P, self.data.A, self.data.AT, self.data.q, self.data.b)
+        self._F = (self._Dz_Q_Pi_z @ self._Dpi_z) - self._Dpi_z + lo.IdentityOperator(self.N)
+    
     @property
     def P(self) -> torch.Tensor | SymmetricOperator:
         return self.data.P
     
-    # continue wrapping around data
-    #   this way don't force users to interact with multiple objects
+    @P.setter
+    def P(self, P):
+        self.data.P = P
+    
+    @property
+    def A(self) -> torch.Tensor | spmatrix:
+        return self.data.A
+
+    @A.setter
+    def A(self, A: torch.Tensor | spmatrix) -> None:
+        self.data.A = A
+        self._update_data_dependent_atoms()
+
+    @property
+    def q(self) -> torch.Tensor | np.ndarray:
+        return self.data.q
+
+    @q.setter
+    def q(self, q: torch.Tensor | np.ndarray) -> None:
+        self.data.q = q
+        self._update_data_dependent_atoms()
+
+    @property
+    def b(self) -> torch.Tensor | np.ndarray:
+        return self.data.b
+
+    @b.setter
+    def b(self, b: torch.Tensor | np.ndarray) -> None:
+        self.data.b = b
+        self._update_data_dependent_atoms()
+
+    @property
+    def x(self) -> torch.Tensor:
+        return self._x
+    
+    @x.setter
+    def x(self, x):
+        self._x = to_tensor(x, self.dtype, self.device)
+
+        if not self.reduce_fp_flops:
+            self._Pi_z = torch.cat((self._x,
+                                self._Pi_Kstar_v,
+                                torch.tensor(1.0, dtype=self.dtype, device=self.device)))
+            self._Dpi_z = BlockDiag([lo.IdentityOperator(self.n),
+                                    self._D_Pi_kstar_v,
+                                    ScalarOperator(torch.tensor(1.0, dtype=self.dtype, device=self.device))],
+                                    device=self.device)
+            self._Dz_Q_Pi_z: lo.LinearOperator = Du_Q_efficient(self._Pi_z, self.data.P, self.data.A, self.data.AT, self.data.q, self.data.b)
+            self._F = (self._Dz_Q_Pi_z @ self._Dpi_z) - self._Dpi_z + lo.IdentityOperator(self.N)
+
+    @property
+    def y(self) -> torch.Tensor:
+        return self._y
+    
+    @y.setter
+    def y(self, y):
+        self._y = to_tensor(y, self.dtype, self.device)
+
+        if not self.reduce_fp_flops:
+            self.form_atoms()
+
+    @property
+    def s(self) -> torch.Tensor:
+        return self._s
+    
+    @s.setter
+    def s(self, s):
+        self._s = to_tensor(s, self.dtype, self.device)
+
+        if not self.reduce_fp_flops:
+            self.form_atoms()
+
+# ====== (below) IN PROCESS OF BEING MOVED INTO THE ABOVE CLASS ======
 
 def compute_derivative(P: torch.Tensor | spmatrix,
                        A: torch.Tensor | spmatrix,

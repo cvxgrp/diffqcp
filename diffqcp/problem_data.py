@@ -5,7 +5,18 @@ from scipy.sparse import spmatrix
 import diffqcp.cones as cone_utils
 from diffqcp.linops import SymmetricOperator
 
-class Data:
+class ProblemData:
+
+    # TODO (quill): remove all nonzeros like done in diffcp
+    # TODO (quill): make sure you know where data about sparse tensor
+    #   is stored (e.g., indices on gpu or cpu?)
+    # TODO (quill): for batching PSD cone, that functionality can probably just go
+    #   in proj_and_dproj() -> instead of looping through PSD cones (or SOCs for that
+    #   matter), pass to wrappers. Potentially useful to do parsing about whether this happens
+    #   here (e.g., which indices in the cone list go with each other)?
+    # TODO (quill): for next phase, need to think about coalescing memory / topics
+    #   like that when considering how to hold data matrices and cone computations on a
+    #   single vecotr.
 
     def __init__(self,
                  cone_dict: dict[str, int | list[int]],
@@ -21,8 +32,10 @@ class Data:
         # I can do?
         self.cones = cone_utils.parse_cone_dict(cone_dict)
         
+        # TODO (quill): can I somehow take advantage of things if P = 0? Use ZeroOperator?
         self.obj_matrix_init(P, P_is_upper)
         self.constr_matrix_init(A)
+        # actually, probably need to do additional to_tensor work on q and b.
         self.q = q
         self.b = b
 
@@ -35,6 +48,8 @@ class Data:
         #   -- save diagonal info needed if want to use only upper triangular part of P
         #       That said, I do think saving whole matrix makes greater since for GPU
         #       computations (or when we care more about reducing flops than memory).
+        
+        
         self.P_is_upper = P_is_upper
     
     def constr_matrix_init(self, A: torch.Tensor | spmatrix) -> None:
@@ -57,3 +72,7 @@ class Data:
     #   don't want to keep extra data around.
     #   At least as long as data is being updated then keeping
     #   around isn't a problem.
+
+    # TODO (quill): Create method which creates data objects (to hold d_data) that utilizes
+    #   our knowledge about the fixed data
+    #   -> called a class method or something like that?

@@ -16,6 +16,7 @@ from diffqcp.qcp_derivs import Du_Q_efficient, dData_Q_efficient, Du_Q, dData_Q,
 from diffqcp.utils import to_tensor, _convert_problem_data, _get_GPU_settings
 from diffqcp.problem_data import ProblemData
 
+# TODO (quill): check carefully where you use .to vs to_tensor
 
 class QCP:
     """Quadratic Cone Program.
@@ -39,7 +40,7 @@ class QCP:
 
     Attributes 
     ----------
-    data : ProblemData
+    data : ProblemData TODO (quill): do I want to expose this to the user or not? 
         Holds P, A, AT, q, b, cones, and other (very) useful information
     x : torch.Tensor
         Primal solution.
@@ -63,22 +64,39 @@ class QCP:
     
     """
 
-    __slots__ = ('dtype', 'device', 'data', '_x', '_y', '_s', 'n', 'm', 'N', 'reduce_fp_flops',
-                    '_Pi_Kstar_v', '_D_Pi_kstar_v', '_Pi_z', '_Dpi_z', '_Dz_Q_Pi_z', '_F')
+    __slots__ = (
+        'dtype',
+        'device',
+        'data',
+        '_x',
+        '_y',
+        '_s',
+        'n',
+        'm',
+        'N',
+        'reduce_fp_flops',
+        '_Pi_Kstar_v',
+        '_D_Pi_kstar_v',
+        '_Pi_z',
+        '_Dpi_z',
+        '_Dz_Q_Pi_z',
+        '_F'
+    )
     
-    def __init__(self,
-                 P: torch.Tensor | spmatrix,
-                 A: torch.Tensor | spmatrix,
-                 q: torch.Tensor | np.ndarray | list[float],
-                 b: torch.Tensor | np.ndarray | list[float],
-                 x: torch.Tensor | np.ndarray | list[float],
-                 y: torch.Tensor | np.ndarray | list[float],
-                 s: torch.Tensor | np.ndarray | list[float],
-                 cone_dict: dict[str, int | list[int]],
-                 P_is_upper: bool,
-                 dtype: torch.dtype | None = None,
-                 device: torch.device | None = None,
-                 reduce_fp_flops: bool = False
+    def __init__(
+        self,
+        P: torch.Tensor | spmatrix,
+        A: torch.Tensor | spmatrix,
+        q: torch.Tensor | np.ndarray | list[float],
+        b: torch.Tensor | np.ndarray | list[float],
+        x: torch.Tensor | np.ndarray | list[float],
+        y: torch.Tensor | np.ndarray | list[float],
+        s: torch.Tensor | np.ndarray | list[float],
+        cone_dict: dict[str, int | list[int]],
+        P_is_upper: bool,
+        dtype: torch.dtype | None = None,
+        device: torch.device | None = None,
+        reduce_fp_flops: bool = False
     ) -> None:
         """
         
@@ -124,11 +142,12 @@ class QCP:
         self._F = (self._Dz_Q_Pi_z @ self._Dpi_z) - self._Dpi_z + lo.IdentityOperator(self.N)
         # ----------------------
     
-    def jvp(self,
-            dP: torch.Tensor | spmatrix,
-            dA: torch.Tensor | spmatrix,
-            dq: torch.Tensor | np.ndarray,
-            db: torch.Tensor | np.ndarray
+    def jvp(
+        self,
+        dP: torch.Tensor | spmatrix,
+        dA: torch.Tensor | spmatrix,
+        dq: torch.Tensor | np.ndarray,
+        db: torch.Tensor | np.ndarray
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if self.reduce_fp_flops:
             self.form_atoms()
@@ -136,23 +155,28 @@ class QCP:
         # TODO (quill): data checks; see `problem_data.py`
         pass
 
-    def vjp(self,
-            dx: torch.Tensor | np.ndarray | list[float],
-            dy: torch.Tensor | np.ndarray | list[float],
-            ds: torch.Tensor | np.ndarray | list[float]
+    def vjp(
+        self,
+        dx: torch.Tensor | np.ndarray | list[float],
+        dy: torch.Tensor | np.ndarray | list[float],
+        ds: torch.Tensor | np.ndarray | list[float]
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Returns dP and dA as tensors in sparse_csr format
+        """
         if self.reduce_fp_flops:
             self.form_atoms()
         pass
     
-    def update(self,
-               P: torch.Tensor | spmatrix,
-               A: torch.Tensor | spmatrix,
-               q: torch.Tensor | np.ndarray | list[float],
-               b: torch.Tensor | np.ndarray | list[float],
-               x: torch.Tensor | np.ndarray | list[float],
-               y: torch.Tensor | np.ndarray | list[float],
-               s: torch.Tensor | np.ndarray | list[float]
+    def update(
+        self,
+        P: torch.Tensor | spmatrix,
+        A: torch.Tensor | spmatrix,
+        q: torch.Tensor | np.ndarray | list[float],
+        b: torch.Tensor | np.ndarray | list[float],
+        x: torch.Tensor | np.ndarray | list[float],
+        y: torch.Tensor | np.ndarray | list[float],
+        s: torch.Tensor | np.ndarray | list[float]
     ) -> None:
         self.data.P = P
         self.data.A = A
@@ -160,11 +184,12 @@ class QCP:
         self.data.b = b
         self.update_solution(x, y, s)
     
-    def update_data(self,
-                    P: torch.Tensor | spmatrix,
-                    A: torch.Tensor | spmatrix,
-                    q: torch.Tensor | np.ndarray | list[float],
-                    b: torch.Tensor | np.ndarray | list[float]
+    def update_data(
+            self,
+            P: torch.Tensor | spmatrix,
+            A: torch.Tensor | spmatrix,
+            q: torch.Tensor | np.ndarray | list[float],
+            b: torch.Tensor | np.ndarray | list[float]
     ) -> None:
         # TODO (quill): make notes somewhere that
         #   1. Make note that setting `reduce_fp_flops = True` can reduce overall possible flop count reductions
@@ -179,11 +204,11 @@ class QCP:
             self._Dz_Q_Pi_z: lo.LinearOperator = Du_Q_efficient(self._Pi_z, self.data.P, self.data.A, self.data.AT, self.data.q, self.data.b)
             self._F = (self._Dz_Q_Pi_z @ self._Dpi_z) - self._Dpi_z + lo.IdentityOperator(self.N)
 
-
-    def update_solution(self,
-                        x: torch.Tensor | np.ndarray | list[float],
-                        y: torch.Tensor | np.ndarray | list[float],
-                        s: torch.Tensor | np.ndarray | list[float]
+    def update_solution(
+            self,
+            x: torch.Tensor | np.ndarray | list[float],
+            y: torch.Tensor | np.ndarray | list[float],
+            s: torch.Tensor | np.ndarray | list[float]
     ) -> None:
         # TODO: think about adding equality checks to previous values to see if we do need to recompute the projections?
         self._x = to_tensor(x, dtype=self.dtype, device=self.device)

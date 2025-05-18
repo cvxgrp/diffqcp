@@ -6,7 +6,7 @@ from numbers import Number
 
 import numpy as np
 import scipy.sparse as sparse
-from scipy.sparse import (csc_matrix, spmatrix, csr_matrix)
+from scipy.sparse import (spmatrix, csc_matrix, csr_matrix, sparray, csc_array, csr_array)
 
 import torch
 import linops as lo
@@ -45,15 +45,16 @@ def to_tensor(
         raise ValueError("Input must be a numpy array, torch tensor, or list.")
     
 
-def to_sparse_csc_tensor(sparse_array : spmatrix,
-                         dtype: torch.dtype = torch.float32,
-                         device: torch.device | None = None
+def to_sparse_csc_tensor(
+        sparse_array : spmatrix | sparray,
+        dtype: torch.dtype = torch.float32,
+        device: torch.device | None = None
 ) -> torch.Tensor:
     """Convert a scipy.sparse.spmatrix to a torch.sparse_csc_matrix.
 
     Parameters
     ----------
-    sparse_array : spmatrix
+    sparse_array : spmatrix | sparray
         Input array
     dtype : torch.dtype, optional
         Data type for the output tensor, by default torch.float32.
@@ -67,18 +68,17 @@ def to_sparse_csc_tensor(sparse_array : spmatrix,
 
     Notes
     -----
+    (old comment)
     Oddly, when calling this function in diffqcp.test_utils.py on a
     scipy.sparse.csc_matrix, the sparse_array within this function was
     a scipy.sparse.coo_matrix. Hence the generic check and then casting to
     csc matrix.
     """
 
-    if isinstance(sparse_array, sparse.spmatrix):
+    if isinstance(sparse_array, spmatrix) or isinstance(sparse_array, sparray):
 
-        if not isinstance(sparse_array, csc_matrix):
-            sparse_array = csc_matrix(sparse_array)
-
-        sparse_array = sparse_array if isinstance(sparse_array, csc_matrix) else csc_matrix(sparse_array)
+        if not isinstance(sparse_array, csc_matrix) or not isinstance(sparse_array, csc_array):
+            sparse_array = csc_array(sparse_array)
 
         ccol_indices = torch.tensor(sparse_array.indptr, dtype=torch.int64, device=device)
         row_indices = torch.tensor(sparse_array.indices, dtype=torch.int64, device=device)
@@ -97,15 +97,16 @@ def to_sparse_csc_tensor(sparse_array : spmatrix,
         raise ValueError("Input must be a scipy sparse matrix in CSC format")
 
 
-def to_sparse_csr_tensor(sparse_array: spmatrix,
-                         dtype: torch.dtype = torch.float32,
-                         device: torch.device | None = None
+def to_sparse_csr_tensor(
+        sparse_array: spmatrix | sparray,
+        dtype: torch.dtype = torch.float32,
+        device: torch.device | None = None
 ) -> torch.Tensor:
     """Convert a scipy.sparse.spmatrix to a torch.sparse_csr_matrix.
 
     Parameters
     ----------
-    sparse_array : spmatrix
+    sparse_array : spmatrix | sparray
         Input array.
     dtype : torch.dtype, optional
         Data type for the output tensor, by default torch.float32.
@@ -118,10 +119,13 @@ def to_sparse_csr_tensor(sparse_array: spmatrix,
         Output tensor in sparse_csr layout.
     """
 
-    if isinstance(sparse_array, spmatrix):
+    if isinstance(sparse_array, spmatrix) or isinstance(sparse_array, sparray):
 
-        sparse_array = sparse_array if isinstance(sparse_array, csr_matrix) else csr_matrix(sparse_array)
+        if not isinstance(sparse_array, csr_matrix) or not isinstance(sparse_array, csr_array):
+            sparse_array = csr_array(sparse_array)
 
+        # TODO (quill): Note the dtype of the indices does matter depending on
+        #   if we want to change LA backend.
         crow_indices = torch.tensor(sparse_array.indptr, dtype=torch.int64, device=device)
         col_indices = torch.tensor(sparse_array.indices, dtype=torch.int64, device=device)
         values = torch.tensor(sparse_array.data, dtype=dtype, device=device)
@@ -331,6 +335,8 @@ def _convert_problem_data(P: torch.Tensor | spmatrix,
                           device: torch.device
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Convenience method to reduce number of lines in `compute_derivative`.
+
+    No longer used.
     """
     if isinstance(P, spmatrix):
         P = to_sparse_csr_tensor(P, dtype, device)

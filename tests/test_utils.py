@@ -92,6 +92,8 @@ def test_to_sparse_csr_tensor(device):
         utils.to_sparse_csc_tensor(P_tch, device=device)
 
 
+# === tests for deprecated functions ===
+
 @pytest.mark.parametrize("device", devices)
 def test_tch_csc_diagonal_extraction(device):
     np.random.seed(0)

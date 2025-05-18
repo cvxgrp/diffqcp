@@ -89,8 +89,9 @@ class SymmetricOperator(lo.LinearOperator):
         -----
         - (to keep in mind) If provided a N-D tensor or a callable that supports batched operations,
         this operator would perform "batched" operations.
-        - TODO: only time a Tensor is passed in is for the data matrix P. Try to compute the cost
+        - TODO (quill): only time a Tensor is passed in is for the data matrix P. Try to compute the cost
             of the instantiation.
+        - TODO (quill): remove lambda v : op @ ... functionality once you have finished your `ProblemData` class
         """
         if isinstance(op, torch.Tensor):
             assert len(op.shape) == 2, "SymmetricOperator: the tensor provided as the operator"\

@@ -195,7 +195,7 @@ def dData_Q(u: torch.Tensor,
             dq: torch.Tensor,
             db: torch.Tensor
 ) -> torch.Tensor:
-    """Jacobian-vector product of Q at (u, data) and d_data.
+    """The Jacobian-vector product D_dataQ(u, data)[data].
 
     More specifically, returns D_data Q(u, data)[d_data], where
     d_data = (dP, dA, dq, db), Q is the nonlinear homogeneous embedding
@@ -230,6 +230,9 @@ def dData_Q_adjoint(u: torch.Tensor,
                     q2: torch.Tensor,
                     q3: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """The vector-Jacobian product D_dataQ(u, data)^T[du].
+    
+    """
     # so take in parameters which specify the entries to fill in.
     n = q1.shape[0]
     m = q2.shape[0]

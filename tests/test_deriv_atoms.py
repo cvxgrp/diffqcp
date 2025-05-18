@@ -30,6 +30,8 @@ if torch.cuda.is_available():
 else:
     print("CUDA is not available; testing solely on CPU.")
 
+# === update these to use AT ===
+
 
 @pytest.mark.parametrize("device", devices)
 def test_Ddata_Q_is_approximation(device):

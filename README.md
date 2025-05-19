@@ -1,6 +1,7 @@
 <h1 align='center'>diffqcp: Differentiating through quadratic cone programs</h1>
 
-`diffqcp` is a Python, [torch](https://github.com/pytorch/pytorch)-backed library that enables forming the derivative
+`diffqcp` is a Python, (for now) [torch](https://github.com/pytorch/pytorch)-backed
+(prototype) library that enables forming the derivative
 of the solution map to a quadratic cone program (QCP) with respect
 to the QCP problem data as an abstract linear operator and computing
 Jacobian-vector products (JVPs) and vector-Jacobian products (VJPs)
@@ -10,26 +11,27 @@ mention somewhere implicit differentiation / exploiting mathematical
 structure.
 
 Existing features include:
-- GPU compatible.
+- **GPU compatible**: `diffqcp` can compute JVPs and VJPs on either CPUs or GPUs.
 - Support for all canonical classes of convex optimization problems, including
     - linear programs (LPs),
     - quadratic programs (QPs),
     - second-order cone programs (SOCPs),
-    - Semidefinite programs
+    - and semidefinite programs.
 - Support for any of the aforementioned programs that also has variables constrained to the exponential cone or power cone.
-- heuristic computation when problem is not differentiable
+- Heuristic JVP and VJP computations when the solution map of a QCP is not differentiable.
 
-In development features will include:
-- batched JVP and VJP
-- JIT compilation
-- integration into/with other frameworks for solving and canonicalization
-- distributed
-- more parallel computations (cones)
-- refactored cones
+In development features include:
+- Batched JVPs and VJPs.
+- JIT compilation.
+- Integration with frameworks that
+    - Canonicalize arbitrary convex optimization problems to QCPs.
+    - Solve QCPs (on CPUs or GPUs).
+- Distributed JVPs and VJPs.
+- Better implementation of projecting onto cones (more parallel compuations and a better interface).
 
 ## Installation
 
-- not going to be releasedon PyPi until more feature complete (still in 0. version), but if you want to use,
+- not going to be released on PyPi until more feature complete (still in 0. version), but if you want to use,
 we recommend using the package manager uv and doing ...
 
 ## Quadratic cone programs

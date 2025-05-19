@@ -9,12 +9,13 @@ import linops as lo
 from diffqcp.utils import sparse_tensor_transpose
 from diffqcp.linops import _sLinearOperator
 
-def Du_Q_efficient(u: torch.Tensor,
-                   P: torch.Tensor | lo.LinearOperator,
-                   A: torch.Tensor,
-                   AT: torch.Tensor,
-                   q: torch.Tensor,
-                   b: torch.Tensor
+def Du_Q_efficient(
+    u: torch.Tensor,
+    P: torch.Tensor | lo.LinearOperator,
+    A: torch.Tensor,
+    AT: torch.Tensor,
+    q: torch.Tensor,
+    b: torch.Tensor
 ) -> lo.LinearOperator:
     """Returns derivative of nonlinear homogeneous embedding w.r.t. u at u.
 
@@ -82,11 +83,12 @@ def Du_Q_efficient(u: torch.Tensor,
     return _sLinearOperator(N, N, mv, rv, device=A.device)
 
 
-def Du_Q(u: torch.Tensor,
-         P: torch.Tensor | lo.LinearOperator,
-         A: torch.Tensor,
-         q: torch.Tensor,
-         b: torch.Tensor
+def Du_Q(
+    u: torch.Tensor,
+    P: torch.Tensor | lo.LinearOperator,
+    A: torch.Tensor,
+    q: torch.Tensor,
+    b: torch.Tensor
 ) -> lo.LinearOperator:
     """Returns derivative of nonlinear homogeneous embedding w.r.t. u at u.
 
@@ -153,12 +155,13 @@ def Du_Q(u: torch.Tensor,
     return _sLinearOperator(N, N, mv, rv, device=A.device)
 
 
-def dData_Q_efficient(u: torch.Tensor,
-                     dP: torch.Tensor | lo.LinearOperator,
-                     dA: torch.Tensor,
-                     dAT: torch.Tensor,
-                     dq: torch.Tensor,
-                     db: torch.Tensor
+def dData_Q_efficient(
+    u: torch.Tensor,
+    dP: torch.Tensor | lo.LinearOperator,
+    dA: torch.Tensor,
+    dAT: torch.Tensor,
+    dq: torch.Tensor,
+    db: torch.Tensor
 ) -> torch.Tensor:
     """Jacobian-vector product of Q at (u, data) and d_data.
 
@@ -225,10 +228,43 @@ def dData_Q(u: torch.Tensor,
     return out
 
 
-def dData_Q_adjoint(u: torch.Tensor,
-                    q1: torch.Tensor,
-                    q2: torch.Tensor,
-                    q3: torch.Tensor,
+def dData_Q_adjoint_efficient(
+    u: torch.Tensor,
+    q1: torch.Tensor,
+    q2: torch.Tensor,
+    q3: torch.Tensor,
+    P_rows: torch.Tensor,
+    P_cols: torch.Tensor,
+    A_rows: torch.Tensor,
+    A_cols: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """The vector-Jacobian product D_dataQ(u, data)^T[du].
+    
+    """
+    # so take in parameters which specify the entries to fill in.
+    n = q1.shape[0]
+    m = q2.shape[0]
+
+    q1 = q1.reshape((n, 1))
+    q2 = q2.reshape((m, 1))
+
+    x = u[:n].reshape((n, 1))
+    y = u[n:-1].reshape((m, 1))
+    tau = u[-1]
+
+    # dP = q1 @ x.T  - (q3 / tau) * x @ x.T
+    dP = x @ q1.T  - (q3 / tau) * x @ x.T
+    dA = y @ q1.T - q2 @ x.T
+    dq = tau * q1 - q3 * x
+    db = tau*q2 - q3 * y
+
+    return (dP, dA, dq, db)
+
+def dData_Q_adjoint(
+    u: torch.Tensor,
+    q1: torch.Tensor,
+    q2: torch.Tensor,
+    q3: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """The vector-Jacobian product D_dataQ(u, data)^T[du].
     

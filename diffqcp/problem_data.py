@@ -297,7 +297,7 @@ class ProblemData:
     def P(self) -> torch.Tensor | SymmetricOperator:
         return self._P
     
-    @property.setter
+    @P.setter
     def P(self, P) -> None:
         if isinstance(P, spmatrix) or isinstance(P, sparray):
             P = to_sparse_csr_tensor(P, dtype=self.dtype, device=self.device)

@@ -280,8 +280,9 @@ def dData_Q_adjoint(
     y = u[n:-1].reshape((m, 1))
     tau = u[-1]
 
+    dP = 0.5 * (x @ q1.T + q1 @ x.T)  - (q3 / tau) * x @ x.T
     # dP = q1 @ x.T  - (q3 / tau) * x @ x.T
-    dP = x @ q1.T  - (q3 / tau) * x @ x.T
+    # dP = x @ q1.T  - (q3 / tau) * x @ x.T
     dA = y @ q1.T - q2 @ x.T
     dq = tau * q1 - q3 * x
     db = tau*q2 - q3 * y

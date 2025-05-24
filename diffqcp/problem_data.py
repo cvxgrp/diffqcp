@@ -45,6 +45,8 @@ class ProblemData:
         'P_nonzero_mask',
         'P_rows',
         'P_cols',
+        'Pcrow_indices',
+        'Pcol_indices',
         'PT_perm',
         'P_diag_mask',
         'self.P_diag_indices',
@@ -55,6 +57,8 @@ class ProblemData:
         'A_nonzero_mask',
         'A_rows',
         'A_cols',
+        'Acrow_indices',
+        'Acol_indices',
         'AT_perm',
         'Acrow_indices_T',
         'Acol_indices_T'
@@ -71,8 +75,7 @@ class ProblemData:
         device: torch.device,
         P_is_upper: bool = True,
     ) -> None:
-        # for cone info, is there any more pre-computation
-        # I can do?
+        # for cone info, is there any more pre-computation I can do?
         self.dtype = dtype
         self.device = device
         self.cones = cone_utils.parse_cone_dict(cone_dict)
@@ -85,10 +88,9 @@ class ProblemData:
         self.obj_matrix_init(P, P_is_upper)
         self.constr_matrix_init(A)
         
-
     def obj_matrix_init(
         self,
-        P: torch.Tensor,
+        P: torch.Tensor | spmatrix | sparray,
         P_is_upper: bool
     ) -> None:
         """
@@ -138,6 +140,8 @@ class ProblemData:
 
             P_clean = torch.sparse_coo_tensor(indices, values, size=P.shape).coalesce()
             P = to_sparse_csr_tensor(P_clean).to(dtype=self.dtype, device=self.device)
+            self.Pcrow_indices = P.crow_indices()
+            self.Pcol_indices = P.col_indices()
 
             if self.P_is_upper:
                 rows_T, cols_T = cols, rows
@@ -257,6 +261,8 @@ class ProblemData:
             # A_clean is on whatever device A was allocated on.
             A_clean = torch.sparse_coo_tensor(indices, values, size=A.shape).coalesce()
             self._A = A_clean.to_sparse_csr().to(dtype=self.dtype, device=self.device)
+            self.Acrow_indices = self._A.crow_indices()
+            self.Acol_indices = self._A.col_indices()
 
             rows_T, cols_T = cols, rows
             transposed_idx = rows_T * A.shape[0] + cols_T

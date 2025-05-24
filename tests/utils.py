@@ -63,8 +63,11 @@ def generate_problem_data(n: int,
     assert density > 0
     assert density <= 0.5
 
-    P = sparse_randomness(n, n, density=density)
-    P = P.T @ P
+    # P = sparse.t
+    P = sparse.triu(sparse_randomness(n, n, density=density))
+
+    # P = sparse_randomness(n, n, density=density)
+    # P = P.T @ P
     P = csr_matrix(P)
     A = sparse_randomness(m, n, density=density)
     A = csr_matrix(A)
@@ -246,18 +249,21 @@ def data_and_soln_from_cvxpy_problem(problem: cp.Problem,
     return P, A, q, b, scs_cone_dict, soln, clarabel_cones
 
 
-def torch_data_and_soln_from_cvxpy_problem(problem: cp.Problem,
-                                           dtype: torch.dtype = torch.float64,
-                                           device: torch.device | None = None
-) -> Tuple[torch.Tensor,
-           torch.Tensor,
-           torch.Tensor,
-           torch.Tensor,
-           Dict[str,
-                Union[int, List[int]]
-               ],
-            DefaultSolution
-]:
+def torch_data_and_soln_from_cvxpy_problem(
+    problem: cp.Problem,
+    dtype: torch.dtype = torch.float64,
+    device: torch.device | None = None
+) -> Tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        Dict[
+            str,
+            Union[int, List[int]]
+        ],
+        DefaultSolution
+    ]:
     result = data_and_soln_from_cvxpy_problem(problem)
     P, A, q, b, cone_dict, soln = result
     # note that P is the upper triangular part of the symmetric P

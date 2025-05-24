@@ -1,4 +1,6 @@
 import torch
+import numpy as np
+import scipy.sparse as sparse
 
 from diffqcp.problem_data import ProblemData
 
@@ -8,12 +10,24 @@ if torch.cuda.is_available():
 
 # Put problem data here to use?
 
+# What do I need to test here?
+# For objective matrix
+
+# Generate a sparse, symmetric matrix
+# Generate a sparse m x n matrix
+# Generate p and q arrays
+# Just use an empty cone dictionary
+# One probdata that uses full P and one that does not.
+
+
 @pytest.mark.parametrize("device", devices)
 def test_obj_matrix_init(self):
-    helper = SparseHelper()
+    # helper = SparseHelper()
     indices = torch.tensor([[0, 0, 1, 2, 2], [0, 2, 1, 1, 2]])
     values = torch.tensor([1.0, 0.0, 3.0, 4.0, 5.0])
     P = torch.sparse_coo_tensor(indices, values, size=(3, 3))
+
+
 
     helper.obj_matrix_init(P, P_is_upper=True)
 

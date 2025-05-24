@@ -230,62 +230,74 @@ def dData_Q(u: torch.Tensor,
 
 def dData_Q_adjoint_efficient(
     u: torch.Tensor,
-    q1: torch.Tensor,
-    q2: torch.Tensor,
-    q3: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    w3: torch.Tensor,
     P_rows: torch.Tensor,
     P_cols: torch.Tensor,
+    Pcrow_indices: torch.Tensor,
+    Pcol_indices: torch.Tensor,
     A_rows: torch.Tensor,
-    A_cols: torch.Tensor
+    A_cols: torch.Tensor,
+    Acrow_indices: torch.Tensor,
+    Acol_indices: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """The vector-Jacobian product D_dataQ(u, data)^T[du].
     
     """
     # so take in parameters which specify the entries to fill in.
-    n = q1.shape[0]
-    m = q2.shape[0]
+    n = w1.shape[0]
+    m = w2.shape[0]
 
-    q1 = q1.reshape((n, 1))
-    q2 = q2.reshape((m, 1))
+    w1 = w1.reshape((n, 1))
+    w2 = w2.reshape((m, 1))
 
     x = u[:n].reshape((n, 1))
     y = u[n:-1].reshape((m, 1))
     tau = u[-1]
 
-    # dP = q1 @ x.T  - (q3 / tau) * x @ x.T
-    dP = x @ q1.T  - (q3 / tau) * x @ x.T
-    dA = y @ q1.T - q2 @ x.T
-    dq = tau * q1 - q3 * x
-    db = tau*q2 - q3 * y
+    dP_values = (0.5 * ( w1[P_rows] * x[P_cols] + x[P_rows] * w1[P_cols] )
+                 - (w3 / tau) * x[P_rows] * x[P_cols])
+    dA_values = y[A_rows] * w1[A_cols] - w2[A_rows] * x[A_cols]
+
+    # question: what happens when P is upper triangular
+    #  -> should just work: we'll only get upper triangular values.
+    dP = torch.sparse_csr_tensor(
+        Pcrow_indices, Pcol_indices, dP_values, size=(n,n), dtype=u.dtype, device=u.device
+    )
+    dA = torch.sparse_csr_tensor(
+        Acrow_indices, Acol_indices, dA_values, size=(m,n), dtype=u.dtype, device=u.device
+    )
+
+    dq = tau * w1 - w3 * x
+    db = tau*w2 - w3 * y
 
     return (dP, dA, dq, db)
 
 def dData_Q_adjoint(
     u: torch.Tensor,
-    q1: torch.Tensor,
-    q2: torch.Tensor,
-    q3: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    w3: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """The vector-Jacobian product D_dataQ(u, data)^T[du].
     
     """
     # so take in parameters which specify the entries to fill in.
-    n = q1.shape[0]
-    m = q2.shape[0]
+    n = w1.shape[0]
+    m = w2.shape[0]
 
-    q1 = q1.reshape((n, 1))
-    q2 = q2.reshape((m, 1))
+    w1 = w1.reshape((n, 1))
+    w2 = w2.reshape((m, 1))
 
     x = u[:n].reshape((n, 1))
     y = u[n:-1].reshape((m, 1))
     tau = u[-1]
 
-    dP = 0.5 * (x @ q1.T + q1 @ x.T)  - (q3 / tau) * x @ x.T
-    # dP = q1 @ x.T  - (q3 / tau) * x @ x.T
-    # dP = x @ q1.T  - (q3 / tau) * x @ x.T
-    dA = y @ q1.T - q2 @ x.T
-    dq = tau * q1 - q3 * x
-    db = tau*q2 - q3 * y
+    dP = 0.5 * (x @ w1.T + w1 @ x.T)  - (w3 / tau) * x @ x.T
+    dA = y @ w1.T - w2 @ x.T
+    dq = tau * w1 - w3 * x
+    db = tau*w2 - w3 * y
 
     return (dP, dA, dq, db)
     

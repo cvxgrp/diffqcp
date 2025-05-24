@@ -192,6 +192,11 @@ def sparse_csr_tensor_diag(X: torch.Tensor) -> torch.Tensor:
     -------
     torch.Tensor
         The 1-D diagonal tensor of X.
+
+    Notes
+    -----
+    This function is deprecated and should not be used anywhere in the codebase.
+    (It's far too slow to run on a GPU.)
     """
 
     assert len(X.shape) == 2

@@ -4,7 +4,7 @@ TODO: functionality for efficiently evaluating adjoint applied to primal variabl
 from typing import Callable
 
 import numpy as np
-from scipy.sparse import spmatrix
+from scipy.sparse import spmatrix, sparray
 import torch
 import linops as lo
 from linops.lsqr import lsqr
@@ -12,7 +12,7 @@ import clarabel
 
 from diffqcp.linops import SymmetricOperator, BlockDiag, ScalarOperator
 import diffqcp.cones as cone_utils
-from diffqcp.qcp_derivs import Du_Q_efficient, dData_Q_efficient, Du_Q, dData_Q, dData_Q_adjoint
+from diffqcp.qcp_derivs import Du_Q_efficient, dData_Q_efficient, Du_Q, dData_Q, dData_Q_adjoint_efficient
 from diffqcp.utils import to_tensor, _convert_problem_data, _get_GPU_settings
 from diffqcp.problem_data import ProblemData
 
@@ -85,8 +85,8 @@ class QCP:
     
     def __init__(
         self,
-        P: torch.Tensor | spmatrix,
-        A: torch.Tensor | spmatrix,
+        P: torch.Tensor | spmatrix | sparray,
+        A: torch.Tensor | spmatrix | sparray,
         q: torch.Tensor | np.ndarray | list[float],
         b: torch.Tensor | np.ndarray | list[float],
         x: torch.Tensor | np.ndarray | list[float],
@@ -127,6 +127,8 @@ class QCP:
     #   If I could use proper conditionals and JIT linops lsqr that would
     #   burn a lot of risk for head-to-head against diffcp.
     # PROBABLY SEE PERFORMANCE BEFORE JIT (will eventually JIT, but may not need to for paper experiment)
+
+    # TODO: what happens if the reduce flops flag is changed by user
     
     def form_atoms(self) -> None:
         self._Pi_Kstar_v, self._D_Pi_kstar_v = cone_utils.proj_and_dproj(self._y - self._s, self.data.cones, dual=True)
@@ -193,7 +195,12 @@ class QCP:
         else:
             d_data_N = lsqr(self._F.T, -dz)
 
-
+        return dData_Q_adjoint_efficient(
+            self._Pi_z, d_data_N[:self.n], d_data_N[self.n:self.n+self.m], d_data_N[-1],
+            P_rows=self.data.P_rows, P_cols=self.data.P_cols, Pcrow_indices=self.data.Pcrow_indices,
+            Pcol_indices=self.data.Pcol_indices, A_rows=self.data.A_rows, A_cols=self.data.A_cols,
+            Acrow_indices=self.data.Acrow_indices, Acol_indices=self.data.Acol_indices
+        )
     
     def update(
         self,

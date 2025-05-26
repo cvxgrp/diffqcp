@@ -94,8 +94,10 @@ def test_Ddata_Q_is_approximation_efficient(device):
     rng = torch.Generator(device=device).manual_seed(0)
 
     for i in range(10):
-        m = np.random.randint(low=10, high=20)
-        n = m + np.random.randint(low=5, high=15)
+        # m = np.random.randint(low=10, high=20)
+        # n = m + np.random.randint(low=5, high=15)
+        n = np.random.randint(low=10, high=20)
+        m = n + np.random.randint(low=5, high=15)
         N = n + m + 1
 
         P, _, A, _, q, b = utils.generate_torch_problem_data_new(n, m, sparse.random_array,
@@ -332,6 +334,8 @@ def test_Du_Q_lsqr_new(device):
     for i in range(10):
         m = np.random.randint(low=10, high=20)
         n = m + np.random.randint(low=5, high=15)
+        # n = np.random.randint(low=10, high=20)
+        # m = n + np.random.randint(low=5, high=15)
         N = n + m + 1
 
         P, _, A, AT, q, b = utils.generate_torch_problem_data_new(n, m, sparse.random_array,

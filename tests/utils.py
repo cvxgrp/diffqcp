@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 
 import diffqcp.utils as qcp_utils
 from diffqcp.linops import SymmetricOperator
+import diffqcp.cones as cone_utils
 
 def get_transpose(
     A: csr_matrix | csr_array | torch.Tensor, return_tensor: bool=False,
@@ -63,6 +64,12 @@ def get_sparse_information(X: torch.Tensor):
 
 
 def form_full_symmetric(P_upper: np.ndarray) -> np.ndarray:
+    """
+    Parameters
+    ----------
+    P_upper: np.ndarray
+        Should be a dense 2D array that is only the upper triangular part of `P`.
+    """
     P_diag = np.diag(P_upper, k=0)
     P_diag = np.diag(P_diag) # create diagonal matrix
     P = P_upper + P_upper.T - P_diag
@@ -70,9 +77,11 @@ def form_full_symmetric(P_upper: np.ndarray) -> np.ndarray:
 
 def generate_problem_data_new(
     n: int, m: int, sparse_random_array: Callable[[tuple[int, int], int], sparray],
-    random_array: Callable[[int], np.ndarray], density: float=0.2
+    random_array: Callable[[int], np.ndarray], density: float=0.2, P_psd: bool=False
 ) -> tuple[csr_array, csr_array, csr_array, np.ndarray, np.ndarray]:
     r"""Randomly generates theta in Theta (as defined in diffqcp paper).
+
+    Optionally make P PSD.
 
     Parameters
     ----------
@@ -111,11 +120,18 @@ def generate_problem_data_new(
     assert density > 0
     assert density < 0.25
 
-    upper_P = sparse.triu(sparse_random_array(shape=(n, n), density=density, format = 'coo'))
-    upper_P = upper_P.todense()
-    P = form_full_symmetric(upper_P)
-    upper_P = csr_array(upper_P)
-    P = csr_array(P)
+    if not P_psd:
+        upper_P = sparse.triu(sparse_random_array(shape=(n, n), density=density, format = 'coo'))
+        upper_P = upper_P.todense()
+        P = form_full_symmetric(upper_P)
+        upper_P = csr_array(upper_P)
+        P = csr_array(P)
+    else:
+        P = sparse_random_array(shape=(n, n), density=density, format = 'coo')
+        P = P.todense()
+        P = P @ P.T
+        upper_P = csr_array(sparse.triu(P))
+        P = csr_array(P)
 
     A = sparse_random_array(shape=(m, n), density=density*2)
     A = csr_array(A)
@@ -618,10 +634,20 @@ def grad_desc_test(f_and_Df: Callable[[torch.Tensor],
                                  final_pt=pk, final_obj=f0_pk)
 
 
+def random_qcp(m, n, cone_dict, random_sparse_array, random_array):
+    """Returns the problem data of a random cone program."""
+    cone_list = cone_utils.parse_cone_dict(cone_dict)
 
-
-
-
+    P, P_upper, A, q, b = generate_problem_data_new(n, m, random_sparse_array, random_array, P_psd=True)
+    del q
+    del b
     
-
-
+    z = random_array(m)
+    z_tch = qcp_utils.to_tensor(z)
+    s_star_tch, _ = cone_utils.proj_and_dproj(z_tch, cone_list, dual=False)
+    s_star = s_star_tch.cpu().numpy()
+    y_star = s_star - z
+    x_star = random_array(n)
+    b = A @ x_star + s_star
+    q = - P @ x_star - A.T @ y_star
+    return P, P_upper, A, q, b

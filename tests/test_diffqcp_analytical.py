@@ -14,11 +14,12 @@ import scipy.sparse as sparse
 import cvxpy as cp
 import torch
 import pytest
+import clarabel
 
 import diffqcp.qcp as cone_prog
 from diffqcp.qcp import QCP
 from diffqcp.utils import to_tensor
-from tests.utils import data_and_soln_from_cvxpy_problem, get_zeros_like, get_random_like
+from tests.utils import data_and_soln_from_cvxpy_problem, get_zeros_like, get_random_like, form_full_symmetric, random_qcp
 
 devices = [torch.device('cpu')]
 if torch.cuda.is_available():
@@ -247,6 +248,66 @@ def test_nonneg_least_squares_cvxpy(device):
         assert torch.allclose(dq_tch, dx[n:], atol=1e-5)
         count += 1
     assert count == 10
+
+@pytest.mark.parametrize("device", devices)
+def test_nonneg_least_squares_cvxpy_class_version(device):
+    np.random.seed(0)
+    count = 0
+    for _ in range(10):
+        n = np.random.randint(low=10, high=15)
+
+        q_np = np.ones(n)
+
+        x = cp.Variable(n)
+        f0 = 0.5 * cp.sum_squares(x - q_np)
+        problem = cp.Problem(cp.Minimize(f0), [x >= 0])
+
+        data = data_and_soln_from_cvxpy_problem(problem)
+        P_can, A_can = data[0], data[1]
+        q_can, b_can = data[2], data[3]
+        cone_dict, soln = data[4], data[5]
+
+        dP = get_zeros_like(P_can)
+        dA = get_zeros_like(A_can)
+        dq = 1e-2 * np.random.randn(n)
+        dq_tch = to_tensor(dq, dtype=torch.float64, device=device)
+        db = np.zeros(b_can.size)
+        db[0:n] = dq
+        
+        P_full = form_full_symmetric(P_can.todense())
+        P_full = sparse.csr_array(P_full)
+
+        x = np.array(soln.x)
+        y = np.array(soln.z)
+        s = np.array(soln.s)
+        # Form four QCPs
+        #   1. P only upper triangular and forming atoms when construct
+        #   2. P only upper triangular and forming atoms when computing jvp.
+        #   3. Materialized P and forming atoms when construct
+        #   4. Materialized P and forming atoms when computing jvp.
+        qcp1 = QCP(P_can, A_can, q_can, b_can, x, y, s, cone_dict, P_is_upper=True, dtype=torch.float64, device=device)
+        qcp2 = QCP(P_can, A_can, q_can, b_can, x, y, s, cone_dict, P_is_upper=True, dtype=torch.float64, device=device, reduce_fp_flops=True)
+        qcp3 = QCP(P_full, A_can, q_can, b_can, x, y, s, cone_dict, P_is_upper=False, dtype=torch.float64, device=device)
+        qcp4 = QCP(P_full, A_can, q_can, b_can, x, y, s, cone_dict, P_is_upper=False, dtype=torch.float64, device=device, reduce_fp_flops=True)
+
+        # q is canonicalized to b
+        dx, _, _ = qcp1.jvp(dP, dA, np.zeros(q_can.size), db)
+        assert torch.allclose(dq_tch, dx[n:], atol=1e-5)
+
+        dx, _, _ = qcp2.jvp(dP, dA, np.zeros(q_can.size), db)
+        assert torch.allclose(dq_tch, dx[n:], atol=1e-5)
+
+        dP = get_zeros_like(P_full)
+
+        dx, _, _ = qcp3.jvp(dP, dA, np.zeros(q_can.size), db)
+        assert torch.allclose(dq_tch, dx[n:], atol=1e-5)
+
+        dx, _, _ = qcp4.jvp(dP, dA, np.zeros(q_can.size), db)
+        assert torch.allclose(dq_tch, dx[n:], atol=1e-5)        
+        
+        count += 1
+    assert count == 10
+
 
 @pytest.mark.parametrize("device", devices)
 def test_least_squares_larger(device):
@@ -514,3 +575,49 @@ def test_dprojection_exp(device):
     print("diff: ", diff)
     # assert diff < 1e-6 # fails
     # np.testing.assert_allclose(analytical[0] * dlam, (dx[0]).item(), atol=1e-8) # passes
+
+@pytest.mark.parametrize("device", devices)
+def test_adjoint_cvxbook_sensitivity_easy(device):
+
+    K = {
+        'z' : 3,
+        'l' : 3,
+        'q' : [5]
+    }
+
+    K_clarabel = [ # TODO (quill): helper function mapping SCS <-> Clarabel
+        clarabel.ZeroConeT(3),
+        clarabel.NonnegativeConeT(3),
+        clarabel.SecondOrderConeT(5)
+    ]
+
+    m = 3 + 3 + 5
+    n = 5
+
+    np.random.seed(0)
+
+    P, P_upper, A, q, b = random_qcp(m, n, K, sparse.random_array, np.random.randn)
+
+    P_upper_csc = sparse.csc_matrix(P_upper)
+    A_csc = sparse.csc_matrix(A)
+    
+    solver_settings = clarabel.DefaultSettings()
+    solver_settings.verbose = False
+    solver = clarabel.DefaultSolver(P_upper_csc, q, A_csc, b, K_clarabel, solver_settings)
+    solution = solver.solve()
+
+    x = np.array(solution.x)
+    y = np.array(solution.z)
+    s = np.array(solution.s)
+
+    qcp = QCP(P, A, q, b, x, y, s, K, P_is_upper=False, dtype=torch.float64, device=device)
+
+    dP, dA, dq, db = qcp.vjp( P @ x + q, np.zeros(m), np.zeros(m))
+
+    db = db.cpu().numpy()
+
+    print("db: ", db)
+    print("-y: ", -y)
+    np.testing.assert_allclose(db, -y)
+
+

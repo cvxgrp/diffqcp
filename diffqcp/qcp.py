@@ -10,7 +10,7 @@ import linops as lo
 from linops.lsqr import lsqr
 import clarabel
 
-from diffqcp.linops import SymmetricOperator, BlockDiag, ScalarOperator
+from diffqcp.linops import SymmetricOperator, BlockDiag, ScalarOperator, _sLinearOperator
 import diffqcp.cones as cone_utils
 from diffqcp.qcp_derivs import Du_Q_efficient, dData_Q_efficient, Du_Q, dData_Q, dData_Q_adjoint_efficient
 from diffqcp.utils import to_tensor, _convert_problem_data, _get_GPU_settings
@@ -79,7 +79,8 @@ class QCP:
         '_Pi_z',
         '_Dpi_z',
         '_Dz_Q_Pi_z',
-        '_F'
+        '_F',
+        '_FT'
     )
     
     def __init__(
@@ -137,7 +138,22 @@ class QCP:
                                 ScalarOperator(torch.tensor(1.0, dtype=self.dtype, device=self.device))],
                                 device=self.device)
         self._Dz_Q_Pi_z: lo.LinearOperator = Du_Q_efficient(self._Pi_z, self.data.P, self.data.A, self.data.AT, self.data.q, self.data.b)
-        self._F = (self._Dz_Q_Pi_z @ self._Dpi_z) - self._Dpi_z + lo.IdentityOperator(self.N)
+
+        # TODO (quill): decouple and remove overhead
+        #   Note: did this because the commented out bit below was causing dtype and device errors during the adjoint lsqr call.
+        def mv(du: torch.Tensor):
+            dpi_z_du = self._Dpi_z @ du
+            return self._Dz_Q_Pi_z @ dpi_z_du - dpi_z_du + du
+        
+        def rv(dv: torch.Tensor):
+            return self._Dpi_z.T @ (self._Dz_Q_Pi_z.T @ dv) - self._Dpi_z.T @ dv + dv
+        
+        self._F = _sLinearOperator(self.N, self.N, mv, rv, device=self.device)
+
+        # self._F = (self._Dz_Q_Pi_z @ self._Dpi_z) - self._Dpi_z + lo.IdentityOperator(self.N)
+        # self._F.device = self.device
+        # self._FT = self._F.T
+        # self._FT.device = self.device
     
     def jvp(
         self,
@@ -147,7 +163,8 @@ class QCP:
         db: torch.Tensor | np.ndarray
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if self._reduce_fp_flops:
-            # need to set reduce_fp_flops to False now so don't recompute?
+            # TODO (quill) need to set reduce_fp_flops to False now so don't recompute?
+            #   -> yes: what if you compute multiple JVPs in a row, etc.
             self.form_atoms()
 
         dP, dA, dAT, dq, db = self.data.convert_perturbations(dP, dA, dq, db)
@@ -183,14 +200,14 @@ class QCP:
 
         dz = torch.cat(
             (dx,
-             self._D_Pi_kstar_v @ (dy + ds),
-             - (self._x @ dx + self._y @ dy + self._s @ ds) )
+             self._D_Pi_kstar_v @ (dy + ds) - ds,
+             - (self._x @ dx + self._y @ dy + self._s @ ds).unsqueeze(-1) )
         )
 
         if torch.allclose(dz, torch.tensor(0, dtype=self.dtype, device=self.device)):
             d_data_N = torch.zeros(dz.shape[0], dtype=self.dtype, device=self.device)
         else:
-            d_data_N = lsqr(self._F.T, -dz)
+            d_data_N = lsqr(self._F.T, -dz, atol=1e-10, btol=1e-10)
 
         return dData_Q_adjoint_efficient(
             self._Pi_z, d_data_N[:self.n], d_data_N[self.n:self.n+self.m], d_data_N[-1],
@@ -334,7 +351,8 @@ class QCP:
     def does_reduce_fp_flops(self):
         return self._reduce_fp_flops
 
-# ====== (below) IN PROCESS OF BEING MOVED INTO THE ABOVE CLASS ======
+# ====== (below) DEPRECATED (this functionality has been moved into the QCP class) ======
+# Keeping for now for backward compatibility. Will remove in next version.
 
 def compute_derivative(P: torch.Tensor | spmatrix,
                        A: torch.Tensor | spmatrix,

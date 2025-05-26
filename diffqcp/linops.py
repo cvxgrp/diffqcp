@@ -103,7 +103,6 @@ class SymmetricOperator(lo.LinearOperator):
             self.supports_operator_matrix = True
             self.device = op.device
         else:
-            print("IN ELSE") # DEBUG
             self._mv = op
             self.supports_operator_matrix = supports_operator_matrix
             self.device = device

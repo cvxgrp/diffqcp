@@ -243,7 +243,7 @@ def _proj_dproj_psd(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperator]:
     k = (lambd < 0).nonzero(as_tuple=True)[0][-1].item()
     lam_neg = lambd[0:k+1]
     lam_pos = lambd[k+1:]
-    B = torch.zeros((size, size))
+    B = torch.zeros((size, size), dtype=x.dtype, device=x.device)
     B[k+1:, k+1:] = 1
     top_right_block = form_B_block(lam_pos, lam_neg)
     B[0:k+1, k+1:] = top_right_block

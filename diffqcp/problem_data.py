@@ -117,7 +117,7 @@ class ProblemData:
                                     + f" Instead it is {P.dtype}")
             # if P is in this block then it is on CPU. Leave on CPU for now.
             P = to_sparse_csr_tensor(P, dtype=dtype, device=None)
-        elif isinstance(P, torch.Tensor):
+        if isinstance(P, torch.Tensor):
             # need to eliminate zeros
             P = P.to_sparse_csr() # returns self if P is already sparse csr
             P_coo = P.to_sparse_coo()
@@ -130,16 +130,17 @@ class ProblemData:
             # is the nonzero row and col, respectively
             indices = P_coo.indices()[:, nonzero_mask] # NOTE (quill): might need to coalesce
             values = P_coo.values()[nonzero_mask]
-            self.P_nonzero_mask = to_tensor(nonzero_mask, dtype=torch.int64, device=self.device)
+            self.P_nonzero_mask = to_tensor(nonzero_mask, dtype=torch.bool, device=self.device)
             self.P_filtered_nnz = values.shape[0]
             rows, cols = indices[0], indices[1]
             # copy the following to device, but keep original rows, cols for now
             #   (if we are using device)
-            self.P_rows = torch.tensor(rows, dtype=torch.int64, device=self.device)
-            self.P_cols = torch.tensor(cols, dtype=torch.int64, device=self.device)
+            self.P_rows = to_tensor(rows, dtype=torch.int64, device=self.device)
+            self.P_cols = to_tensor(cols, dtype=torch.int64, device=self.device)
 
             P_clean = torch.sparse_coo_tensor(indices, values, size=P.shape).coalesce()
-            P = to_sparse_csr_tensor(P_clean).to(dtype=self.dtype, device=self.device)
+            # P = to_sparse_csr_tensor(P_clean).to(dtype=self.dtype, device=self.device)
+            P = P_clean.to_sparse_csr().to(dtype=self.dtype, device=self.device)
             self.Pcrow_indices = P.crow_indices()
             self.Pcol_indices = P.col_indices()
 
@@ -156,11 +157,13 @@ class ProblemData:
                 ).coalesce()
                 transposed_csr = transposed_coo.to_sparse_csr()
 
+                # keep indices on whatever device they are on right now.
                 self.Pcrow_indices_T = transposed_csr.crow_indices()
                 self.Pcol_indices_T = transposed_csr.col_indices()
                 PT = self._P_transpose(values)
-                self.Pcrow_indices_T = to_tensor(self.Pcrow_indices_T, dtype=self.dtype, device=self.device)
-                self.Pcol_indices_T = to_tensor(self.Pcol_indices_T, dtype=self.dtype, device=self.device)
+                # now transfer indices to desired device
+                self.Pcrow_indices_T = to_tensor(self.Pcrow_indices_T, dtype=torch.int64, device=self.device)
+                self.Pcol_indices_T = to_tensor(self.Pcol_indices_T, dtype=torch.int64, device=self.device)
 
                 diag_mask = rows == cols
                 diag_indices = rows[diag_mask]
@@ -169,7 +172,7 @@ class ProblemData:
                 diag[diag_indices] = diag_values
                 diag = to_tensor(diag, dtype=self.dtype, device=self.device)
 
-                self.P_diag_mask = to_tensor(diag_mask, dtype=self.dtype, device=self.device)
+                self.P_diag_mask = to_tensor(diag_mask, dtype=torch.bool, device=self.device)
                 self.P_diag_indices = to_tensor(diag_indices, dtype=self.dtype, device=self.device)
 
                 mv = lambda v : P @ v + PT @ v - diag * v
@@ -182,7 +185,7 @@ class ProblemData:
                 self._P = P
         else:
             raise ValueError("`P` must be a `scipy` `spmatrix` (or `sparray`) or a `torch.Tensor`."
-                             + f" It is {type(A)}.")
+                             + f" It is {type(P)}.")
         
     def _P_transpose(self, values: torch.Tensor, perm: torch.Tensor | None = None) -> torch.Tensor:
         """
@@ -190,7 +193,7 @@ class ProblemData:
         uses `perm` when initializing `ProblemData` in case the data is on the device and then being
         moved to host since at this point `self.AT_perm` is already on host.
         """
-        perm = self.AT_perm if perm is None else perm
+        perm = self.PT_perm if perm is None else perm
         transposed_values = values[perm]
         transposed_values = to_tensor(transposed_values, dtype=self.dtype, device=transposed_values.device)
         return torch.sparse_csr_tensor(
@@ -251,7 +254,7 @@ class ProblemData:
             # is the nonzero row and col, respectively
             indices = A_coo.indices()[:, nonzero_mask] # NOTE (quill): might need to coalesce
             values = A_coo.values()[nonzero_mask]
-            self.A_nonzero_mask = to_tensor(nonzero_mask, dtype=torch.int64, device=self.device)
+            self.A_nonzero_mask = to_tensor(nonzero_mask, dtype=torch.bool, device=self.device)
             self.A_filtered_nnz = values.shape[0]
             rows, cols = indices[0], indices[1]
             # save since need rows and cols when constructing vector outer products
@@ -284,8 +287,8 @@ class ProblemData:
         self.Acrow_indices_T = transposed_csr.crow_indices()
         self.Acol_indices_T = transposed_csr.col_indices()
         self._AT = self._A_transpose(self._A.values())
-        self.Acrow_indices_T = to_tensor(self.Acrow_indices_T, dtype=self.dtype, device=self.device)
-        self.Acol_indices_T = to_tensor(self.Acol_indices_T, dtype=self.dtype, device=self.device)
+        self.Acrow_indices_T = to_tensor(self.Acrow_indices_T, dtype=torch.int64, device=self.device)
+        self.Acol_indices_T = to_tensor(self.Acol_indices_T, dtype=torch.int64, device=self.device)
             
     def _A_transpose(self, values: torch.Tensor, perm: torch.Tensor | None = None) -> torch.Tensor:
         """
@@ -322,7 +325,7 @@ class ProblemData:
 
             if not self.P_is_upper:
                 self._P = torch.sparse_csr_tensor(
-                    self._P.crow_indices(), self._P.col_indices(), values=values, size=(self.n, self.n), device=self.device
+                    self.Pcrow_indices, self.Pcol_indices, values=values, size=(self.n, self.n), device=self.device
             )
             else:
                 PT = self._P_transpose(values)
@@ -347,6 +350,7 @@ class ProblemData:
             # need to remove explicit zeros
             A = A.to_sparse_csr() # returns self if A is already sparse csr.
             values = A.values()
+            
             # assume A is on self.device when provided now
             values = to_tensor(values, dtype=self.dtype, device=self.device)
             if values.shape[0] == self.A_original_nnz:
@@ -356,9 +360,9 @@ class ProblemData:
                                  + " original or filtered `A`. Since the provided tensor doesn't"
                                  + " have the same number of nonzero elements as the"
                                  + " original or filtered `A`, its sparsity pattern differs.")
-        
+            
             self._A = torch.sparse_csr_tensor(
-                    self._A.crow_indices(), self._A.col_indices(), values=values, size=(self.m, self.n), device=self.device
+                    self.Acrow_indices, self.Acol_indices, values=values, size=(self.m, self.n), device=self.device
                 )
             self._AT = self._A_transpose(values)
         else:
@@ -370,11 +374,11 @@ class ProblemData:
         return self._AT
     
     def convert_perturbations(
-            self,
-            dP: torch.Tensor | spmatrix | sparray,
-            dA: torch.Tensor | spmatrix | sparray,
-            dq: torch.Tensor,
-            db: torch.Tensor
+        self,
+        dP: torch.Tensor | spmatrix | sparray,
+        dA: torch.Tensor | spmatrix | sparray,
+        dq: torch.Tensor,
+        db: torch.Tensor
     ) -> tuple[torch.Tensor | SymmetricOperator, torch.Tensor, torch.Tensor, torch.Tensor]:
         if isinstance(dP, spmatrix) or isinstance(dP, sparray):
             dP = to_sparse_csr_tensor(dP, dtype=self.dtype, device=self.device)

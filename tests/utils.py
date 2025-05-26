@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import scipy.sparse as sparse
-from scipy.sparse import (csc_matrix, csr_matrix, spmatrix)
+from scipy.sparse import (csc_matrix, csr_matrix, spmatrix, sparray, csr_array)
 import cvxpy as cp
 import clarabel
 from clarabel import DefaultSolution
@@ -19,11 +19,180 @@ import matplotlib.pyplot as plt
 import diffqcp.utils as qcp_utils
 from diffqcp.linops import SymmetricOperator
 
+def get_transpose(
+    A: csr_matrix | csr_array | torch.Tensor, return_tensor: bool=False,
+    dtype: torch.dtype=torch.float64, device:torch.device | None = None
+) -> csr_array:
+    """Get the transpose of a sparse array. 
+
+    Mainly helpful when A is a torch.Tensor.
+    """
+    if isinstance(A, torch.Tensor):
+        A = csr_array(A.to_dense().cpu().numpy())
+
+    AT = A.T
+    if return_tensor:
+        AT = qcp_utils.to_sparse_csr_tensor(AT, dtype=dtype, device=device)
+    
+    return AT
+
+def get_sparse_information(X: torch.Tensor):
+    """
+    Parameters
+    ----------
+    X : torch.Tensor
+        2D tensor in sparse_csr format.
+
+    Returns
+    --------
+    crow_indices: torch.Tensor
+    col_indices: torch.Tensor
+    rows: torch.Tensor
+    cols: torch.Tensor
+    """
+    assert X.layout == torch.sparse_csr
+    
+    crow_indices = X.crow_indices()
+    col_indices = X.col_indices()
+
+    X_coo = X.to_sparse_coo()
+    indices = X_coo.indices()
+    rows, cols = indices[0], indices[1]
+
+    return crow_indices, col_indices, rows, cols
+
+
+def form_full_symmetric(P_upper: np.ndarray) -> np.ndarray:
+    P_diag = np.diag(P_upper, k=0)
+    P_diag = np.diag(P_diag) # create diagonal matrix
+    P = P_upper + P_upper.T - P_diag
+    return P
+
+def generate_problem_data_new(
+    n: int, m: int, sparse_random_array: Callable[[tuple[int, int], int], sparray],
+    random_array: Callable[[int], np.ndarray], density: float=0.2
+) -> tuple[csr_array, csr_array, csr_array, np.ndarray, np.ndarray]:
+    r"""Randomly generates theta in Theta (as defined in diffqcp paper).
+
+    Parameters
+    ----------
+    n : int
+        The number of opt. vars. <=> number of rows and columns of P in a QCP.
+    m : int
+        The number of equality constraints <=> number of rows of A in a QCP.
+    sparse_random_array : Callable
+        A function which when provided a tuple of integer arguments
+        returns a sparse (random) 2D array that belongs to
+        R^(tuple[0] x tuple[1]).
+    random_array : Callable
+        A function which when provided an integer argument returns
+        a (random) 1D array of that integer length.
+    density : float, optional
+        A float between 0 and 0.25 (exclusive) that determines how sparse
+        the matrices returned by `sparse_randomness` are. Default is 0.2.
+        Note that for the sparse A matrix, the density is doubled. (So the
+        default sparsity for A is 0.4).
+    
+
+    Returns
+    -------
+    csr_array
+        A symmetric matrix with n columns.
+    csr_array
+        A 2D array that is the upper triangular part of the previous 2D array.
+    csr_array
+        A 2D array in R^{m x n}
+    np.ndarray
+        The linear part of the objective function of a QCP. 1D with size n.
+    np.ndarray
+        The offsets in the linear equality constraints of a QCP. 1D with size m.
+    """
+    assert isinstance(density, float)
+    assert density > 0
+    assert density < 0.25
+
+    upper_P = sparse.triu(sparse_random_array(shape=(n, n), density=density, format = 'coo'))
+    upper_P = upper_P.todense()
+    P = form_full_symmetric(upper_P)
+    upper_P = csr_array(upper_P)
+    P = csr_array(P)
+
+    A = sparse_random_array(shape=(m, n), density=density*2)
+    A = csr_array(A)
+
+    q = random_array(n)
+    b = random_array(m)
+
+    return P, upper_P, A, q, b
+
+
+def convert_prob_data_to_torch_new(
+    P: csr_array, P_upper: csr_array, A: csr_array, q: np.ndarray, b: np.ndarray,
+    dtype: torch.dtype=torch.float64, device: torch.device | None = None
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    P = qcp_utils.to_sparse_csr_tensor(P, dtype=dtype, device=device)
+    P_upper = qcp_utils.to_sparse_csr_tensor(P_upper, dtype=dtype, device=device)
+    A = qcp_utils.to_sparse_csr_tensor(A, dtype=dtype, device=device)
+    q = qcp_utils.to_tensor(q, dtype=dtype, device=device)
+    b = qcp_utils.to_tensor(b, dtype=dtype, device=device)
+    return P, P_upper, A, q, b
+
+def generate_torch_problem_data_new(
+    n: int, m: int, sparse_random_array: Callable[[int, int], sparray], random_array: Callable[[int], np.ndarray],
+    density: float=0.2, dtype: torch.dtype=torch.float64, device: torch.device | None = None
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    r"""Randomly generates theta in Theta (as defined in diffqcp paper) as torch Tensors.
+
+    Parameters
+    ----------
+    n : int
+        The number of opt. vars. <=> number of rows and columns of P in a QCP.
+    m : int
+        The number of equality constraints <=> number of rows of A in a QCP.
+    sparse_random_array : Callable[[int, int], sparray]
+        A function which when provided two integer arguments
+        returns a sparse (random) matrix that belongs to
+        R^(arg1 x arg2).
+    random_array : Callable[[int], np.ndarray]
+        A function which when provided an integer argument returns
+        a (random) vector of that integer length.
+    density : float, optional
+        A float between 0 and 0.25 (exclusive) that determines how sparse
+        the matrices returned by `sparse_randomness` are. Default is 0.2.
+        Note that for the sparse A matrix, the density is doubled. (So the
+        default sparsity for A is 0.4).
+    dtype : torch.dtype, optional
+        The desired data type of the torch tensors.
+        Since this function is used for testing purposes, the
+        default is set to torch.float64.
+    device : torch.device | None, optional
+        Device for tensors, by default None.
+
+    Returns
+    -------
+    torch.Tensor
+        A 2D tensor in S^n in sparse_csr layout.
+    torch.Tensor
+        A 2D tensor that is the upper triangular part of the previous 2D array. In sparse_csr layout.
+    torch.Tensor
+        A 2D tensor in R^{n x m}. In sparse_csr layout.
+    torch.Tensor
+        The linear part of the objective function of a QCP. 1D.
+    torch.Tensor
+        The offsets in the linear equality constraints of a QCP. 1D.
+    """
+    P, P_upper, A, q, b = generate_problem_data_new(n, m, sparse_random_array, random_array, density)
+    AT = A.T
+    P, P_upper, A, q, b = convert_prob_data_to_torch_new(P, P_upper, A, q, b, dtype, device)
+    AT = qcp_utils.to_sparse_csr_tensor(AT, dtype=dtype, device=device)
+    return P, P_upper, A, AT, q, b
+
+
 def generate_problem_data(n: int,
                           m: int,
                           sparse_randomness: Callable[[int, int], spmatrix],
                           randomness: Callable[[int], np.ndarray],
-                          density: float=0.4
+                          density: float=0.2
 ) -> Tuple[csr_matrix, csr_matrix, np.ndarray, np.ndarray]:
     r"""Randomly generate the problem objects for a QCP.
 
@@ -61,15 +230,15 @@ def generate_problem_data(n: int,
     """
     assert isinstance(density, float)
     assert density > 0
-    assert density <= 0.5
+    assert density < 0.25
 
-    # P = sparse.t
-    P = sparse.triu(sparse_randomness(n, n, density=density))
-
-    # P = sparse_randomness(n, n, density=density)
-    # P = P.T @ P
+    upper_P = sparse.triu(sparse_randomness(n, n, density=density, format = 'coo'))
+    upper_P = upper_P.todense()
+    P = form_full_symmetric(upper_P)
+    upper_P = csr_array(upper_P)
     P = csr_matrix(P)
-    A = sparse_randomness(m, n, density=density)
+
+    A = sparse_randomness(m, n, density=density*2)
     A = csr_matrix(A)
 
     q = randomness(n)
@@ -80,8 +249,8 @@ def generate_problem_data(n: int,
 
 def convert_prob_data_to_torch(P_upper: spmatrix,
                                A: spmatrix,
-                               q: np.ndarray,
-                               b: np.ndarray,
+                               q: np.ndarray | torch.Tensor,
+                               b: np.ndarray | torch.Tensor,
                                dtype: torch.dtype = torch.float32,
                                device: torch.device | None = None
 ) ->Tuple[lo.LinearOperator, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -132,7 +301,7 @@ def generate_torch_problem_data(n: int,
                                 m: int,
                                 sparse_randomness: Callable[[int, int], spmatrix],
                                 randomness: Callable[[int], np.ndarray],
-                                density: float=0.4,
+                                density: float=0.2,
                                 dtype: torch.dtype = torch.float32,
                                 device: torch.device | None = None
 ) -> Tuple[csr_matrix, lo.LinearOperator, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -185,9 +354,8 @@ def generate_torch_problem_data(n: int,
     return P_upper, P_op, A_tch, q_tch, b_tch
 
 # stolen from diffcp/utils.py
-def get_random_like(A: csr_matrix | torch.Tensor,
-                    randomness: Callable[[int],
-                                         np.ndarray]
+def get_random_like(
+    A: csr_matrix | torch.Tensor, randomness: Callable[[int], np.ndarray]
 ) -> csr_matrix:
     """Generate a random sparse matrix with the same sparsity
     pattern as A, using the function `randomness`.

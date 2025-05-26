@@ -242,18 +242,15 @@ def dData_Q_adjoint_efficient(
     Acrow_indices: torch.Tensor,
     Acol_indices: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """The vector-Jacobian product D_dataQ(u, data)^T[du].
+    """The vector-Jacobian product D_dataQ(u, data)^T[w].
     
     """
     # so take in parameters which specify the entries to fill in.
     n = w1.shape[0]
     m = w2.shape[0]
 
-    w1 = w1.reshape((n, 1))
-    w2 = w2.reshape((m, 1))
-
-    x = u[:n].reshape((n, 1))
-    y = u[n:-1].reshape((m, 1))
+    x = u[:n]
+    y = u[n:-1]
     tau = u[-1]
 
     dP_values = (0.5 * ( w1[P_rows] * x[P_cols] + x[P_rows] * w1[P_cols] )
@@ -296,8 +293,8 @@ def dData_Q_adjoint(
 
     dP = 0.5 * (x @ w1.T + w1 @ x.T)  - (w3 / tau) * x @ x.T
     dA = y @ w1.T - w2 @ x.T
-    dq = tau * w1 - w3 * x
-    db = tau*w2 - w3 * y
+    dq = (tau * w1 - w3 * x).squeeze()
+    db = (tau*w2 - w3 * y).squeeze()
 
     return (dP, dA, dq, db)
     

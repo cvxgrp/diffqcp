@@ -16,6 +16,7 @@ import torch
 import pytest
 
 import diffqcp.qcp as cone_prog
+from diffqcp.qcp import QCP
 from diffqcp.utils import to_tensor
 from tests.utils import data_and_soln_from_cvxpy_problem, get_zeros_like, get_random_like
 
@@ -84,6 +85,79 @@ def test_least_squares_small(device):
         DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
         dx, dy, ds = DS(dP, dA, torch.zeros(q_can.size, device=device), -db)
         
+        assert torch.allclose( Dx_b @ db, dx[m:], atol=1e-8)
+
+@pytest.mark.parametrize("device", devices)
+def test_least_squares_small_class_version(device):
+    """
+    The least squares (approximation) problem
+
+        minimize    ||Ax - b||^2,
+
+        <=>
+
+        minimize    ||r||^2
+        subject to  r = Ax - b,
+
+    where A is a (m x n)-matrix with rank A = n, has
+    the analytical solution
+
+        x^star = (A^T A)^-1 A^T b.
+
+    Considering x^star as a function of b, we know
+
+        Dx^star(b) = (A^T A)^-1 A^T.
+
+    This test checks the accuracy of `diffqcp`'s derivative computations by
+    comparing DS(Data)dData to Dx^star(b)db.
+
+    Notes
+    ------
+    dData == (0, 0, 0, db), and other canonicalization considerations must be made
+    (hence the `data_and_soln_from_cvxpy_problem` function call and associated data declaration.)
+    """
+
+    np.random.seed(0)
+    rng = torch.Generator(device=device).manual_seed(0)
+
+    for _ in range(10):
+        n = np.random.randint(low=10, high=15)
+        m = n + np.random.randint(low=5, high=15)
+
+        A = np.random.randn(m, n)
+        b = np.random.randn(m)
+
+        x = cp.Variable(n)
+        r = cp.Variable(m)
+        f0 = cp.sum_squares(r)
+        problem = cp.Problem(cp.Minimize(f0), [r == A@x - b])
+
+        data = data_and_soln_from_cvxpy_problem(problem)
+        P_can, A_can = data[0], data[1]
+        q_can, b_can = data[2], data[3]
+        cone_dict, soln = data[4], data[5]
+
+        dP = get_zeros_like(P_can)
+        dA = get_zeros_like(A_can)
+        assert b.size == b_can.size
+        np.testing.assert_allclose(-b, b_can) # sanity check
+        db = 1e-6 * torch.randn(b_can.size, generator=rng, dtype=torch.float64, device=device)
+
+        Dx_b = to_tensor(la.solve(A.T @ A, A.T), dtype=torch.float64, device=device)
+
+        # DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
+        x = np.array(soln.x)
+        y = np.array(soln.z)
+        s = np.array(soln.s)
+        qcp1 = QCP(P=P_can, A=A_can, q=q_can, b=b_can, x=x, y=y, s=s, cone_dict=cone_dict, P_is_upper=True, dtype=torch.float64, device=device)
+        qcp2 = QCP(P=P_can, A=A_can, q=q_can, b=b_can, x=x, y=y, s=s, cone_dict=cone_dict, P_is_upper=True, dtype=torch.float64, device=device, reduce_fp_flops=True)
+        # dx, dy, ds = DS(dP, dA, torch.zeros(q_can.size, device=device), -db)
+        dx, dy, ds = qcp1.jvp(dP, dA, torch.zeros(q_can.size, device=device), -db)
+        
+        assert torch.allclose( Dx_b @ db, dx[m:], atol=1e-8)
+
+        dx, dy, ds = qcp2.jvp(dP, dA, torch.zeros(q_can.size, device=device), -db)
+
         assert torch.allclose( Dx_b @ db, dx[m:], atol=1e-8)
 
 @pytest.mark.parametrize("device", devices)

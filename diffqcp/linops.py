@@ -56,11 +56,12 @@ class SymmetricOperator(lo.LinearOperator):
     vectors.
     """
 
-    def __init__(self,
-                 n : int,
-                 op: torch.Tensor | Callable[[torch.Tensor], torch.Tensor],
-                 device: torch.device | None = None,
-                 supports_operator_matrix: bool = False
+    def __init__(
+        self,
+        n : int,
+        op: torch.Tensor | Callable[[torch.Tensor], torch.Tensor],
+        device: torch.device | None = None,
+        supports_operator_matrix: bool = False
     ) -> None:
         """Initialize the SymmetricOperator object.
 
@@ -102,6 +103,7 @@ class SymmetricOperator(lo.LinearOperator):
             self.supports_operator_matrix = True
             self.device = op.device
         else:
+            print("IN ELSE") # DEBUG
             self._mv = op
             self.supports_operator_matrix = supports_operator_matrix
             self.device = device

@@ -56,8 +56,7 @@ class QCP:
         Size (length) of the embedding variable (`== n + m + 1`)
     dtype : torch.dtype
     device : torch.device
-    does_reduce_fp_flops: bool <- TODO make immutable
-
+    does_reduce_fp_flops: bool (immutable)
 
     Raises
     ------
@@ -74,7 +73,7 @@ class QCP:
         'n',
         'm',
         'N',
-        'reduce_fp_flops',
+        '_reduce_fp_flops',
         '_Pi_Kstar_v',
         '_D_Pi_kstar_v',
         '_Pi_z',
@@ -118,8 +117,8 @@ class QCP:
         self.n = x.shape[0]
         self.m = y.shape[0]
         self.N = self.n + self.m + 1
-        self.reduce_fp_flops = reduce_fp_flops
-        if not reduce_fp_flops:
+        self._reduce_fp_flops = reduce_fp_flops
+        if not self._reduce_fp_flops:
             self.form_atoms()
 
     # any chance I could JIT jvp or vjp...or at least certain parts?
@@ -127,14 +126,12 @@ class QCP:
     #   If I could use proper conditionals and JIT linops lsqr that would
     #   burn a lot of risk for head-to-head against diffcp.
     # PROBABLY SEE PERFORMANCE BEFORE JIT (will eventually JIT, but may not need to for paper experiment)
-
-    # TODO: what happens if the reduce flops flag is changed by user
     
     def form_atoms(self) -> None:
         self._Pi_Kstar_v, self._D_Pi_kstar_v = cone_utils.proj_and_dproj(self._y - self._s, self.data.cones, dual=True)
         self._Pi_z = torch.cat((self._x,
                                self._Pi_Kstar_v,
-                               torch.tensor(1.0, dtype=self.dtype, device=self.device)))
+                               torch.tensor(1.0, dtype=self.dtype, device=self.device).unsqueeze(-1)))
         self._Dpi_z = BlockDiag([lo.IdentityOperator(self.n),
                                 self._D_Pi_kstar_v,
                                 ScalarOperator(torch.tensor(1.0, dtype=self.dtype, device=self.device))],
@@ -149,7 +146,7 @@ class QCP:
         dq: torch.Tensor | np.ndarray,
         db: torch.Tensor | np.ndarray
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        if self.reduce_fp_flops:
+        if self._reduce_fp_flops:
             # need to set reduce_fp_flops to False now so don't recompute?
             self.form_atoms()
 
@@ -177,7 +174,7 @@ class QCP:
         """
         Returns dP and dA as tensors in sparse_csr format
         """
-        if self.reduce_fp_flops:
+        if self._reduce_fp_flops:
             self.form_atoms()
         
         dx = to_tensor(dx, dtype=self.dtype, device=self.device)
@@ -204,8 +201,8 @@ class QCP:
     
     def update(
         self,
-        P: torch.Tensor | spmatrix,
-        A: torch.Tensor | spmatrix,
+        P: torch.Tensor | spmatrix | sparray,
+        A: torch.Tensor | spmatrix | sparray,
         q: torch.Tensor | np.ndarray | list[float],
         b: torch.Tensor | np.ndarray | list[float],
         x: torch.Tensor | np.ndarray | list[float],
@@ -219,11 +216,11 @@ class QCP:
         self.update_solution(x, y, s)
     
     def update_data(
-            self,
-            P: torch.Tensor | spmatrix,
-            A: torch.Tensor | spmatrix,
-            q: torch.Tensor | np.ndarray | list[float],
-            b: torch.Tensor | np.ndarray | list[float]
+        self,
+        P: torch.Tensor | spmatrix | sparray,
+        A: torch.Tensor | spmatrix | sparray,
+        q: torch.Tensor | np.ndarray | list[float],
+        b: torch.Tensor | np.ndarray | list[float]
     ) -> None:
         # TODO (quill): make notes somewhere that
         #   1. Make note that setting `reduce_fp_flops = True` can reduce overall possible flop count reductions
@@ -234,7 +231,7 @@ class QCP:
         self.data.q = q
         self.data.b = b
         
-        if not self.reduce_fp_flops:
+        if not self._reduce_fp_flops:
             self._Dz_Q_Pi_z: lo.LinearOperator = Du_Q_efficient(self._Pi_z, self.data.P, self.data.A, self.data.AT, self.data.q, self.data.b)
             self._F = (self._Dz_Q_Pi_z @ self._Dpi_z) - self._Dpi_z + lo.IdentityOperator(self.N)
 
@@ -249,7 +246,7 @@ class QCP:
         self._y = to_tensor(y, dtype=self.dtype, device=self.device)
         self._s = to_tensor(s, dtype=self.dtype, device=self.device)
 
-        if not self.reduce_fp_flops:
+        if not self._reduce_fp_flops:
             self.form_atoms()
     
     def _update_data_dependent_atoms(self):
@@ -263,6 +260,7 @@ class QCP:
     @P.setter
     def P(self, P):
         self.data.P = P
+        self._update_data_dependent_atoms()
     
     @property
     def A(self) -> torch.Tensor | spmatrix:
@@ -299,7 +297,7 @@ class QCP:
     def x(self, x):
         self._x = to_tensor(x, self.dtype, self.device)
 
-        if not self.reduce_fp_flops:
+        if not self._reduce_fp_flops:
             self._Pi_z = torch.cat((self._x,
                                 self._Pi_Kstar_v,
                                 torch.tensor(1.0, dtype=self.dtype, device=self.device)))
@@ -318,7 +316,7 @@ class QCP:
     def y(self, y):
         self._y = to_tensor(y, self.dtype, self.device)
 
-        if not self.reduce_fp_flops:
+        if not self._reduce_fp_flops:
             self.form_atoms()
 
     @property
@@ -329,12 +327,12 @@ class QCP:
     def s(self, s):
         self._s = to_tensor(s, self.dtype, self.device)
 
-        if not self.reduce_fp_flops:
+        if not self._reduce_fp_flops:
             self.form_atoms()
 
     @property
     def does_reduce_fp_flops(self):
-        return self.reduce_fp_flops
+        return self._reduce_fp_flops
 
 # ====== (below) IN PROCESS OF BEING MOVED INTO THE ABOVE CLASS ======
 

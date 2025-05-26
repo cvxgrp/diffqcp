@@ -169,7 +169,7 @@ class ProblemData:
                 diag_mask = rows == cols
                 diag_indices = rows[diag_mask]
                 diag_values = values[diag_mask]
-                diag = torch.zeros(size=(self.n, self.n), dtype=self.dtype, device=values.device)
+                diag = torch.zeros(size=(self.n,), dtype=self.dtype, device=values.device)
                 diag[diag_indices] = diag_values
                 diag = to_tensor(diag, dtype=self.dtype, device=self.device)
 
@@ -331,7 +331,7 @@ class ProblemData:
             else:
                 PT = self._P_transpose(values)
                 diag_values = values[self.P_diag_mask]
-                diag = torch.zeros(size=(self.n, self.n), dtype=self.dtype, device=self.device)
+                diag = torch.zeros(size=(self.n,), dtype=self.dtype, device=self.device)
                 diag[self.P_diag_indices] = diag_values
                 mv = lambda v : P @ v + PT @ v - diag * v
                 self._P = SymmetricOperator(self.n, op=mv, device=self.device, supports_operator_matrix=True)
@@ -387,21 +387,26 @@ class ProblemData:
             dP = dP.to_sparse_csr() # returns self if P is already sparse csr
             values = dP.values()
             dP_nnz = values.shape[0]
-            if dP_nnz != self.P_original_nnz and dP_nnz != self.P_filtered_nnz:
+            if (dP_nnz != self.P_original_nnz and dP_nnz != self.P_filtered_nnz
+                and dP_nnz != 0):
                 raise ValueError("`dP` must have the same sparsity pattern as the"
-                                 + " original or filtered `P`. Since the provided tensor doesn't"
+                                 + " original or filtered `P`, or it must have all zeros."
+                                 + " (Which corresponds to not perturbing `P`.)"
+                                 + " Since the provided tensor doesn't"
                                  + " have the same number of nonzero elements as the"
-                                 + " original or filtered `P`, its sparsity pattern differs.")
-        dP = to_tensor(dP, dtype=self.dtype, device=self.device)
+                                 + " original or filtered `P` (or have all zeros),"
+                                 + " its sparsity pattern differs.")
+        dP_tensor = to_tensor(dP, dtype=self.dtype, device=self.device)
 
         if self.P_is_upper:
-            values = dP.values()
+            values = dP_tensor.values()
             dPT = self._P_transpose(values)
             diag_values = values[self.P_diag_mask]
-            diag = torch.zeros(self.n, dtype=self.dtype, device=self.dtype)
+            diag = torch.zeros(self.n, dtype=self.dtype, device=self.device)
             diag[self.P_diag_indices] = diag_values
-            mv = lambda v : dP @ v + dPT @ v - diag * v
-            dP = SymmetricOperator(self.n, op=mv, device=self.device)
+            mv = lambda v : dP_tensor @ v + dPT @ v - diag * v
+
+            dP = SymmetricOperator(self.n, op=mv, device=self.device, supports_operator_matrix=True)
 
         if isinstance(dA, spmatrix) or isinstance(dA, sparray):
             dA = to_sparse_csr_tensor(dA, dtype=self.dtype, device=self.device)
@@ -409,11 +414,15 @@ class ProblemData:
             dA = dA.to_sparse_csr() # returns self if P is already sparse csr
             values = dA.values()
             dA_nnz = values.shape[0]
-            if dA_nnz != self.P_original_nnz and dA_nnz != self.P_filtered_nnz:
-                raise ValueError("`dP` must have the same sparsity pattern as the"
-                                 + " original or filtered `P`. Since the provided tensor doesn't"
+            if (dA_nnz != self.A_original_nnz and dA_nnz != self.A_filtered_nnz
+                and dA_nnz != 0):
+                raise ValueError("`dA` must have the same sparsity pattern as the"
+                                 + " original or filtered `A`, or it must have all zeros."
+                                 + " (Which corresponds to not perturbing `A`.)"
+                                 + " Since the provided tensor doesn't"
                                  + " have the same number of nonzero elements as the"
-                                 + " original or filtered `P`, its sparsity pattern differs.")
+                                 + " original or filtered `A` (or have all zeros),"
+                                 + " its sparsity pattern differs.")
         dA = to_tensor(dA, dtype=self.dtype, device=self.device)
         dAT = self._A_transpose(dA.values())
 

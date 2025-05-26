@@ -150,7 +150,7 @@ class ProblemData:
                 sorted_perm = torch.argsort(transposed_idx)
 
                 transposed_indices = torch.stack([rows_T[sorted_perm], cols_T[sorted_perm]], dim=0)
-                self.PT_perm = to_tensor(sorted_perm, dtype=self.dtype, device=self.device)
+                self.PT_perm = sorted_perm
                 dummy_values = torch.ones_like(values, dtype=values.dtype)
                 transposed_coo = torch.sparse_coo_tensor(
                     transposed_indices, dummy_values, size=(self.n, self.n)
@@ -162,21 +162,22 @@ class ProblemData:
                 self.Pcol_indices_T = transposed_csr.col_indices()
                 PT = self._P_transpose(values)
                 # now transfer indices to desired device
+                self.PT_perm = to_tensor(sorted_perm, dtype=torch.int64, device=self.device)
                 self.Pcrow_indices_T = to_tensor(self.Pcrow_indices_T, dtype=torch.int64, device=self.device)
                 self.Pcol_indices_T = to_tensor(self.Pcol_indices_T, dtype=torch.int64, device=self.device)
 
                 diag_mask = rows == cols
                 diag_indices = rows[diag_mask]
                 diag_values = values[diag_mask]
-                diag = torch.zeros(self.n, dtype=self.dtype, device=values.dtype)
+                diag = torch.zeros(size=(self.n, self.n), dtype=self.dtype, device=values.device)
                 diag[diag_indices] = diag_values
                 diag = to_tensor(diag, dtype=self.dtype, device=self.device)
 
                 self.P_diag_mask = to_tensor(diag_mask, dtype=torch.bool, device=self.device)
-                self.P_diag_indices = to_tensor(diag_indices, dtype=self.dtype, device=self.device)
+                self.P_diag_indices = to_tensor(diag_indices, dtype=torch.int64, device=self.device)
 
                 mv = lambda v : P @ v + PT @ v - diag * v
-                self._P = SymmetricOperator(self.n, op=mv, device=self.device)
+                self._P = SymmetricOperator(self.n, op=mv, device=self.device, supports_operator_matrix=True)
             else:
                 self.PT_perm = None
                 self.diag_mask = None
@@ -290,11 +291,11 @@ class ProblemData:
         self.Acrow_indices_T = to_tensor(self.Acrow_indices_T, dtype=torch.int64, device=self.device)
         self.Acol_indices_T = to_tensor(self.Acol_indices_T, dtype=torch.int64, device=self.device)
             
-    def _A_transpose(self, values: torch.Tensor, perm: torch.Tensor | None = None) -> torch.Tensor:
+    def _A_transpose(self, values: torch.Tensor) -> torch.Tensor:
         """
         supply with values of a csr array
         """
-        perm = self.AT_perm if perm is None else perm
+        perm = self.AT_perm
         # add check for number of nonnegative?
         transposed_values = values[perm]
         transposed_values = to_tensor(transposed_values, dtype=self.dtype, device=transposed_values.device)
@@ -330,10 +331,10 @@ class ProblemData:
             else:
                 PT = self._P_transpose(values)
                 diag_values = values[self.P_diag_mask]
-                diag = torch.zeros(self.n, dtype=self.dtype, device=self.dtype)
+                diag = torch.zeros(size=(self.n, self.n), dtype=self.dtype, device=self.device)
                 diag[self.P_diag_indices] = diag_values
                 mv = lambda v : P @ v + PT @ v - diag * v
-                self._P = SymmetricOperator(self.n, op=mv, device=self.device)
+                self._P = SymmetricOperator(self.n, op=mv, device=self.device, supports_operator_matrix=True)
         else:
             raise ValueError("P must be a `scipy` `spmatrix` (or `sparray`) or a `torch.Tensor`."
                              + f" It is {type(P)}.")
@@ -420,3 +421,9 @@ class ProblemData:
         db = to_tensor(db, dtype=self.dtype, device=self.device)
 
         return dP, dA, dAT, dq, db
+    
+    def materialize_P(self) -> torch.Tensor:
+        if not self.P_is_upper:
+            return self._P.to_dense()
+        else:
+            return self._P @ torch.eye(n=self.n, dtype=self.dtype, device=self.device)

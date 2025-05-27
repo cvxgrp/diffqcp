@@ -130,6 +130,7 @@ def generate_problem_data_new(
         P = sparse_random_array(shape=(n, n), density=density, format = 'coo')
         P = P.todense()
         P = P @ P.T
+        P += 0.1 * np.eye(n) 
         upper_P = csr_array(sparse.triu(P))
         P = csr_array(P)
 
@@ -650,4 +651,4 @@ def random_qcp(m, n, cone_dict, random_sparse_array, random_array):
     x_star = random_array(n)
     b = A @ x_star + s_star
     q = - P @ x_star - A.T @ y_star
-    return P, P_upper, A, q, b
+    return P, P_upper, A, q, b, (x_star, y_star, s_star)

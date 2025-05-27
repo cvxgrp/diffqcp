@@ -19,7 +19,8 @@ import clarabel
 import diffqcp.qcp as cone_prog
 from diffqcp.qcp import QCP
 from diffqcp.utils import to_tensor
-from tests.utils import data_and_soln_from_cvxpy_problem, get_zeros_like, get_random_like, form_full_symmetric, random_qcp
+from tests.utils import (data_and_soln_from_cvxpy_problem, get_zeros_like, get_random_like, form_full_symmetric, random_qcp,
+                         convert_prob_data_to_torch_new)
 
 devices = [torch.device('cpu')]
 if torch.cuda.is_available():
@@ -605,6 +606,7 @@ def test_adjoint_cvxbook_sensitivity_easy(device):
     solver_settings.verbose = False
     solver = clarabel.DefaultSolver(P_upper_csc, q, A_csc, b, K_clarabel, solver_settings)
     solution = solver.solve()
+    print("soln status: ", solution.status)
 
     x = np.array(solution.x)
     y = np.array(solution.z)
@@ -616,8 +618,97 @@ def test_adjoint_cvxbook_sensitivity_easy(device):
 
     db = db.cpu().numpy()
 
+    print("Px: ", P @ x)
+    print("q: ", q)
+
     print("db: ", db)
     print("-y: ", -y)
     np.testing.assert_allclose(db, -y)
 
 
+@pytest.mark.parametrize("device", devices)
+def test_adjoint_consistency_easy(device):
+
+    np.random.seed(0)
+
+    m1 = 3
+    m2 = 3
+    m3 = 5
+    m = m1 + m2 + m3
+    n = 5
+
+    K = {
+        'z' : m1,
+        'l' : m2,
+        'q' : [m3]
+    }
+
+    K_clarabel = [ # TODO (quill): helper function mapping SCS <-> Clarabel
+        clarabel.ZeroConeT(m1),
+        clarabel.NonnegativeConeT(m2),
+        clarabel.SecondOrderConeT(m3)
+    ]
+
+    num_computed = 0
+    for _ in range(10):
+        P, P_upper, A, q, b, soln = random_qcp(m, n, K, sparse.random_array, np.random.randn)
+
+        P_upper_csc = sparse.csc_matrix(P_upper)
+        A_csc = sparse.csc_matrix(A)
+        
+        solver_settings = clarabel.DefaultSettings()
+        solver_settings.verbose = False
+        solver = clarabel.DefaultSolver(P_upper_csc, q, A_csc, b, K_clarabel, solver_settings)
+        solution = solver.solve()
+        print("soln status: ", solution.status)
+
+        x = np.array(solution.x)
+        if not np.allclose(x, soln[0], atol=1e-4):
+            print("clarabel primal: ", x)
+            print("our primal: ", soln[0])
+            continue
+        y = np.array(solution.z)
+        if not np.allclose(y, soln[1], atol=1e-4):
+            print("clarabel dual: ", y)
+            print("our dual: ", soln[1])
+            continue
+        s = np.array(solution.s)
+        if not np.allclose(s, soln[2], atol=1e-4):
+            print("clarabel slack: ", x)
+            print("our slack: ", soln[2])
+            continue
+
+        qcp = QCP(P, A, q, b, x, y, s, K, P_is_upper=False, dtype=torch.float64, device=device)
+        qcp2 = QCP(P_upper, A, q, b, x, y, s, K, P_is_upper=True, dtype=torch.float64, device=device)
+
+        P_tilde = get_random_like(P, np.random.randn)
+        P_upper_tilde = get_random_like(P_upper, np.random.randn)
+        A_tilde = get_random_like(A, np.random.randn)
+        q_tilde = np.random.randn(n)
+        b_tilde = np.random.randn(m)
+
+        P_tilde, P_upper_tilde, A_tilde, q_tilde, b_tilde = convert_prob_data_to_torch_new(P_tilde, P_upper_tilde, A_tilde, q_tilde, b_tilde, dtype=torch.float64, device=device)
+
+        x_tilde = to_tensor(np.random.randn(n), dtype=torch.float64, device=device)
+        y_tilde = to_tensor(np.random.randn(m), dtype=torch.float64, device=device)
+        s_tilde = to_tensor(np.random.randn(m), dtype=torch.float64, device=device)
+
+        dx, dy, ds = qcp.jvp(P_tilde, A_tilde, q_tilde, b_tilde)
+        dP, dA, dq, db = qcp.vjp(x_tilde, y_tilde, s_tilde)
+
+        lhs = dx @ x_tilde + dy @ y_tilde + ds @ s_tilde
+        rhs = torch.trace( dP.to_dense() @ P_tilde.to_dense() ) + torch.trace(dA.to_dense().T @ A_tilde.to_dense()) + dq @ q_tilde + db @ b_tilde
+
+        assert torch.abs(lhs - rhs) < 1e-10
+        
+        dx, dy, ds = qcp2.jvp(P_upper_tilde, A_tilde, q_tilde, b_tilde)
+        dP, dA, dq, db = qcp2.vjp(x_tilde, y_tilde, s_tilde)
+
+        lhs = dx @ x_tilde + dy @ y_tilde + ds @ s_tilde
+        rhs = torch.trace( dP.to_dense() @ P_upper_tilde.to_dense() ) + torch.trace(dA.to_dense().T @ A_tilde.to_dense()) + dq @ q_tilde + db @ b_tilde
+
+        assert torch.abs(lhs - rhs) < 1e-10
+
+        num_computed += 1
+    
+    assert num_computed > 0

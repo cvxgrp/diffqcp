@@ -288,9 +288,7 @@ def test_Ddata_Q_is_linop(device):
         print("lhs: ", lhs)
         print("rhs: ", rhs)
         assert math.isclose(lhs, rhs, rel_tol=1e-6, abs_tol=1e-21)
-        
-
-# TODO test dData_Q is linop sparse
+        assert np.abs(lhs - rhs) < 1e-10
 
 
 @pytest.mark.parametrize("device", devices)
@@ -361,7 +359,7 @@ def test_dData_Qadjoint_efficient(device):
     """
     Ensuring the implementation which only computes the nonzero entries does so validly.
 
-    Fails, but makes sense; 
+    Have to make sure to only check the nonzero entries.
 
     check nonzero entries
     """

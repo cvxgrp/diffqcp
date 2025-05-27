@@ -115,7 +115,7 @@ class QCP:
         self._x = to_tensor(x, dtype=self.dtype, device=self.device)
         self._y = to_tensor(y, dtype=self.dtype, device=self.device)
         self._s = to_tensor(s, dtype=self.dtype, device=self.device)
-        self.n = x.shape[0]
+        self.n = self._x.shape[0]
         self.m = y.shape[0]
         self.N = self.n + self.m + 1
         self._reduce_fp_flops = reduce_fp_flops
@@ -207,7 +207,7 @@ class QCP:
         if torch.allclose(dz, torch.tensor(0, dtype=self.dtype, device=self.device)):
             d_data_N = torch.zeros(dz.shape[0], dtype=self.dtype, device=self.device)
         else:
-            d_data_N = lsqr(self._F.T, -dz, atol=1e-10, btol=1e-10)
+            d_data_N = lsqr(self._F.T, -dz)
 
         return dData_Q_adjoint_efficient(
             self._Pi_z, d_data_N[:self.n], d_data_N[self.n:self.n+self.m], d_data_N[-1],

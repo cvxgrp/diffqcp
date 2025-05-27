@@ -295,6 +295,12 @@ def test_nonneg_least_squares_cvxpy_class_version(device):
         dx, _, _ = qcp1.jvp(dP, dA, np.zeros(q_can.size), db)
         assert torch.allclose(dq_tch, dx[n:], atol=1e-5)
 
+        # test vjp:
+        P_tilde, A_tilde, q_tilde, b_tilde = qcp1.vjp(P_can @ x + q_can, np.zeros(y.shape[0]), np.zeros(y.shape[0]))
+        print("b_tilde = ", b_tilde)
+        print("-y =  ", -y)
+        np.testing.assert_allclose(b_tilde.cpu().numpy(), -y, atol=1e-8)
+
         dx, _, _ = qcp2.jvp(dP, dA, np.zeros(q_can.size), db)
         assert torch.allclose(dq_tch, dx[n:], atol=1e-5)
 
@@ -542,6 +548,94 @@ def test_constrained_least_squares(device):
 
 
 @pytest.mark.parametrize("device", devices)
+def test_constrained_least_squares_class_version(device):
+    np.random.seed(0)
+    EPS = 1e-6
+
+    num_optimal = 0
+    for _ in range(10):
+        n = np.random.randint(low=10, high=15)
+        m = n + np.random.randint(low=5, high=15)
+
+        A = np.random.randn(m, n)
+        b = np.random.randn(m)
+
+        x = cp.Variable(n)
+        f0 = cp.sum_squares(A@x - b)
+        constrs = [x >= 0]
+        problem = cp.Problem(cp.Minimize(f0), constrs)
+        problem.solve()
+        
+        if problem.status != 'optimal':
+            continue
+        
+        lambd: np.ndarray = constrs[0].dual_value
+
+        S = [i for i, val in enumerate(x.value) if val > EPS]
+        S_bar_len = n - len(S)
+        I_s_bar = np.eye(n)
+        I_s_bar = np.delete(I_s_bar, S, axis=1)
+        A_hat = np.block([
+            [A.T @ A, I_s_bar],
+            [I_s_bar.T, np.zeros((S_bar_len, S_bar_len))]
+        ])
+        b_hat = np.hstack((A.T @ b, np.zeros(S_bar_len)))
+        soln = la.solve(A_hat, b_hat)
+        print("x_star from LS equation: ", soln[0:n])
+        print("x_star from CVXPY: ", x.value)
+        if not np.allclose(soln[0:n], x.value, atol=1e-6):
+            continue
+        num_optimal += 1
+        print("lambda_{s_bar} from LS equation: ", soln[n:])
+        print("lambda from CVXPY: ", lambd)
+
+        data = data_and_soln_from_cvxpy_problem(problem)
+        P_can, A_can = data[0], data[1]
+        q_can, b_can = data[2], data[3]
+        cone_dict, soln = data[4], data[5]
+
+        x = np.array(soln.x)
+        y = np.array(soln.z)
+        s = np.array(soln.s)
+
+        np.testing.assert_allclose(b, b_can[0:b.size])
+
+        def dx_b_analytical(db) -> np.ndarray:
+            dsoln = la.solve(A_hat, np.hstack((A.T @ db,
+                                              np.zeros(S_bar_len))
+                                              )
+                            )
+            dx_b = dsoln[0:n]
+            return to_tensor(dx_b, dtype=torch.float64, device=device)
+
+        dP = get_zeros_like(P_can)
+        dA = get_zeros_like(A_can)
+        db = 1e-6 * np.random.randn(b.size)
+        db_can = np.hstack((db, np.zeros(b_can.size - b.size)))
+
+        qcp = QCP(P_can, A_can, q_can, b_can, x, y, s, cone_dict, P_is_upper=True, dtype=torch.float64, device=device)
+        dx, dy, ds = qcp.jvp(dP, dA, torch.zeros(q_can.size, device=device), db_can)
+        
+        dx_b_analytic = dx_b_analytical(db)
+        
+        print("dx: ", dx[m:].to(device=None))
+        print("analytical: ", dx_b_analytic.to(device=None))
+        print("NUM OPTIMAL:", num_optimal)
+        assert torch.allclose(dx_b_analytic, dx[m:], atol=1e-8)
+
+        dP, dA, dq, db = qcp.vjp(P_can @ x + q_can, torch.zeros(y.shape[0]), torch.zeros(y.shape[0]))
+
+        print("db = ", db)
+        print("-y = ", -y)
+        np.testing.assert_allclose(db.cpu().numpy(), -y, atol=1e-4)
+        # NOTE 5/26/25 (quill): ^ this assertion fails, but looking at the results I have
+        # enough confidence to try a gradient descent test
+
+
+    assert num_optimal == 10, "No derivative testing was actually performed."
+
+
+@pytest.mark.parametrize("device", devices)
 def test_dprojection_exp(device):
     x = cp.Variable()
     lam = cp.Parameter(1, nonneg=True)
@@ -631,11 +725,11 @@ def test_adjoint_consistency_easy(device):
 
     np.random.seed(0)
 
-    m1 = 3
-    m2 = 3
-    m3 = 5
+    m1 = 15
+    m2 = 15
+    m3 = 20
     m = m1 + m2 + m3
-    n = 5
+    n = 20
 
     K = {
         'z' : m1,
@@ -651,6 +745,7 @@ def test_adjoint_consistency_easy(device):
 
     num_computed = 0
     for _ in range(10):
+        print("COUNT = ", num_computed)
         P, P_upper, A, q, b, soln = random_qcp(m, n, K, sparse.random_array, np.random.randn)
 
         P_upper_csc = sparse.csc_matrix(P_upper)
@@ -699,6 +794,8 @@ def test_adjoint_consistency_easy(device):
         lhs = dx @ x_tilde + dy @ y_tilde + ds @ s_tilde
         rhs = torch.trace( dP.to_dense() @ P_tilde.to_dense() ) + torch.trace(dA.to_dense().T @ A_tilde.to_dense()) + dq @ q_tilde + db @ b_tilde
 
+        print("LHS: ", lhs)
+        print("RHS: ", rhs)
         assert torch.abs(lhs - rhs) < 1e-10
         
         dx, dy, ds = qcp2.jvp(P_upper_tilde, A_tilde, q_tilde, b_tilde)

@@ -87,5 +87,10 @@ uv run python <script_name>.py
 ```zsh
 uv run pytest <typical pytest CLI arguments>
 ```
+3. Run experiments via `run python -m`. For instance, to run the CPU SDP experiment, run
+```zsh
+uv run python -m experiments.sdp_diffqcp_cpu
+```
+from the project root.
 
 If these commands are not working as expected, execute the command `uv sync` and try again (albeit supposedly this is happening automatically whenever `run` is used).

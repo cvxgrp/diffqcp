@@ -523,7 +523,7 @@ class GradDescTestResult:
     verbose : Optional[bool] = False
     obj_traj : Optional[torch.Tensor] = None
 
-    def plot_obj_traj(self):
+    def plot_obj_traj(self, savepath: str | None = None):
         if self.obj_traj is None:
             raise ValueError("obj_traj is None. Cannot plot.")
 
@@ -533,19 +533,22 @@ class GradDescTestResult:
         plt.figure(figsize=(8, 6))
         plt.plot(range(len(obj_traj_cpu)), obj_traj_cpu, label="Objective Trajectory")
         plt.xlabel("k")
-        plt.ylabel("$f_0(p^{k}) = 0.5 \\| z(p) - z^{\\star} \\|^2$")
+        # plt.ylabel("$f_0(p^{k}) = 0.5 \\| z(p) - z^{\\star} \\|^2$")
+        plt.ylabel("Objective function")
         plt.legend()
-        plt.show()
+        # plt.show()
+        plt.savefig(savepath)
 
 
-def grad_desc_test(f_and_Df: Callable[[torch.Tensor],
-                                      tuple[torch.Tensor, torch.Tensor | lo.LinearOperator]],
-                   p_target: torch.Tensor,
-                   p0: torch.Tensor,
-                   num_iter: int = 100,
-                   tol: float = 1e-6,
-                   step_size: float = 0.1,
-                   verbose: bool = False
+def grad_desc_test(
+    f_and_Df: Callable[[torch.Tensor],
+                        tuple[torch.Tensor, torch.Tensor | lo.LinearOperator]],
+    p_target: torch.Tensor,
+    p0: torch.Tensor,
+    num_iter: int = 100,
+    tol: float = 1e-6,
+    step_size: float = 0.1,
+    verbose: bool = False
 ) -> GradDescTestResult:
     """Gradient descent test specifically for projecting onto a cone.
 

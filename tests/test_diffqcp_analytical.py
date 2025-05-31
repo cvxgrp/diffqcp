@@ -691,9 +691,13 @@ def test_adjoint_cvxbook_sensitivity_easy(device):
 
     np.random.seed(0)
 
-    P, P_upper, A, q, b = random_qcp(m, n, K, sparse.random_array, np.random.randn)
+    P, P_upper, A, q, b, soln = random_qcp(m, n, K, sparse.random_array, np.random.randn)
 
     P_upper_csc = sparse.csc_matrix(P_upper)
+
+    P_upper_dense = P_upper_csc.todense()
+    assert np.allclose(P_upper_dense, np.triu(P_upper_dense)) # make sure P is upper triangular
+
     A_csc = sparse.csc_matrix(A)
     
     solver_settings = clarabel.DefaultSettings()
@@ -705,6 +709,10 @@ def test_adjoint_cvxbook_sensitivity_easy(device):
     x = np.array(solution.x)
     y = np.array(solution.z)
     s = np.array(solution.s)
+
+    np.testing.assert_allclose(x, soln[0])
+    np.testing.assert_allclose(y, soln[1])
+    np.testing.assert_allclose(s, soln[2])
 
     qcp = QCP(P, A, q, b, x, y, s, K, P_is_upper=False, dtype=torch.float64, device=device)
 

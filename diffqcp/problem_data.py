@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 from scipy.sparse import spmatrix, sparray
+import scipy.sparse as sparse
 
 import diffqcp.cones as cone_utils
 from diffqcp.linops import SymmetricOperator
@@ -38,6 +39,7 @@ class ProblemData:
         'b',
         'cones',
         'P_is_upper',
+        'P_upper'
         'dtype',
         'device',
         'P_original_nnz',
@@ -145,6 +147,9 @@ class ProblemData:
             self.Pcol_indices = P.col_indices()
 
             if self.P_is_upper:
+                values = values.to(dtype=self.dtype)
+                self.P_upper = P # upper part of P. `torch.Tensor` in sparse csr format.
+
                 rows_T, cols_T = cols, rows
                 transposed_idx = rows_T * P.shape[0] + cols_T # TODO (quill): check this
                 sorted_perm = torch.argsort(transposed_idx)
@@ -184,6 +189,7 @@ class ProblemData:
                 self.Pcrow_indices_T = None
                 self.Pcol_indices_T = None
                 self._P = P
+                self.P_upper = None
         else:
             raise ValueError("`P` must be a `scipy` `spmatrix` (or `sparray`) or a `torch.Tensor`."
                              + f" It is {type(P)}.")
@@ -329,6 +335,7 @@ class ProblemData:
                     self.Pcrow_indices, self.Pcol_indices, values=values, size=(self.n, self.n), device=self.device
             )
             else:
+                self.P_upper = P
                 PT = self._P_transpose(values)
                 diag_values = values[self.P_diag_mask]
                 diag = torch.zeros(size=(self.n,), dtype=self.dtype, device=self.device)
@@ -432,7 +439,19 @@ class ProblemData:
         return dP, dA, dAT, dq, db
     
     def materialize_P(self) -> torch.Tensor:
+        """
+        Always returns the full P matrix (i.e., not just the upper triangular bit.)
+        """
         if not self.P_is_upper:
             return self._P.to_dense()
         else:
             return self._P @ torch.eye(n=self.n, dtype=self.dtype, device=self.device)
+        
+    def materialize_P_upper(self) -> torch.Tensor:
+        """Return the upper 
+        """
+        if self.P_is_upper:
+            return self.P_upper
+        else:
+            # TODO (quill)
+            pass

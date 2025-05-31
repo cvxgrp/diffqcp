@@ -417,9 +417,10 @@ def data_and_soln_from_cvxpy_problem(problem: cp.Problem,
     
     try:
         P = scs_probdata['P']
+        P = sparse.triu(P).tocsc()
     except:
         P = np.zeros((q.size, q.size))
-        P = sparse.triu(P).tocsr()
+        P = sparse.triu(P).tocsc()
 
     A, b = scs_probdata['A'], scs_probdata['b']
 
@@ -430,6 +431,8 @@ def data_and_soln_from_cvxpy_problem(problem: cp.Problem,
     solver_settings.verbose = False
     solver = clarabel.DefaultSolver(P, q, A, b, clarabel_cones, solver_settings)
     soln = solver.solve()
+
+    P = P.tocsr()
 
     return P, A, q, b, scs_cone_dict, soln, clarabel_cones
 
@@ -641,6 +644,8 @@ def grad_desc_test(
 def random_qcp(m, n, cone_dict, random_sparse_array, random_array):
     """Returns the problem data of a random cone program."""
     cone_list = cone_utils.parse_cone_dict(cone_dict)
+
+    print("cone list: ", cone_list)
 
     P, P_upper, A, q, b = generate_problem_data_new(n, m, random_sparse_array, random_array, P_psd=True)
     del q

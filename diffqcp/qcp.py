@@ -1,14 +1,16 @@
 """
 TODO: functionality for efficiently evaluating adjoint applied to primal variable only.
 """
-from typing import Callable
+from typing import Callable, Union
 
 import numpy as np
 from scipy.sparse import spmatrix, sparray
 import torch
+from torch import Tensor
 import linops as lo
 from linops.lsqr import lsqr
 import clarabel
+from jaxtyping import Float
 
 from diffqcp.linops import SymmetricOperator, BlockDiag, ScalarOperator, _sLinearOperator
 import diffqcp.cones as cone_utils
@@ -35,8 +37,6 @@ class QCP:
     where P, A, q, b are mutable problem data, K and K^* are
     immutable problem data, and (x, y, s) are the optimization
     variables.
-
-    (IN PROGRESS)
 
     Attributes 
     ----------
@@ -74,6 +74,7 @@ class QCP:
         'm',
         'N',
         '_reduce_fp_flops',
+        '_atoms_computed',
         '_Pi_Kstar_v',
         '_D_Pi_kstar_v',
         '_Pi_z',
@@ -85,13 +86,13 @@ class QCP:
     
     def __init__(
         self,
-        P: torch.Tensor | spmatrix | sparray,
-        A: torch.Tensor | spmatrix | sparray,
-        q: torch.Tensor | np.ndarray | list[float],
-        b: torch.Tensor | np.ndarray | list[float],
-        x: torch.Tensor | np.ndarray | list[float],
-        y: torch.Tensor | np.ndarray | list[float],
-        s: torch.Tensor | np.ndarray | list[float],
+        P: Float[Union[Tensor, sparray, spmatrix], 'n n'],
+        A: Float[Union[Tensor, sparray, spmatrix], 'm n'],
+        q: Float[Union[Tensor, np.ndarray], 'n'],
+        b: Float[Union[Tensor, np.ndarray], 'm'],
+        x: Float[Union[Tensor, np.ndarray], 'n'],
+        y: Float[Union[Tensor, np.ndarray], 'm'],
+        s: Float[Union[Tensor, np.ndarray], 'm'],
         cone_dict: dict[str, int | list[int]],
         P_is_upper: bool,
         dtype: torch.dtype | None = None,
@@ -119,14 +120,9 @@ class QCP:
         self.m = y.shape[0]
         self.N = self.n + self.m + 1
         self._reduce_fp_flops = reduce_fp_flops
+        self._atoms_computed = False
         if not self._reduce_fp_flops:
             self.form_atoms()
-
-    # any chance I could JIT jvp or vjp...or at least certain parts?
-    #   since problem data sizes will be fixed
-    #   If I could use proper conditionals and JIT linops lsqr that would
-    #   burn a lot of risk for head-to-head against diffcp.
-    # PROBABLY SEE PERFORMANCE BEFORE JIT (will eventually JIT, but may not need to for paper experiment)
     
     def form_atoms(self) -> None:
         self._Pi_Kstar_v, self._D_Pi_kstar_v = cone_utils.proj_and_dproj(self._y - self._s, self.data.cones, dual=True)
@@ -138,6 +134,7 @@ class QCP:
                                 ScalarOperator(torch.tensor(1.0, dtype=self.dtype, device=self.device))],
                                 device=self.device)
         self._Dz_Q_Pi_z: lo.LinearOperator = Du_Q_efficient(self._Pi_z, self.data.P, self.data.A, self.data.AT, self.data.q, self.data.b)
+        self._atoms_computed = True
 
         # TODO (quill): decouple and remove overhead
         #   Note: did this because the commented out bit below was causing dtype and device errors during the adjoint lsqr call.
@@ -157,14 +154,14 @@ class QCP:
     
     def jvp(
         self,
-        dP: torch.Tensor | spmatrix,
-        dA: torch.Tensor | spmatrix,
-        dq: torch.Tensor | np.ndarray,
-        db: torch.Tensor | np.ndarray
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        if self._reduce_fp_flops:
-            # TODO (quill) need to set reduce_fp_flops to False now so don't recompute?
-            #   -> yes: what if you compute multiple JVPs in a row, etc.
+        dP: Float[Union[Tensor, sparray, spmatrix], 'n n'],
+        dA: Float[Union[Tensor, sparray, spmatrix], 'm n'],
+        dq: Float[Union[Tensor, np.ndarray], 'n'],
+        db: Float[Union[Tensor, np.ndarray], 'm'],
+    ) -> tuple[
+            Float[Tensor, 'n'], Float[Tensor, 'm'], Float[Tensor, 'm']
+        ]:
+        if not self._atoms_computed:
             self.form_atoms()
 
         dP, dA, dAT, dq, db = self.data.convert_perturbations(dP, dA, dq, db)
@@ -174,6 +171,7 @@ class QCP:
             dz = torch.zeros(d_data_N.shape[0], dtype=self.dtype, device=self.device)
         else:
             dz = lsqr(self._F, -d_data_N)
+            # TODO (quill): add LSQR residual
         
         dz_n, dz_m, dz_N = dz[:n], dz[n:n+m], dz[-1]
         dx = dz_n - self._x * dz_N
@@ -184,14 +182,16 @@ class QCP:
 
     def vjp(
         self,
-        dx: torch.Tensor | np.ndarray | list[float],
-        dy: torch.Tensor | np.ndarray | list[float],
-        ds: torch.Tensor | np.ndarray | list[float]
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        dx: Float[Union[Tensor, np.ndarray], 'n'],
+        dy: Float[Union[Tensor, np.ndarray], 'm'],
+        ds: Float[Union[Tensor, np.ndarray], 'm']
+    ) -> tuple[
+            Float[Tensor, 'n n'], Float[Tensor, 'm n'], Float[Tensor, 'n'], Float[Tensor, 'm']
+        ]:
         """
-        Returns dP and dA as tensors in sparse_csr format
+        Returns dP and dA as tensors in `sparse_csr` layout.
         """
-        if self._reduce_fp_flops:
+        if not self._atoms_computed:
             self.form_atoms()
         
         dx = to_tensor(dx, dtype=self.dtype, device=self.device)
@@ -208,6 +208,7 @@ class QCP:
             d_data_N = torch.zeros(dz.shape[0], dtype=self.dtype, device=self.device)
         else:
             d_data_N = lsqr(self._F.T, -dz)
+            # TODO (quill): add LSQR residual
 
         return dData_Q_adjoint_efficient(
             self._Pi_z, d_data_N[:self.n], d_data_N[self.n:self.n+self.m], d_data_N[-1],
@@ -218,47 +219,60 @@ class QCP:
     
     def update(
         self,
-        P: torch.Tensor | spmatrix | sparray,
-        A: torch.Tensor | spmatrix | sparray,
-        q: torch.Tensor | np.ndarray | list[float],
-        b: torch.Tensor | np.ndarray | list[float],
-        x: torch.Tensor | np.ndarray | list[float],
-        y: torch.Tensor | np.ndarray | list[float],
-        s: torch.Tensor | np.ndarray | list[float]
+        P: Float[Union[Tensor, sparray, spmatrix], 'n n'],
+        A: Float[Union[Tensor, sparray, spmatrix], 'm n'],
+        q: Float[Union[Tensor, np.ndarray], 'n'],
+        b: Float[Union[Tensor, np.ndarray], 'm'],
+        x: Float[Union[Tensor, np.ndarray], 'n'],
+        y: Float[Union[Tensor, np.ndarray], 'm'],
+        s: Float[Union[Tensor, np.ndarray], 'm']
     ) -> None:
-        self.data.P = P
-        self.data.A = A
-        self.data.q = q
-        self.data.b = b
+        self.update_data(P, A, q, b)
         self.update_solution(x, y, s)
     
     def update_data(
         self,
-        P: torch.Tensor | spmatrix | sparray,
-        A: torch.Tensor | spmatrix | sparray,
-        q: torch.Tensor | np.ndarray | list[float],
-        b: torch.Tensor | np.ndarray | list[float]
+        P: Float[Union[Tensor, sparray, spmatrix], 'n n'],
+        A: Float[Union[Tensor, sparray, spmatrix], 'm n'],
+        q: Float[Union[Tensor, np.ndarray], 'n'],
+        b: Float[Union[Tensor, np.ndarray], 'm'],
+
     ) -> None:
-        # TODO (quill): make notes somewhere that
-        #   1. Make note that setting `reduce_fp_flops = True` can reduce overall possible flop count reductions
-        #       if it's possible to not redo all atoms.
-        #   2. assuming a user wouldn't do update_data and update_solution, else you redo some computation (doesn't break things).
+        """
+        If changing data then will have to change solution, so don't do any
+        atom forming.
+        """
+        self._atoms_computed = False
         self.data.P = P
         self.data.A = A
         self.data.q = q
         self.data.b = b
-        
-        if not self._reduce_fp_flops:
-            self._Dz_Q_Pi_z: lo.LinearOperator = Du_Q_efficient(self._Pi_z, self.data.P, self.data.A, self.data.AT, self.data.q, self.data.b)
-            self._F = (self._Dz_Q_Pi_z @ self._Dpi_z) - self._Dpi_z + lo.IdentityOperator(self.N)
-
-    def update_solution(
-            self,
-            x: torch.Tensor | np.ndarray | list[float],
-            y: torch.Tensor | np.ndarray | list[float],
-            s: torch.Tensor | np.ndarray | list[float]
+    
+    def perturb_data(
+        self,
+        dP: Float[Union[Tensor, sparray, spmatrix], 'n n'],
+        dA: Float[Union[Tensor, sparray, spmatrix], 'm n'],
+        dq: Float[Union[Tensor, np.ndarray], 'n'],
+        db: Float[Union[Tensor, np.ndarray], 'm']
     ) -> None:
-        # TODO: think about adding equality checks to previous values to see if we do need to recompute the projections?
+        """
+        A more efficient version of `update_data` that doesn't require
+        forming `dP` when `P` is a linop.
+        (Cannot currently add a `Tensor` in sparse CSR layout to a linop.)
+        """
+        self._atoms_computed = False
+        self.data.perturb_P(dP)
+        self.data.A = self.data.A + dA
+        self.data.q = self.data.q + dq
+        self.data.b = self.data.b + db
+    
+    def update_solution(
+        self,
+        x: Float[Union[Tensor, np.ndarray], 'n'],
+        y: Float[Union[Tensor, np.ndarray], 'm'],
+        s: Float[Union[Tensor, np.ndarray], 'm']
+    ) -> None:
+        self._atoms_computed = False
         self._x = to_tensor(x, dtype=self.dtype, device=self.device)
         self._y = to_tensor(y, dtype=self.dtype, device=self.device)
         self._s = to_tensor(s, dtype=self.dtype, device=self.device)
@@ -266,86 +280,76 @@ class QCP:
         if not self._reduce_fp_flops:
             self.form_atoms()
     
-    def _update_data_dependent_atoms(self):
-        self._Dz_Q_Pi_z: lo.LinearOperator = Du_Q_efficient(self._Pi_z, self.data.P, self.data.A, self.data.AT, self.data.q, self.data.b)
-        self._F = (self._Dz_Q_Pi_z @ self._Dpi_z) - self._Dpi_z + lo.IdentityOperator(self.N)
+    # TODO (quill): add back `_reduce_fp_flops` functionality that exploits what actually
+    #   needs to be updated.
+    
+    # def _update_data_dependent_atoms(self):
+    #     # TODO (quill): update this to match the linop form in `form_atoms`
+    #     self._Dz_Q_Pi_z: lo.LinearOperator = Du_Q_efficient(self._Pi_z, self.data.P, self.data.A, self.data.AT, self.data.q, self.data.b)
+    #     self._F = (self._Dz_Q_Pi_z @ self._Dpi_z) - self._Dpi_z + lo.IdentityOperator(self.N)
     
     @property
-    def P(self) -> torch.Tensor | SymmetricOperator:
+    def P(self) -> Float[Tensor, 'n n'] | SymmetricOperator:
         return self.data.P
     
     @P.setter
-    def P(self, P):
+    def P(self, P: Float[Union[Tensor, sparray, spmatrix], 'n n']):
         self.data.P = P
-        self._update_data_dependent_atoms()
+        self._atoms_computed = False
     
     @property
-    def A(self) -> torch.Tensor | spmatrix:
+    def A(self) -> Float[Tensor, 'm n']:
         return self.data.A
 
     @A.setter
-    def A(self, A: torch.Tensor | spmatrix) -> None:
+    def A(self, A: Float[Union[Tensor, sparray, spmatrix], 'm n']) -> None:
         self.data.A = A
-        self._update_data_dependent_atoms()
+        self._atoms_computed = False
 
     @property
-    def q(self) -> torch.Tensor | np.ndarray:
+    def q(self) -> Float[Tensor, 'n']:
         return self.data.q
 
     @q.setter
-    def q(self, q: torch.Tensor | np.ndarray) -> None:
+    def q(self, q: Float[Union[Tensor, np.ndarray], 'n']) -> None:
         self.data.q = q
-        self._update_data_dependent_atoms()
+        self._atoms_computed = False
 
     @property
-    def b(self) -> torch.Tensor | np.ndarray:
+    def b(self) -> Float[Tensor, 'm']:
         return self.data.b
 
     @b.setter
-    def b(self, b: torch.Tensor | np.ndarray) -> None:
+    def b(self, b: Float[Union[Tensor, np.ndarray], 'm']) -> None:
         self.data.b = b
-        self._update_data_dependent_atoms()
+        self._atoms_computed = False
 
     @property
-    def x(self) -> torch.Tensor:
+    def x(self) -> Float[Tensor, 'n']:
         return self._x
     
     @x.setter
-    def x(self, x):
+    def x(self, x: Float[Union[Tensor, np.ndarray], 'n']):
         self._x = to_tensor(x, self.dtype, self.device)
-
-        if not self._reduce_fp_flops:
-            self._Pi_z = torch.cat((self._x,
-                                self._Pi_Kstar_v,
-                                torch.tensor(1.0, dtype=self.dtype, device=self.device)))
-            self._Dpi_z = BlockDiag([lo.IdentityOperator(self.n),
-                                    self._D_Pi_kstar_v,
-                                    ScalarOperator(torch.tensor(1.0, dtype=self.dtype, device=self.device))],
-                                    device=self.device)
-            self._Dz_Q_Pi_z: lo.LinearOperator = Du_Q_efficient(self._Pi_z, self.data.P, self.data.A, self.data.AT, self.data.q, self.data.b)
-            self._F = (self._Dz_Q_Pi_z @ self._Dpi_z) - self._Dpi_z + lo.IdentityOperator(self.N)
+        self._atoms_computed = False
 
     @property
-    def y(self) -> torch.Tensor:
+    def y(self) -> Float[Tensor, 'm']:
         return self._y
     
     @y.setter
-    def y(self, y):
+    def y(self, y: Float[Union[Tensor, np.ndarray], 'm']):
         self._y = to_tensor(y, self.dtype, self.device)
-
-        if not self._reduce_fp_flops:
-            self.form_atoms()
+        self._atoms_computed = False
 
     @property
-    def s(self) -> torch.Tensor:
+    def s(self) -> Float[Tensor, 'm']:
         return self._s
     
     @s.setter
-    def s(self, s):
+    def s(self, s: Float[Union[Tensor, np.ndarray], 'm']):
         self._s = to_tensor(s, self.dtype, self.device)
-
-        if not self._reduce_fp_flops:
-            self.form_atoms()
+        self._atoms_computed = False
 
     @property
     def does_reduce_fp_flops(self):

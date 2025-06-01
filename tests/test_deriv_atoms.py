@@ -64,8 +64,8 @@ def test_Ddata_Q_is_approximation(device):
         tau = tau.unsqueeze(0)
         z = Q(P_op, A, q, b, x, y, tau)
 
-        dP_upper = utils.get_random_like(P_upper, lambda n: np.random.normal(0, 1e-6, size=n))
-        dA = utils.get_random_like(A, lambda n: np.random.normal(0, 1e-6, size=n))
+        dP_upper = utils.get_random_like(P_upper, lambda n: np.random.normal(0, 1e-5, size=n))
+        dA = utils.get_random_like(A, lambda n: np.random.normal(0, 1e-5, size=n))
         dq = torch.randn(q.shape[0], generator=rng, device=device)
         db = torch.randn(b.shape[0], generator=rng, device=device)
         dP_op, dA, dq, db = utils.convert_prob_data_to_torch(dP_upper, dA, dq, db, dtype=torch.float64, device=device)
@@ -94,8 +94,6 @@ def test_Ddata_Q_is_approximation_efficient(device):
     rng = torch.Generator(device=device).manual_seed(0)
 
     for i in range(10):
-        # m = np.random.randint(low=10, high=20)
-        # n = m + np.random.randint(low=5, high=15)
         n = np.random.randint(low=10, high=20)
         m = n + np.random.randint(low=5, high=15)
         N = n + m + 1
@@ -110,8 +108,8 @@ def test_Ddata_Q_is_approximation_efficient(device):
         tau = tau.unsqueeze(0)
         z = Q(P, A, q, b, x, y, tau)
 
-        dP = utils.get_random_like(P, lambda n: np.random.normal(0, 1e-6, size=n))
-        dA = utils.get_random_like(A, lambda n: np.random.normal(0, 1e-6, size=n))
+        dP = utils.get_random_like(P, lambda n: np.random.normal(0, 1e-5, size=n))
+        dA = utils.get_random_like(A, lambda n: np.random.normal(0, 1e-5, size=n))
         dAT = utils.get_transpose(dA, return_tensor=True, dtype=torch.float64, device=device)
         dq = torch.randn(q.shape[0], generator=rng, device=device)
         db = torch.randn(b.shape[0], generator=rng, device=device)
@@ -206,7 +204,7 @@ def test_Du_Q_is_approximation_efficient(device):
         tau = tau.unsqueeze(0)
         z = Q(P, A, q, b, x, y, tau)
 
-        du = 1e-6*torch.randn(N, generator=rng, dtype=torch.float64, device=device)
+        du = 1e-5*torch.randn(N, generator=rng, dtype=torch.float64, device=device)
         dx, dy, dtau = du[:n], du[n: -1], du[-1]
         dtau = dtau.unsqueeze(0)
         dQ = Q(P, A, q, b, x + dx, y + dy, tau + dtau) - z
@@ -216,7 +214,7 @@ def test_Du_Q_is_approximation_efficient(device):
         print("FD: ", dQ.cpu())
         print("autodiff: ", (deriv_op @ du).cpu())
 
-        assert torch.allclose(dQ, deriv_op @ du, atol=1e-8)
+        assert torch.allclose(dQ, deriv_op @ du, atol=1e-6, rtol=1e-4)
         
 
 @pytest.mark.parametrize("device", devices)

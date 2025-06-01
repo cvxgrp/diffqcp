@@ -1,20 +1,26 @@
 [project]
 name = "diffqcp"
 version = "0.1.0"
-description = "Engine to compute Jacobian-vector products for (convex) quadratic cone programs."
+description = "Engine to compute Jacobian-vector and vector-Jacobian products for (convex) quadratic cone programs."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "cvxpy>=1.6.2",
-    "pytest>=8.3.5",
-    "ruff>=0.9.9",
     "torch==2.2.2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
     "torch>=2.6.0; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     "numpy<2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
     "numpy>=2.2.3; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     "torch-linops",
-    "matplotlib>=3.10.3",
+    "jaxtyping>=0.3.2",
 ]
 
 [tool.uv.sources]
 torch-linops = { git = "https://github.com/cvxgrp/torch_linops.git" }
+
+[dependency-groups]
+dev = [
+    "cvxpy>=1.6.5",
+    "diffcp>=1.1.4",
+    "matplotlib>=3.10.3",
+    "pytest>=8.3.5",
+    "ruff>=0.11.12",
+]

@@ -7,7 +7,6 @@ The `atol` parameters in the testing assertions
 have been raised to the largest value that still
 allows that respective test to pass.
 """
-
 import numpy as np
 import scipy.linalg as la
 import scipy.sparse as sparse
@@ -18,7 +17,7 @@ import clarabel
 
 import diffqcp.qcp as cone_prog
 from diffqcp.qcp import QCP
-from diffqcp.utils import to_tensor
+from diffqcp.utils import to_tensor, to_sparse_csr_tensor
 from tests.utils import (data_and_soln_from_cvxpy_problem, get_zeros_like, get_random_like, form_full_symmetric, random_qcp,
                          convert_prob_data_to_torch_new)
 
@@ -817,3 +816,62 @@ def test_adjoint_consistency_easy(device):
         num_computed += 1
     
     assert num_computed > 0
+
+@pytest.mark.parametrize("device", devices)
+def test_adjoint_consistency_ls_eq(device):
+
+    np.random.seed(0)
+
+    m = 20
+    n = 10
+
+    for _ in range(10):
+        x = cp.Variable(n)
+        b = np.random.randn(m)
+        A = np.random.randn(m, n)
+        assert np.linalg.matrix_rank(A) == n
+        objective = cp.pnorm(A @ x - b, 1)
+        constraints = [x >= 0, cp.sum(x) == 1.0]
+        problem = cp.Problem(cp.Minimize(objective), constraints)
+        
+        data = data_and_soln_from_cvxpy_problem(problem)
+        P, A, q, b = data[0], data[1], data[2], data[3] # P is upper triangular
+        scs_cone_dict, soln, clarabel_cones = data[4], data[5], data[6]
+
+        x = to_tensor(soln.x, dtype=torch.float64, device=device)
+        y = to_tensor(soln.z, dtype=torch.float64, device=device)
+        s = to_tensor(soln.s, dtype=torch.float64, device=device)
+
+        qcp = QCP(P, A, q, b, x, y, s, scs_cone_dict, P_is_upper=True, dtype=torch.float64, device=device)
+
+        x_tilde = to_tensor(np.random.randn(P.shape[0]), dtype=torch.float64, device=device)
+        y_tilde = to_tensor(np.random.randn(A.shape[0]), dtype=torch.float64, device=device)
+        s_tilde = to_tensor(np.random.randn(A.shape[0]), dtype=torch.float64, device=device)
+
+
+        P_tilde = get_random_like(P, np.random.randn)
+        P_tilde = to_sparse_csr_tensor(P_tilde, dtype=torch.float64, device=device)
+        # TODO (quill): ensure P tilde has correct structure...well, QCP should do this for me
+        A_tilde = get_random_like(A, np.random.randn)
+        A_tilde = to_sparse_csr_tensor(A_tilde, dtype=torch.float64, device=device)
+        q_tilde = to_tensor(np.random.randn(P.shape[0]), dtype=torch.float64, device=device)
+        b_tilde = to_tensor(np.random.randn(A.shape[0]), dtype=torch.float64, device=device)
+
+        dx, dy, ds = qcp.jvp(P_tilde, A_tilde, q_tilde, b_tilde)
+        dP, dA, dq, db = qcp.vjp(x_tilde, y_tilde, s_tilde)
+
+        lhs = x_tilde @ dx + y_tilde @ dy + s_tilde @ ds
+        rhs = (torch.trace(dP.to_dense() @ P_tilde) + torch.trace(dA.to_dense().T @ A_tilde)
+            + dq @ q_tilde + db @ b_tilde)
+        
+        print("LHS: ", lhs)
+        print("RHS: ", rhs)
+        print("--- ---")
+
+        QCP()
+    
+    assert False
+    # assert torch.abs(lhs - rhs) < 1e-10
+
+    
+    # P_tilde, P_upper_tilde, A_tilde, q_tilde, b_tilde = convert_prob_data_to_torch_new(P_tilde, P_upper_tilde, A_tilde, q_tilde, b_tilde, dtype=torch.float64, device=device)

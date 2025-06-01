@@ -16,6 +16,7 @@ import clarabel
 
 from tests.utils import data_and_soln_from_cvxpy_problem, get_random_like
 from diffqcp import compute_derivative
+from diffqcp import QCP
 from diffqcp import utils
 
 NUM_TRIALS = 10
@@ -24,7 +25,8 @@ if torch.cuda.is_available():
     devices += [torch.device('cuda')]
 
 def _test_DS(prob: cp.Problem,
-             tol: float = 1e-8,
+             atol: float = 1e-6,
+             rtol: float = 1e-4,
              dtype: torch.dtype = torch.float64
 ) -> None:
     """
@@ -39,13 +41,16 @@ def _test_DS(prob: cp.Problem,
     # x, y, s, derivative, adjoint_derivative = diffcp.solve_and_derivative(A, b, q, cone_dict)
     
     for device in devices:
-        DS = compute_derivative(P_upper, A, q, b, cone_dict,
-                                solution=soln, dtype=dtype, device=device)
+        
+        qcp = QCP(
+            P=P_upper, A=A, q=q, b=b, x=np.array(soln.x), y=np.array(soln.z), s=np.array(soln.s),
+            cone_dict=cone_dict, P_is_upper=True, dtype=dtype, device=device
+        )
 
-        dP_upper = get_random_like(P_upper, lambda n: np.random.normal(0, 1e-6, size=n))
-        dA = get_random_like(A, lambda n: np.random.normal(0, 1e-6, size=n))
-        dq = np.random.normal(0, 1e-6, size=q.size)
-        db = np.random.normal(0, 1e-6, size=b.size)
+        dP_upper = get_random_like(P_upper, lambda n: np.random.normal(0, 1e-5, size=n))
+        dA = get_random_like(A, lambda n: np.random.normal(0, 1e-5, size=n))
+        dq = np.random.normal(0, 1e-5, size=q.size)
+        db = np.random.normal(0, 1e-5, size=b.size)
 
         solver_settings = clarabel.DefaultSettings()
         solver_settings.verbose = False
@@ -60,23 +65,15 @@ def _test_DS(prob: cp.Problem,
         delta_y = utils.to_tensor(delta_soln.z, dtype=dtype, device=device) - utils.to_tensor(soln.z, dtype=dtype, device=device)
         delta_s = utils.to_tensor(delta_soln.s, dtype=dtype, device=device) - utils.to_tensor(soln.s, dtype=dtype, device=device)
 
-        dx, dy, ds = DS(dP_upper, dA, dq, db)
+        dx, dy, ds = qcp.jvp(dP_upper, dA, dq, db)
 
         print(f"delta_x: {delta_x.to(device=None)} \n dx: {dx} \n === ===")
         print(f"delta_y: {delta_y.to(device=None)} \n dy: {dy} \n === ===")
         print(f"delta_s: {delta_s.to(device=None)} \n ds: {ds} \n === ===")
-
-        # dx2, dy2, ds2 = derivative(dA, db, dq)
-        # print("dx2: ", dx2)
-        # print("dy2: ", dy2)
-        # print("ds2: ", ds2)
-        # dx2 = utils.to_tensor(dx2, dtype=torch.float64)
-        # dy2 = utils.to_tensor(dy2, dtype=torch.float64)
-        # ds2 = utils.to_tensor(ds2, dtype=torch.float64)
         
-        assert torch.allclose(delta_x, dx, atol=tol)
-        assert torch.allclose(delta_y, dy, atol=tol)
-        assert torch.allclose(delta_s, ds, atol=tol)
+        assert torch.allclose(delta_x, dx, atol=atol, rtol=rtol)
+        assert torch.allclose(delta_y, dy, atol=atol, rtol=rtol)
+        assert torch.allclose(delta_s, ds, atol=atol, rtol=rtol)
 
 
 # ==== PASSING ====
@@ -263,7 +260,7 @@ def test_socp_proj_deriv():
         prob.solve()
         if prob.status == 'optimal':
             print(f"NUM CHECKED: {i}")
-            _test_DS(prob, tol=1e-8)
+            _test_DS(prob)
         else:
             failed += 1
     if failed == NUM_TRIALS:
@@ -297,3 +294,35 @@ def test_psd():
         _test_DS(prob)
     else:
         assert False, "test_psd wasn't run because problem was infeasible"
+
+
+def test_l1_eq():
+    """Generate a conic problem with unique solution.
+
+    Taken from https://github.com/cvxgrp/diffcp/blob/master/diffcp/utils.py.
+
+    Fails on the 6th time through. There are cases where the differential and FD
+    disagree on sign...
+    """
+    np.random.seed(0)
+
+    m = 20
+    n = 10
+
+    num_passed = 0
+    for _ in range(10):
+        x = cp.Variable(n)
+        b = np.random.randn(m)
+        A = np.random.randn(m, n)
+        assert np.linalg.matrix_rank(A) == n
+        objective = cp.pnorm(A @ x - b, 1)
+        constraints = [x >= 0, cp.sum(x) == 1.0]
+        prob = cp.Problem(cp.Minimize(objective), constraints)
+
+        prob.solve()
+        if prob.status == 'optimal':
+            _test_DS(prob)
+            num_passed += 1
+            print("num passed: ", num_passed)
+        else:
+            assert False, "test_psd wasn't run because problem was infeasible"

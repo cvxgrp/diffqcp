@@ -4,18 +4,20 @@ Non-cone derivative atoms composing the QCP solution map derivative.
 File used purely 
 """
 import torch
+from torch import Tensor
 import linops as lo
+from jaxtyping import Float
 
 from diffqcp.utils import sparse_tensor_transpose
 from diffqcp.linops import _sLinearOperator
 
 def Du_Q_efficient(
-    u: torch.Tensor,
-    P: torch.Tensor | lo.LinearOperator,
-    A: torch.Tensor,
-    AT: torch.Tensor,
-    q: torch.Tensor,
-    b: torch.Tensor
+    u: Float[Tensor, "N"],
+    P: Float[Tensor, "n n"] | lo.LinearOperator,
+    A: Float[Tensor, "m n"],
+    AT: Float[Tensor, "n m"],
+    q: Float[Tensor, "n"],
+    b: Float[Tensor, "m"]
 ) -> lo.LinearOperator:
     """Returns derivative of nonlinear homogeneous embedding w.r.t. u at u.
 
@@ -44,10 +46,6 @@ def Du_Q_efficient(
     -------
     lo.LinearOperator
         The derivative (w.r.t. u) of the nonlinear homogeneous embedding at u.
-
-    Notes
-    -----
-    TODO (quill): make this the main Du_Q
     """
 
     # torch compile will handle conversion of n and N to GPU.
@@ -84,11 +82,11 @@ def Du_Q_efficient(
 
 
 def Du_Q(
-    u: torch.Tensor,
-    P: torch.Tensor | lo.LinearOperator,
-    A: torch.Tensor,
-    q: torch.Tensor,
-    b: torch.Tensor
+    u: Float[Tensor, "N"],
+    P: Float[Tensor, "n n"] | lo.LinearOperator,
+    A: Float[Tensor, "m n"],
+    q: Float[Tensor, "n"],
+    b: Float[Tensor, "m"]
 ) -> lo.LinearOperator:
     """Returns derivative of nonlinear homogeneous embedding w.r.t. u at u.
 

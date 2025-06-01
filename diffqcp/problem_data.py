@@ -1,7 +1,10 @@
+from typing import Union
+
 import torch
+from torch import Tensor
 import numpy as np
 from scipy.sparse import spmatrix, sparray
-import scipy.sparse as sparse
+from jaxtyping import Float
 
 import diffqcp.cones as cone_utils
 from diffqcp.linops import SymmetricOperator
@@ -69,10 +72,10 @@ class ProblemData:
     def __init__(
         self,
         cone_dict: dict[str, int | list[int]],
-        P: torch.Tensor | spmatrix | sparray,
-        A: torch.Tensor | spmatrix | sparray,
-        q: torch.Tensor | np.ndarray | list[float],
-        b: torch.Tensor | np.ndarray | list[float],
+        P: Float[Union[Tensor, sparray, spmatrix], 'n n'],
+        A: Float[Union[Tensor, sparray, spmatrix], 'm n'],
+        q: Float[Union[Tensor, np.ndarray], 'n'],
+        b: Float[Union[Tensor, np.ndarray], 'm'],
         dtype: torch.dtype,
         device: torch.device,
         P_is_upper: bool = True,
@@ -92,7 +95,7 @@ class ProblemData:
         
     def obj_matrix_init(
         self,
-        P: torch.Tensor | spmatrix | sparray,
+        P: Float[Union[Tensor, sparray, spmatrix], 'n n'],
         P_is_upper: bool
     ) -> None:
         """
@@ -194,7 +197,7 @@ class ProblemData:
             raise ValueError("`P` must be a `scipy` `spmatrix` (or `sparray`) or a `torch.Tensor`."
                              + f" It is {type(P)}.")
         
-    def _P_transpose(self, values: torch.Tensor, perm: torch.Tensor | None = None) -> torch.Tensor:
+    def _P_transpose(self, values: torch.Tensor, perm: torch.Tensor | None = None) -> Float[Tensor, 'n n']:
         """
         No checks since this is only accessed locally.
         uses `perm` when initializing `ProblemData` in case the data is on the device and then being
@@ -207,7 +210,7 @@ class ProblemData:
             self.Pcrow_indices_T, self.Pcol_indices_T, transposed_values, size=(self.n, self.n), device=self.device
         )
     
-    def constr_matrix_init(self, A: torch.Tensor | spmatrix) -> None:
+    def constr_matrix_init(self, A: Float[Union[Tensor, sparray, spmatrix], 'm n']) -> None:
         """
         Functionality:
         - Remove any potential explicit zeros from A
@@ -246,6 +249,7 @@ class ProblemData:
             # transposed_idx = rows_T * A.shape[0] + cols_T
             # sorted_perm = np.argsort(transposed_idx)
             # self.AT_perm = torch.tensor(sorted_perm, dtype=torch.int64, device=self.device)
+            # ========== ==========
             
         if isinstance(A, torch.Tensor):
             # None of the following throws away user data.
@@ -278,7 +282,7 @@ class ProblemData:
             transposed_idx = rows_T * A.shape[0] + cols_T
             sorted_perm = torch.argsort(transposed_idx)
         else:
-            raise ValueError("`P` must be a `scipy` `spmatrix` (or `sparray`) or a `torch.Tensor`."
+            raise ValueError("`A` must be a `scipy` `spmatrix` (or `sparray`) or a `torch.Tensor`."
                              + f" It is {type(A)}.")
 
         # Now create infrastructure for cheap transposes.
@@ -297,7 +301,7 @@ class ProblemData:
         self.Acrow_indices_T = to_tensor(self.Acrow_indices_T, dtype=torch.int64, device=self.device)
         self.Acol_indices_T = to_tensor(self.Acol_indices_T, dtype=torch.int64, device=self.device)
             
-    def _A_transpose(self, values: torch.Tensor) -> torch.Tensor:
+    def _A_transpose(self, values: torch.Tensor) -> Float[Tensor, 'm n']:
         """
         supply with values of a csr array
         """
@@ -310,11 +314,15 @@ class ProblemData:
         )
 
     @property
-    def P(self) -> torch.Tensor | SymmetricOperator:
+    def P(self) -> Float[Tensor, 'n n'] | SymmetricOperator:
         return self._P
     
     @P.setter
-    def P(self, P) -> None:
+    def P(self, P: Float[Union[Tensor, sparray, spmatrix], 'n n']) -> None:
+        """
+        `P` can be either the full matrix or just upper triangular.
+        Must match whatever the original `P` was provided as.
+        """
         if isinstance(P, spmatrix) or isinstance(P, sparray):
             P = to_sparse_csr_tensor(P, dtype=self.dtype, device=self.device)
         if isinstance(P, torch.Tensor):
@@ -346,12 +354,24 @@ class ProblemData:
             raise ValueError("P must be a `scipy` `spmatrix` (or `sparray`) or a `torch.Tensor`."
                              + f" It is {type(P)}.")
                     
+    def perturb_P(
+        self, dP: Float[Tensor, 'n n']
+    ) -> None:
+        """Assumes dP is a `Tensor` in `sparse_csr` layout."""
+        assert isinstance(dP, Tensor)
+        assert dP.layout == torch.sparse_csr
+        # P is only a linop if it is upper triangular.
+        if not self.P_is_upper:
+            self.P = self._P + dP
+        else:
+            self.P = self.P_upper + dP
+    
     @property
-    def A(self) -> torch.Tensor:
+    def A(self) -> Float[Tensor, 'm n']:
         return self._A
     
     @A.setter
-    def A(self, A) -> None:
+    def A(self, A: Float[Union[Tensor, sparray, spmatrix], 'm n']) -> None:
         if isinstance(A, spmatrix) or isinstance(A, sparray):
             A = to_sparse_csr_tensor(A, dtype=self.dtype, device=self.device)
         if isinstance(A, torch.Tensor):
@@ -378,16 +398,18 @@ class ProblemData:
                              + f" It is {type(A)}.")
 
     @property
-    def AT(self) -> torch.Tensor:
+    def AT(self) -> Float[Tensor, 'n m']:
         return self._AT
     
     def convert_perturbations(
         self,
-        dP: torch.Tensor | spmatrix | sparray,
-        dA: torch.Tensor | spmatrix | sparray,
-        dq: torch.Tensor,
-        db: torch.Tensor
-    ) -> tuple[torch.Tensor | SymmetricOperator, torch.Tensor, torch.Tensor, torch.Tensor]:
+        dP: Float[Union[Tensor, sparray, spmatrix], 'n n'],
+        dA: Float[Union[Tensor, sparray, spmatrix], 'm n'],
+        dq: Float[Union[Tensor, np.ndarray], 'n'],
+        db: Float[Union[Tensor, np.ndarray], 'm']
+    ) -> tuple[
+            Float[Tensor, 'n n'] | SymmetricOperator, Float[Tensor, 'm n'], Float[Tensor, 'n'], Float[Tensor, 'm']
+        ]:
         if isinstance(dP, spmatrix) or isinstance(dP, sparray):
             dP = to_sparse_csr_tensor(dP, dtype=self.dtype, device=self.device)
         if isinstance(dP, torch.Tensor):
@@ -438,7 +460,7 @@ class ProblemData:
 
         return dP, dA, dAT, dq, db
     
-    def materialize_P(self) -> torch.Tensor:
+    def materialize_P(self) -> Float[Tensor, 'n n']:
         """
         Always returns the full P matrix (i.e., not just the upper triangular bit.)
         """
@@ -447,8 +469,8 @@ class ProblemData:
         else:
             return self._P @ torch.eye(n=self.n, dtype=self.dtype, device=self.device)
         
-    def materialize_P_upper(self) -> torch.Tensor:
-        """Return the upper 
+    def materialize_P_upper(self) -> Float[Tensor, 'n n']:
+        """Return the upper part of P
         """
         if self.P_is_upper:
             return self.P_upper

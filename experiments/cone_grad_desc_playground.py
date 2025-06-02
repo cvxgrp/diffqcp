@@ -1,3 +1,5 @@
+"""Move this to tests eventually."""
+
 import numpy as np
 import torch
 
@@ -43,6 +45,8 @@ if __name__ == '__main__':
     print("POW grad test was passed: ", result.passed)
     print("final obj val for POW grad test: ", result.final_obj)
     result.plot_obj_traj()
+
+    # TODO (quill): DUAL CONE!
     
     # ==== PSD testing ====
 

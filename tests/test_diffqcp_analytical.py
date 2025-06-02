@@ -15,8 +15,7 @@ import torch
 import pytest
 import clarabel
 
-import diffqcp.qcp as cone_prog
-from diffqcp.qcp import QCP
+from diffqcp import compute_derivative, QCP
 from diffqcp.utils import to_tensor, to_sparse_csr_tensor
 from tests.utils import (data_and_soln_from_cvxpy_problem, get_zeros_like, get_random_like, form_full_symmetric, random_qcp,
                          convert_prob_data_to_torch_new)
@@ -83,7 +82,9 @@ def test_least_squares_small(device):
 
         Dx_b = to_tensor(la.solve(A.T @ A, A.T), dtype=torch.float64, device=device)
 
-        DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
+        soln = (np.array(soln.x), np.array(soln.z), np.array(soln.s))
+
+        DS = compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
         dx, dy, ds = DS(dP, dA, torch.zeros(q_can.size, device=device), -db)
         
         assert torch.allclose( Dx_b @ db, dx[m:], atol=1e-8)
@@ -146,13 +147,11 @@ def test_least_squares_small_class_version(device):
 
         Dx_b = to_tensor(la.solve(A.T @ A, A.T), dtype=torch.float64, device=device)
 
-        # DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
         x = np.array(soln.x)
         y = np.array(soln.z)
         s = np.array(soln.s)
         qcp1 = QCP(P=P_can, A=A_can, q=q_can, b=b_can, x=x, y=y, s=s, cone_dict=cone_dict, P_is_upper=True, dtype=torch.float64, device=device)
         qcp2 = QCP(P=P_can, A=A_can, q=q_can, b=b_can, x=x, y=y, s=s, cone_dict=cone_dict, P_is_upper=True, dtype=torch.float64, device=device, reduce_fp_flops=True)
-        # dx, dy, ds = DS(dP, dA, torch.zeros(q_can.size, device=device), -db)
         dx, dy, ds = qcp1.jvp(dP, dA, torch.zeros(q_can.size, device=device), -db)
         
         assert torch.allclose( Dx_b @ db, dx[m:], atol=1e-8)
@@ -210,7 +209,7 @@ def test_nonneg_least_squares(device):
 
         Dx_q = to_tensor(np.eye(n), dtype=torch.float64, device=device)
 
-        DS = cone_prog.compute_derivative(P, A, q, b, cones, (soln, soln, 1e-9 * np.ones(n)), dtype=torch.float64, device=device)
+        DS = compute_derivative(P, A, q, b, cones, (soln, soln, 1e-9 * np.ones(n)), dtype=torch.float64, device=device)
         dx, dy, ds = DS(dP, dA, -dq, torch.zeros(b.size, device=device))
         
         assert torch.allclose( Dx_q @ dq, dx, atol=1e-8)
@@ -240,8 +239,10 @@ def test_nonneg_least_squares_cvxpy(device):
         dq_tch = to_tensor(dq, dtype=torch.float64, device=device)
         db = np.zeros(b_can.size)
         db[0:n] = dq
+
+        soln = (np.array(soln.x), np.array(soln.z), np.array(soln.s))
         
-        DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
+        DS = compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
         # q is canonicalized to b
         dx, dy, ds = DS(dP, dA, np.zeros(q_can.size), db)
 
@@ -353,7 +354,9 @@ def test_least_squares_larger(device):
 
         Dx_b = to_tensor(la.solve(A.T @ A, A.T), dtype=torch.float64, device=device)
 
-        DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
+        soln = (np.array(soln.x), np.array(soln.z), np.array(soln.s))
+
+        DS = compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
         dx, dy, ds = DS(dP, dA, np.zeros(q_can.size), -db)
 
         assert torch.allclose( Dx_b @ db, dx[m:], atol=1e-5)
@@ -418,7 +421,9 @@ def test_least_squares_soln_of_eqns_small(device):
         AT = A.T
         Dxb_db = to_tensor(AT @ la.solve(A @ AT, db_np), dtype=torch.float64, device=device)
 
-        DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
+        soln = (np.array(soln.x), np.array(soln.z), np.array(soln.s))
+
+        DS = compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
         dx, dy, ds = DS(dP, dA, np.zeros(q_can.size), db) # leave zero creation with numpy to see if gpu conversion worked
 
         assert torch.allclose(Dxb_db, dx, atol=1e-5)
@@ -463,7 +468,9 @@ def test_least_squares_soln_of_eqns_larger(device):
         AT = A.T
         Dxb_db = to_tensor(AT @ la.solve(A @ AT, db_np), dtype=torch.float64, device=device)
 
-        DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
+        soln = (np.array(soln.x), np.array(soln.z), np.array(soln.s))
+
+        DS = compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
         dx, dy, ds = DS(dP, dA, np.zeros(q_can.size), db)
 
         assert torch.allclose(Dxb_db, dx, atol=1e-5)
@@ -533,7 +540,9 @@ def test_constrained_least_squares(device):
         db = 1e-6 * np.random.randn(b.size)
         db_can = np.hstack((db, np.zeros(b_can.size - b.size)))
 
-        DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
+        soln = (np.array(soln.x), np.array(soln.z), np.array(soln.s))
+
+        DS = compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
         dx, dy, ds = DS(dP, dA, torch.zeros(q_can.size, device=device), db_can)
         
         dx_b_analytic = dx_b_analytical(db)
@@ -647,8 +656,10 @@ def test_dprojection_exp(device):
     P_can, A_can = data[0], data[1]
     q_can, b_can = data[2], data[3]
     cone_dict, soln = data[4], data[5]
+    
+    soln = (np.array(soln.x), np.array(soln.z), np.array(soln.s))
 
-    DS = cone_prog.compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
+    DS = compute_derivative(P_can, A_can, q_can, b_can, cone_dict, soln, dtype=torch.float64, device=device)
 
     dlam = 1e-6
     dP = get_zeros_like(P_can)
@@ -867,8 +878,6 @@ def test_adjoint_consistency_ls_eq(device):
         print("LHS: ", lhs)
         print("RHS: ", rhs)
         print("--- ---")
-
-        QCP()
     
     assert False
     # assert torch.abs(lhs - rhs) < 1e-10

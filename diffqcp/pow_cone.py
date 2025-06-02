@@ -3,15 +3,19 @@ Projection onto the power cone and (TODO next) the derivative of the projection.
 
 Basically just a port from https://github.com/cvxgrp/scs/blob/master/src/cones.c
 """
+from typing import Union
+
 import torch
+from torch import Tensor
+from jaxtyping import Float
 
 POW_CONE_TOL = 1e-9
 POW_CONE_MAX_ITERS = 20
 
-def pow_calc_x_i(r: torch.Tensor,
-                 x_i: torch.Tensor,
-                 z0: torch.Tensor,
-                 alpha_i: torch.Tensor
+def pow_calc_x_i(r: Float[Tensor, ""],
+                 x_i: Float[Tensor, ""],
+                 z0: Float[Tensor, ""],
+                 alpha_i: Float[Tensor, ""]
 ) -> torch.Tensor:
     """x_i from eq 4. from Hien paper.
     """
@@ -19,21 +23,21 @@ def pow_calc_x_i(r: torch.Tensor,
     return torch.maximum(x, torch.tensor(1e-12, dtype=x_i.dtype, device=x_i.device))
 
 
-def g_i(r: torch.Tensor,
-        x_i: torch.Tensor,
-        z0: torch.Tensor,
-        alpha_i: torch.Tensor
+def g_i(r: Float[Tensor, ""],
+        x_i: Float[Tensor, ""],
+        z0: Float[Tensor, ""],
+        alpha_i: Float[Tensor, ""]
 ) -> torch.Tensor:
     """g_i from diffqcp paper.
     """
     return 2 * pow_calc_x_i(r, x_i, z0, alpha_i) - x_i
 
 
-def pow_calc_f(x: torch.Tensor,
-               y: torch.Tensor,
-               r: torch.Tensor,
-               alpha: torch.Tensor,
-               alphac: torch.Tensor
+def pow_calc_f(x: Float[Tensor, ""],
+               y: Float[Tensor, ""],
+               r: Float[Tensor, ""],
+               alpha: Float[Tensor, ""],
+               alphac: Float[Tensor, ""]
 ) -> torch.Tensor:
     """Phi from Hien paper.
     """
@@ -83,9 +87,8 @@ def in_K_pow_polar(alpha: torch.Tensor,
             z0 * torch.pow(alpha, alpha) * torch.pow(alphac, alphac))
 
 
-def proj_dproj_power_cone(v: torch.Tensor,
-                          alpha: float | torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
+def proj_dproj_power_cone(v: Float[Tensor, "3"], alpha: Float[Tensor, ""]
+) -> tuple[Float[Tensor, "3"], Float[Tensor, "3 3"]]:
     """Projection onto 3D power cone.
 
     The 3D power cone is defined as

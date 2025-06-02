@@ -1,7 +1,4 @@
-"""
-Non-cone derivative atoms composing the QCP solution map derivative.
-
-File used purely 
+"""Non-cone derivative atoms composing the QCP solution map derivative.
 """
 import torch
 from torch import Tensor
@@ -12,7 +9,7 @@ from diffqcp.utils import sparse_tensor_transpose
 from diffqcp.linops import _sLinearOperator
 
 def Du_Q_efficient(
-    u: Float[Tensor, "N"],
+    u: Float[Tensor, "n+m+1"],
     P: Float[Tensor, "n n"] | lo.LinearOperator,
     A: Float[Tensor, "m n"],
     AT: Float[Tensor, "n m"],
@@ -48,7 +45,6 @@ def Du_Q_efficient(
         The derivative (w.r.t. u) of the nonlinear homogeneous embedding at u.
     """
 
-    # torch compile will handle conversion of n and N to GPU.
     n = P.shape[0]
     m = A.shape[0]
     N = n + m + 1
@@ -57,7 +53,7 @@ def Du_Q_efficient(
     Px = P @ x
     xT_P_x = x @ Px
 
-    def mv(du: torch.Tensor) -> torch.Tensor:
+    def mv(du: Float[Tensor, 'n+m+1']) -> Float[Tensor, 'n+m+1']:
         dx, dy, dtau = du[:n], du[n:-1], du[-1]
         out = torch.empty(N, dtype=A.dtype, device=A.device)
 
@@ -68,7 +64,7 @@ def Du_Q_efficient(
 
         return out
 
-    def rv(dv: torch.Tensor) -> torch.Tensor:
+    def rv(dv: Float[Tensor, 'n+m+1']) -> Float[Tensor, 'n+m+1']:
         dv1, dv2, dv3 = dv[:n], dv[n:-1], dv[-1]
         out = torch.empty(N, dtype=A.dtype, device=A.device)
 
@@ -82,7 +78,7 @@ def Du_Q_efficient(
 
 
 def Du_Q(
-    u: Float[Tensor, "N"],
+    u: Float[Tensor, "n+m+1"],
     P: Float[Tensor, "n n"] | lo.LinearOperator,
     A: Float[Tensor, "m n"],
     q: Float[Tensor, "n"],
@@ -113,13 +109,8 @@ def Du_Q(
     -------
     lo.LinearOperator
         The derivative (w.r.t. u) of the nonlinear homogeneous embedding at u.
-
-    Notes
-    -----
-    - TODO (quill): switch names with the above (Du_Q_efficient), then delete this one
     """
 
-    # torch compile will handle conversion of n and N to GPU.
     n = P.shape[0]
     m = A.shape[0]
     N = n + m + 1
@@ -129,7 +120,7 @@ def Du_Q(
     xT_P_x = x @ Px
     AT = sparse_tensor_transpose(A) # If A was in csr format, AT is in csc format.
 
-    def mv(du: torch.Tensor) -> torch.Tensor:
+    def mv(du: Float[Tensor, 'n+m+1']) -> Float[Tensor, 'n+m+1']:
         dx, dy, dtau = du[:n], du[n:-1], du[-1]
         out = torch.empty(N, dtype=A.dtype, device=A.device)
 
@@ -140,7 +131,7 @@ def Du_Q(
 
         return out
 
-    def rv(dv: torch.Tensor) -> torch.Tensor:
+    def rv(dv: Float[Tensor, 'n+m+1']) -> Float[Tensor, 'n+m+1']:
         dv1, dv2, dv3 = dv[:n], dv[n:-1], dv[-1]
         out = torch.empty(N, dtype=A.dtype, device=A.device)
 
@@ -154,13 +145,13 @@ def Du_Q(
 
 
 def dData_Q_efficient(
-    u: torch.Tensor,
-    dP: torch.Tensor | lo.LinearOperator,
-    dA: torch.Tensor,
-    dAT: torch.Tensor,
-    dq: torch.Tensor,
-    db: torch.Tensor
-) -> torch.Tensor:
+    u: Float[Tensor, 'n+m+1'],
+    dP: Float[Tensor, 'n n'] | lo.LinearOperator,
+    dA: Float[Tensor, 'm n'],
+    dAT: Float[Tensor, 'n m'],
+    dq: Float[Tensor, 'n'],
+    db: Float[Tensor, 'm']
+) -> Float[Tensor, 'n+m+1']:
     """Jacobian-vector product of Q at (u, data) and d_data.
 
     More specifically, returns D_data Q(u, data)[d_data], where
@@ -170,10 +161,6 @@ def dData_Q_efficient(
     u, dP, dA, dq, and db are the exact objects defined in the diffqcp paper.
     Specifically, note that dP should be the true perturbation to the matrix P,
     **not just the upper triangular part.**
-
-    Notes
-    -----
-    TODO (quill): test this function, delete the one below (dData_Q), then rename this one.
     """
     n = dP.shape[0]
     N = n + dA.shape[0] + 1
@@ -190,12 +177,13 @@ def dData_Q_efficient(
     return out
 
 
-def dData_Q(u: torch.Tensor,
-            dP: torch.Tensor | lo.LinearOperator,
-            dA: torch.Tensor,
-            dq: torch.Tensor,
-            db: torch.Tensor
-) -> torch.Tensor:
+def dData_Q(
+    u: Float[Tensor, 'n+m+1'],
+    dP: Float[Tensor, 'n n'] | lo.LinearOperator,
+    dA: Float[Tensor, 'm n'],
+    dq: Float[Tensor, 'n'],
+    db: Float[Tensor, 'm']
+) -> Float[Tensor, 'n+m+1']:
     """The Jacobian-vector product D_dataQ(u, data)[data].
 
     More specifically, returns D_data Q(u, data)[d_data], where
@@ -227,10 +215,10 @@ def dData_Q(u: torch.Tensor,
 
 
 def dData_Q_adjoint_efficient(
-    u: torch.Tensor,
-    w1: torch.Tensor,
-    w2: torch.Tensor,
-    w3: torch.Tensor,
+    u: Float[Tensor, 'n+m+1'],
+    w1: Float[Tensor, 'n'],
+    w2: Float[Tensor, 'm'],
+    w3: Float[Tensor, ''],
     P_rows: torch.Tensor,
     P_cols: torch.Tensor,
     Pcrow_indices: torch.Tensor,
@@ -239,7 +227,9 @@ def dData_Q_adjoint_efficient(
     A_cols: torch.Tensor,
     Acrow_indices: torch.Tensor,
     Acol_indices: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[
+        Float[Tensor, 'n n'], Float[Tensor, 'm n'], Float[Tensor, 'n'], Float[Tensor, 'm']
+    ]:
     """The vector-Jacobian product D_dataQ(u, data)^T[w].
     
     """
@@ -270,13 +260,14 @@ def dData_Q_adjoint_efficient(
     return (dP, dA, dq, db)
 
 def dData_Q_adjoint(
-    u: torch.Tensor,
-    w1: torch.Tensor,
-    w2: torch.Tensor,
-    w3: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    u: Float[Tensor, 'n+m+1'],
+    w1: Float[Tensor, 'n'],
+    w2: Float[Tensor, 'm'],
+    w3: Float[Tensor, ''],
+) -> tuple[
+        Float[Tensor, 'n n'], Float[Tensor, 'm n'], Float[Tensor, 'n'], Float[Tensor, 'm']
+    ]:
     """The vector-Jacobian product D_dataQ(u, data)^T[du].
-    
     """
     # so take in parameters which specify the entries to fill in.
     n = w1.shape[0]

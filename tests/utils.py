@@ -15,6 +15,7 @@ from clarabel import DefaultSolution
 import linops as lo
 import torch
 import matplotlib.pyplot as plt
+from jaxtyping import Float
 
 import diffqcp.utils as qcp_utils
 from diffqcp.linops import SymmetricOperator
@@ -203,6 +204,41 @@ def generate_torch_problem_data_new(
     P, P_upper, A, q, b = convert_prob_data_to_torch_new(P, P_upper, A, q, b, dtype, device)
     AT = qcp_utils.to_sparse_csr_tensor(AT, dtype=dtype, device=device)
     return P, P_upper, A, AT, q, b
+
+
+def data_and_soln_from_cvxpy_problem(problem: cp.Problem,
+) -> Tuple[
+        Float[csc_matrix, "n n"], Float[csc_matrix, "m n"], Float[np.ndarray, "n"], Float[csc_matrix, "m"],
+           Dict[str, Union[int, List[int]]], DefaultSolution
+    ]:
+
+    clarabel_probdata, _, _ = problem.get_problem_data(cp.CLARABEL)
+    scs_probdata, _, _ = problem.get_problem_data(cp.SCS)
+
+    q = scs_probdata['c']
+
+    # test SCS vs. Clarabel solution?
+    
+    try:
+        P = scs_probdata['P']
+        P = sparse.triu(P).tocsc()
+    except:
+        P = np.zeros((q.size, q.size))
+        P = sparse.triu(P).tocsc()
+
+    A, b = scs_probdata['A'], scs_probdata['b']
+
+    clarabel_cones = cp.reductions.solvers.conic_solvers.clarabel_conif.dims_to_solver_cones(clarabel_probdata["dims"])
+    scs_cone_dict = cp.reductions.solvers.conic_solvers.scs_conif.dims_to_solver_dict(scs_probdata["dims"])
+
+    solver_settings = clarabel.DefaultSettings()
+    solver_settings.verbose = False
+    solver = clarabel.DefaultSolver(P, q, A, b, clarabel_cones, solver_settings)
+    soln = solver.solve()
+
+    P = P.tocsr()
+
+    return P, A, q, b, scs_cone_dict, soln, clarabel_cones
 
 
 def generate_problem_data(n: int,
@@ -397,44 +433,6 @@ def get_zeros_like(A: csr_matrix | torch.Tensor
     nonzeros = A.nonzero()
     data = np.zeros(A.size)
     return csr_matrix((data, nonzeros), shape=A.shape)
-
-
-def data_and_soln_from_cvxpy_problem(problem: cp.Problem,
-                                     cone_type: str = 'scs'
-) -> Tuple[csc_matrix,
-           csc_matrix,
-           np.ndarray,
-           np.ndarray,
-           Dict[str,
-                Union[int, List[int]]
-               ],
-           DefaultSolution]:
-
-    clarabel_probdata, _, _ = problem.get_problem_data(cp.CLARABEL)
-    scs_probdata, _, _ = problem.get_problem_data(cp.SCS)
-
-    q = scs_probdata['c']
-    
-    try:
-        P = scs_probdata['P']
-        P = sparse.triu(P).tocsc()
-    except:
-        P = np.zeros((q.size, q.size))
-        P = sparse.triu(P).tocsc()
-
-    A, b = scs_probdata['A'], scs_probdata['b']
-
-    clarabel_cones = cp.reductions.solvers.conic_solvers.clarabel_conif.dims_to_solver_cones(clarabel_probdata["dims"])
-    scs_cone_dict = cp.reductions.solvers.conic_solvers.scs_conif.dims_to_solver_dict(scs_probdata["dims"])
-
-    solver_settings = clarabel.DefaultSettings()
-    solver_settings.verbose = False
-    solver = clarabel.DefaultSolver(P, q, A, b, clarabel_cones, solver_settings)
-    soln = solver.solve()
-
-    P = P.tocsr()
-
-    return P, A, q, b, scs_cone_dict, soln, clarabel_cones
 
 
 def torch_data_and_soln_from_cvxpy_problem(
@@ -642,7 +640,12 @@ def grad_desc_test(
 
 
 def random_qcp(m, n, cone_dict, random_sparse_array, random_array):
-    """Returns the problem data of a random cone program."""
+    """Returns the problem data of a random cone program.
+    
+    NOTE: The dual solution can be non-unique. Recall uniqueness is
+        required to differentiate through a QCP.
+    
+    """
     cone_list = cone_utils.parse_cone_dict(cone_dict)
 
     print("cone list: ", cone_list)

@@ -32,7 +32,8 @@ class GradDescTestHelper:
     # post init attributes
     linear_cone_dict: dict[str, int | list[int]] = field(init=False)
     quad_cone_dict: dict[str, int | list[int]] = field(init=False)
-    qcp: QCP = field(init=False)
+    upper_P_qcp: QCP = field(init=False)
+    full_P_qcp: QCP = field(init=False)
 
     def __post_init__(self):
         pass

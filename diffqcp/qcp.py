@@ -56,10 +56,6 @@ class QCP:
     dtype : torch.dtype
     device : torch.device
     does_reduce_fp_flops: bool (immutable)
-
-    Raises
-    ------
-    
     """
 
     __slots__ = (
@@ -119,6 +115,8 @@ class QCP:
         self.N = self.n + self.m + 1
         self._reduce_fp_flops = reduce_fp_flops
         self._atoms_computed = False
+        self.jvp_lsqr_residual: float | None = None
+        self.vjp_lsqr_residual: float | None = None
         if not self._reduce_fp_flops:
             self._form_atoms()
     
@@ -149,6 +147,8 @@ class QCP:
         # self._FT = self._F.T
         # self._FT.device = self.device
         self._atoms_computed = True
+        self.jvp_lsqr_residual = None
+        self.vjp_lsqr_residual = None
     
     def jvp(
         self,
@@ -169,7 +169,8 @@ class QCP:
             dz = torch.zeros(d_data_N.shape[0], dtype=self.dtype, device=self.device)
         else:
             dz = lsqr(self._F, -d_data_N)
-            # TODO (quill): add LSQR residual
+            self.jvp_lsqr_residual = torch.linalg.norm(self._F @ dz + d_data_N)**2
+            # TODO (quill): make this save optional?
         
         dz_n, dz_m, dz_N = dz[:n], dz[n:n+m], dz[-1]
         dx = dz_n - self._x * dz_N
@@ -206,7 +207,8 @@ class QCP:
             d_data_N = torch.zeros(dz.shape[0], dtype=self.dtype, device=self.device)
         else:
             d_data_N = lsqr(self._F.T, -dz)
-            # TODO (quill): add LSQR residual
+            # TODO (quill): make this save optional?
+            self.vjp_lsqr_residual = torch.linalg.norm(self._F.T @ d_data_N + dz)**2
 
         return dData_Q_adjoint_efficient(
             self._Pi_z, d_data_N[:self.n], d_data_N[self.n:self.n+self.m], d_data_N[-1],

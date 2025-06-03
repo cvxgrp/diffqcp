@@ -224,7 +224,7 @@ def data_and_soln_from_cvxpy_problem_quad(problem: cp.Problem
         Pfull = Pscs
     except:
         P = np.zeros((q.size, q.size))
-        P = sparse.csc_matrix(P, shape=P.shape)
+        Pfull = sparse.csc_matrix(P, shape=P.shape)
 
     P_upper = sparse.triu(P).tocsc()
     
@@ -244,11 +244,11 @@ def data_and_soln_from_cvxpy_problem_quad(problem: cp.Problem
     solver = clarabel.DefaultSolver(P_upper, q, A, b, clarabel_cones, solver_settings)
     soln = solver.solve()
 
-    P = P.tocsr()
+    Pfull = Pfull.tocsr()
     P_upper = P_upper.tocsr()
     A = A.tocsr()
 
-    return P, P_upper, A, q, b, np.array(soln.x), np.array(soln.z), np.array(soln.s), scs_cone_dict, clarabel_cones
+    return Pfull, P_upper, A, q, b, np.array(soln.x), np.array(soln.z), np.array(soln.s), scs_cone_dict, clarabel_cones
 
 
 def data_from_cvxpy_problem_linear(problem: cp.Problem

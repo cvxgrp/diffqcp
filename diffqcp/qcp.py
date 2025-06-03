@@ -97,10 +97,14 @@ class QCP:
         """
         Parameters
         ----------
-        P : torch.Tensor | scipy.sparse.spmatrix
+        P :
             The quadratic component of the objective function.
-        x : torch.Tensor | 
-            The primal solution variable.
+        x : 
+            The primal solution.
+        y :
+            The dual solution.
+        s :
+            The primal slack solution.
         
         """
         self.dtype, self.device = _get_GPU_settings(P, dtype=dtype, device=device)

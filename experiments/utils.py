@@ -90,7 +90,11 @@ class GradDescTestHelper:
         self.target_y_qcp = to_tensor(qcp_data_and_soln[6], dtype=self.dtype)
         self.target_s_qcp = to_tensor(qcp_data_and_soln[7], dtype=self.dtype)
         cp_data = data_from_cvxpy_problem_linear(initial_problem)
-        target_x_cp, target_y_cp, target_s_cp, _, _ = solve_and_derivative(cp_data[0], cp_data[1], cp_data[2], cp_data[3])
+        print("A shape: ", cp_data[0].shape)
+        print("c shape: ", cp_data[1].shape)
+        print("b shape: ", cp_data[2].shape)
+        print("cone dict: ", cp_data[3])
+        target_x_cp, target_y_cp, target_s_cp, _, _ = solve_and_derivative(cp_data[0], cp_data[1], cp_data[2], cp_data[3], solve_method='CLARABEL')
         self.target_x_cp = target_x_cp
         self.target_y_cp = target_y_cp
         self.target_s_cp = target_s_cp
@@ -106,7 +110,11 @@ class GradDescTestHelper:
         self.upper_P_qcp = QCP(P_upper, A, q, b, x, y, s, scs_quad_cones, P_is_upper=True, dtype=torch.float64)
         self.full_P_qcp = QCP(Pfull, A, q, b, x, y, s, scs_quad_cones, P_is_upper=False, dtype=torch.float64)
         cp_data = data_from_cvxpy_problem_linear(initial_problem)
-        self.diffcp_cp = DiffcpData(cp_data[0], cp_data[1], cp_data[2], cp_data[3])
+        A_csc = cp_data[0].tocsc()
+        print("A shape: ", A_csc.shape)
+        print("c shape: ", cp_data[1])
+        print("b shape: ", cp_data[2])
+        self.diffcp_cp = DiffcpData(A_csc, cp_data[1], cp_data[2], cp_data[3])
     
     def qcp_grad_desc(
         self,
@@ -142,8 +150,8 @@ class GradDescTestHelper:
         f0s[0] = f0(qcp.x, qcp.y, qcp.s)
         
         while curr_iter < num_iter:
-            P_upper = qcp.get_P_upper(csc=True, as_scipy=True)
-            A = qcp.get_A(csc=True, as_scipy=True)
+            P_upper = qcp.get_Pcsc_cpu_upper()
+            A = qcp.get_Acsc_cpu()
             q = qcp.q.cpu().numpy()
             b = qcp.b.cpu().numpy()
             

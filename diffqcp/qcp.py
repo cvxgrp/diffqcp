@@ -4,6 +4,7 @@ TODO: functionality for efficiently evaluating adjoint applied to primal variabl
 from typing import Union
 
 import numpy as np
+import scipy.sparse as sparse
 from scipy.sparse import spmatrix, sparray
 import torch
 from torch import Tensor
@@ -14,7 +15,7 @@ from jaxtyping import Float
 from diffqcp.linops import SymmetricOperator, BlockDiag, ScalarOperator, _sLinearOperator
 import diffqcp.cones as cone_utils
 from diffqcp.qcp_derivs import Du_Q_efficient, dData_Q_efficient, dData_Q_adjoint_efficient
-from diffqcp.utils import to_tensor, _get_GPU_settings
+from diffqcp.utils import to_tensor, _get_GPU_settings, from_torch_csr_to_scipy_csc
 from diffqcp.problem_data import ProblemData
 
 # TODO (quill): check carefully where you use .to vs to_tensor
@@ -358,8 +359,12 @@ class QCP:
     def does_reduce_fp_flops(self):
         return self._reduce_fp_flops
     
-    def get_A(csc: bool = False, as_scipy: bool = False) -> Float[Union[spmatrix, Tensor], "m n"]:
-        pass
+    def get_Acsc_cpu(self) -> Float[spmatrix, "m n"]:
+        return from_torch_csr_to_scipy_csc(self.data.A)
 
-    def get_P_upper(csc: bool = False, as_scipy: bool = False) -> Float[Union[spmatrix, Tensor], "n n"]:
-        pass
+    def get_Pcsc_cpu_upper(self) -> Float[spmatrix, "n n"]:
+        if self.data.P_is_upper:
+            return from_torch_csr_to_scipy_csc(self.data.P_upper)
+        else:
+            P = from_torch_csr_to_scipy_csc(self.data._P)
+            return sparse.triu(P).tocsc()

@@ -20,6 +20,7 @@ from jaxtyping import Float
 import diffqcp.utils as qcp_utils
 from diffqcp.linops import SymmetricOperator
 import diffqcp.cones as cone_utils
+from cvxpy.reductions.solvers.conic_solvers.conic_solver import ConicSolver
 
 def get_transpose(
     A: csr_matrix | csr_array | torch.Tensor, return_tensor: bool=False,
@@ -226,10 +227,10 @@ def data_and_soln_from_cvxpy_problem_quad(problem: cp.Problem
         P = np.zeros((q.size, q.size))
         Pfull = sparse.csc_matrix(P, shape=P.shape)
 
-    P_upper = sparse.triu(P).tocsc()
+    P_upper = sparse.triu(Pfull).tocsc()
     
     A, b = scs_probdata['A'], scs_probdata['b']
-    Acl, bcl = clarabel_probdata['A'], clarabel_probdata['bcl']
+    Acl, bcl = clarabel_probdata['A'], clarabel_probdata['b']
     np.testing.assert_allclose(A.todense(), Acl.todense())
     np.testing.assert_allclose(b, bcl)
 
@@ -253,12 +254,17 @@ def data_and_soln_from_cvxpy_problem_quad(problem: cp.Problem
 
 def data_from_cvxpy_problem_linear(problem: cp.Problem
 ) -> tuple[
-        Float[csr_matrix, 'm n'], Float[np.ndarray, 'n'], Float[np.ndarray, 'm'], dict[str, int | list[int]]
+        Float[csc_matrix, 'm n'], Float[np.ndarray, 'n'], Float[np.ndarray, 'm'], dict[str, int | list[int]]
     ]:
-    scs_probdata, _, _ = problem.get_problem_data(cp.SCS, use_quad_objective=False)
+    """
+    Note that A is returned as a `csc_matrix`, since it is only used by `diffcp`, which accepts
+    `csc` not `csr`.
+    """
+    scs_probdata, _, _ = problem.get_problem_data(cp.SCS, solver_opts={'use_quad_obj': False})
     A, c, b = scs_probdata['A'], scs_probdata['c'], scs_probdata['b']
-    A = A.tocsr()
-    scs_cone_dict = cp.reductions.solvers.conic_solvers.scs_conif.dims_to_solver_dict(scs_probdata["dims"])
+    A = A.tocsc()
+    # scs_cone_dict = cp.reductions.solvers.conic_solvers.scs_conif.dims_to_solver_dict(scs_probdata["dims"])
+    scs_cone_dict = scs_probdata[ConicSolver.DIMS]
 
     return A, c, b, scs_cone_dict
 

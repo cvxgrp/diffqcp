@@ -7,7 +7,6 @@ from numbers import Number
 import numpy as np
 import scipy.sparse as sparse
 from scipy.sparse import (spmatrix, csc_matrix, csr_matrix, sparray, csc_array, csr_array)
-
 import torch
 import linops as lo
 
@@ -142,6 +141,26 @@ def to_sparse_csr_tensor(
     else:
         raise ValueError("Input must be a scipy sparse matrix.")
     
+
+def from_torch_csr_to_scipy_csr(X: torch.Tensor) -> spmatrix:
+    """
+    Convert a torch.sparse_csr_tensor to a scipy.sparse.csr_matrix.
+    """
+    assert X.layout == torch.sparse_csr, "Input must be a torch.sparse_csr_tensor"
+    crow_indices = X.crow_indices().cpu().numpy()
+    col_indices = X.col_indices().cpu().numpy()
+    values = X.values().cpu().numpy()
+    shape = tuple(X.shape)
+    return sparse.csr_matrix((values, col_indices, crow_indices), shape=shape)
+
+def from_torch_csr_to_scipy_csc(X: torch.Tensor) -> spmatrix:
+    """
+    Convert a torch.sparse_csr_tensor to a scipy.sparse.csc_matrix.
+    """
+    # Convert to scipy CSR first, then use .tocsc()
+    csr = from_torch_csr_to_scipy_csr(X)
+    return csr.tocsc()
+
 
 def sparse_csc_tensor_diag(X : torch.Tensor) -> torch.Tensor:
     """Extracts the diagonal of a square 2-D tensor.

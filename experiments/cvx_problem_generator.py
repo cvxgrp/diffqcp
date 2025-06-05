@@ -7,7 +7,7 @@ def randn_symm(n, random_array):
     A = random_array(n, n)
     return (A + A.T) / 2
 
-def generate_portfolio_problem(n, return_all):
+def generate_portfolio_problem(n, return_all, return_problem_only):
     mu = np.random.randn(n)
     Sigma = np.random.randn(n, n)
     Sigma = Sigma.T.dot(Sigma)
@@ -55,7 +55,7 @@ def generate_least_squares_eq(m, n, return_all):
     else:
         return x, y, s
     
-def generate_LS_problem(m, n, return_all=True):
+def generate_LS_problem(m, n, return_all=True, return_problem_only: bool=False):
     A = np.random.randn(m, n)
     b = np.random.randn(m)
 
@@ -63,6 +63,9 @@ def generate_LS_problem(m, n, return_all=True):
     r = cvx.Variable(m)
     f0 = cvx.sum_squares(r)
     problem = cvx.Problem(cvx.Minimize(f0), [r == A@x - b])
+
+    if return_problem_only:
+        return problem
 
     data = data_and_soln_from_cvxpy_problem(problem)
     P, A, q, b = data[0], data[1], data[2], data[3]

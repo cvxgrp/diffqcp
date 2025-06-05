@@ -357,3 +357,9 @@ class QCP:
     @property
     def does_reduce_fp_flops(self):
         return self._reduce_fp_flops
+    
+    def get_A(csc: bool = False, as_scipy: bool = False) -> Float[Union[spmatrix, Tensor], "m n"]:
+        pass
+
+    def get_P_upper(csc: bool = False, as_scipy: bool = False) -> Float[Union[spmatrix, Tensor], "n n"]:
+        pass

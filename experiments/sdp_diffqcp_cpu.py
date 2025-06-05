@@ -79,8 +79,6 @@ def grad_desc_test(
             optimal = True
             break
 
-        # TODO (quill) definitely need to fix `reduce_fp_flops` functionality
-
         qcp.update_solution(x = xk, y = yk, s = sk)
 
         d_theta = qcp.vjp(xk - x_target, yk - y_target, sk - s_target)

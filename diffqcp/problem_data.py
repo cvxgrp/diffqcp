@@ -471,6 +471,8 @@ class ProblemData:
         
     def materialize_P_upper(self) -> Float[Tensor, 'n n']:
         """Return the upper part of P
+
+        TODO (quill): never actually materialize all of `P` / `P_upper`
         """
         if self.P_is_upper:
             return self.P_upper

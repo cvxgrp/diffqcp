@@ -6,11 +6,13 @@ from scipy.sparse import spmatrix, sparray
 import torch
 from torch import Tensor
 import cvxpy as cvx
+import matplotlib.pyplot as plt
 from diffcp import solve_and_derivative
 import clarabel
 from jaxtyping import Float
 
 from diffqcp import QCP
+from diffqcp.utils import to_tensor
 from tests.utils import data_and_soln_from_cvxpy_problem_quad, data_from_cvxpy_problem_linear
 
 @dataclass
@@ -25,11 +27,28 @@ class DiffcpData:
 @dataclass
 class GradDescTestResult:
 
+    passed : bool
     num_iterations : int
-    obj_traj : torch.Tensor
-    # final_pt: 
-    final_obj: float
-    obj_traj 
+    obj_traj : np.ndarray
+    lsqr_residuals: np.ndarray | None = None
+
+    def plot_obj_traj(self, savepath: str | None = None):
+        if self.obj_traj is None:
+            raise ValueError("obj_traj is None. Cannot plot.")
+
+        # Move obj_traj to CPU if it's on a device
+        obj_traj_cpu = self.obj_traj.cpu().numpy() if self.obj_traj.is_cuda else self.obj_traj.numpy()
+
+        plt.figure(figsize=(8, 6))
+        plt.plot(range(self.num_iterations), obj_traj_cpu, label="Objective Trajectory")
+        if self.lsqr_residuals is not None:
+            plt.plot(range(self.num_iterations), self.lsqr_residuals, label="LSQR residuals")
+        plt.xlabel("k")
+        # plt.ylabel("$f_0(p^{k}) = 0.5 \\| z(p) - z^{\\star} \\|^2$")
+        plt.ylabel("Objective function")
+        plt.legend()
+        # plt.show()
+        plt.savefig(savepath)
 
 @dataclass
 class GradDescTestHelper:
@@ -37,36 +56,45 @@ class GradDescTestHelper:
     problem_generator: Callable[[], cvx.Problem]
     # passing criteria? (multiple?)
     verbose: bool = False
-    dtype: torch.dtype
+    dtype: torch.dtype = torch.float64
+    
 
     # post init attributes
     linear_cone_dict: dict[str, int | list[int]] = field(init=False)
     quad_cone_dict: dict[str, int | list[int]] = field(init=False)
     upper_P_qcp: QCP = field(init=False)
     full_P_qcp: QCP = field(init=False)
-    quad_clarabel_cones = field(init=False)
+    quad_clarabel_cones: list = field(init=False)
     diffcp_cp: DiffcpData = field(init=False)
-    target_x_qcp: Float[Tensor, "n"] = field(init=False)
-    target_y_qcp: Float[Tensor, "m"] = field(init=False)
-    target_s_qcp: Float[Tensor, "m"] = field(init=False)
-    target_x_cp: Float[Tensor, "n"] = field(init=False)
-    target_y_cp: Float[Tensor, "m"] = field(init=False)
-    target_s_cp: Float[Tensor, "m"] = field(init=False)
+    target_x_qcp: Float[Tensor, "n_qcp"] = field(init=False)
+    target_y_qcp: Float[Tensor, "m_qcp"] = field(init=False)
+    target_s_qcp: Float[Tensor, "m_qcp"] = field(init=False)
+    target_x_cp: Float[np.ndarray, "n_cp"] = field(init=False)
+    target_y_cp: Float[np.ndarray, "m_cp"] = field(init=False)
+    target_s_cp: Float[np.ndarray, "m_cp"] = field(init=False)
 
     def __post_init__(self):
+
+        self._reset_problems()
+    
+    def _reset_problems(self):
         target_problem = self.problem_generator()
         initial_problem = self.problem_generator()
-        
-        # grab target problem information for QCP and CP.
-        qcp_data_and_soln = data_and_soln_from_cvxpy_problem_quad(target_problem)
-        self.target_x_qcp = qcp_data_and_soln[5]
-        self.target_y_qcp = qcp_data_and_soln[6]
-        self.target_s_qcp = qcp_data_and_soln[7]
-        cp_data = data_from_cvxpy_problem_linear(initial_problem)
-        self.target_x_cp, self.target_y_cp, self.target_s_cp, _, _ = solve_and_derivative(
-                                                                        cp_data[0], cp_data[1], cp_data[2], cp_data[3]
-                                                                    )
+        self.P_full_qcp_has_descended: bool = False
+        self.P_upper_qcp_has_descended: bool = False
+        self.cp_has_descended: bool = False
 
+        # grab target problem data for QCP and CP.
+        qcp_data_and_soln = data_and_soln_from_cvxpy_problem_quad(target_problem)
+        self.target_x_qcp = to_tensor(qcp_data_and_soln[5], dtype=self.dtype)
+        self.target_y_qcp = to_tensor(qcp_data_and_soln[6], dtype=self.dtype)
+        self.target_s_qcp = to_tensor(qcp_data_and_soln[7], dtype=self.dtype)
+        cp_data = data_from_cvxpy_problem_linear(initial_problem)
+        target_x_cp, target_y_cp, target_s_cp, _, _ = solve_and_derivative(cp_data[0], cp_data[1], cp_data[2], cp_data[3])
+        self.target_x_cp = target_x_cp
+        self.target_y_cp = target_y_cp
+        self.target_s_cp = target_s_cp
+        
         # Now grab starting data for the learning problem
         qcp_data_and_soln = data_and_soln_from_cvxpy_problem_quad(initial_problem)
         Pfull, P_upper, A = qcp_data_and_soln[0], qcp_data_and_soln[1], qcp_data_and_soln[2]
@@ -79,12 +107,131 @@ class GradDescTestHelper:
         self.full_P_qcp = QCP(Pfull, A, q, b, x, y, s, scs_quad_cones, P_is_upper=False, dtype=torch.float64)
         cp_data = data_from_cvxpy_problem_linear(initial_problem)
         self.diffcp_cp = DiffcpData(cp_data[0], cp_data[1], cp_data[2], cp_data[3])
-
+    
     def qcp_grad_desc(
+        self,
         num_iter: int = 150,
         step_size: float = 0.15,
-        improvement_factor: float = 1e-2
-    ):
-        pass
+        improvement_factor: float = 1e-2,
+        fixed_tol: float = 1e-4,
+        use_full_P: bool = True
+    ) -> GradDescTestResult:
 
+        if use_full_P:
+            if self.P_full_qcp_has_descended:
+                self._reset_problems()
+            self.P_full_qcp_has_descended = True
+            qcp = self.full_P_qcp
+
+        else:
+            if self.P_upper_qcp_has_descended:
+                self._reset_problems()
+            self.P_upper_qcp_has_descended = True
+            qcp = self.upper_P_qcp
+        
+        curr_iter = 0
+        optimal = False
+        f0s = torch.zeros(num_iter, dtype=self.dtype)
+        step_size = torch.tensor(step_size, dtype=self.dtype)
+        lsqr_residuals = torch.zeros(num_iter, dtype=self.dtype)
+
+        def f0(x: Float[Tensor, "n_qcp"], y: Float[Tensor, "m_qcp"], s: Float[Tensor, "m_qcp"]) -> Float[Tensor, ""]:
+            return (0.5 * torch.linalg.norm(x - self.target_x_qcp)**2 + 0.5 * torch.linalg.norm(y - self.target_y_qcp)**2
+                    + 0.5 * torch.linalg.norm(s - self.target_s_qcp)**2)
+        
+        f0s[0] = f0(qcp.x, qcp.y, qcp.s)
+        
+        while curr_iter < num_iter:
+            P_upper = qcp.get_P_upper(csc=True, as_scipy=True)
+            A = qcp.get_A(csc=True, as_scipy=True)
+            q = qcp.q.cpu().numpy()
+            b = qcp.b.cpu().numpy()
+            
+            solver = clarabel.DefaultSolver(P_upper, q, A, b, self.quad_clarabel_cones, self.clarabel_solver_settings)
+            solution = solver.solve()
+
+            xk = to_tensor(solution.x, dtype=self.dtype)
+            yk = to_tensor(solution.z, dtype=self.dtype)
+            sk = to_tensor(solution.s, dtype=self.dtype)
+
+            f0k = f0(xk, yk, sk)
+
+            curr_iter += 1 # so curr_iter is number of forward passes
+            f0s[curr_iter] = f0k
+
+            if curr_iter > 1 and ((f0k / f0s[0]) < improvement_factor or f0k < fixed_tol):
+                optimal = True
+                break
+
+            # add deriv and adjoint consistency checks
+            # add feasibility checks
+            #   what do you do once infeasible? quit?
+
+            d_theta = qcp.vjp(xk - self.target_x_qcp, yk - self.target_y_qcp, sk - self.target_s_qcp)
+            lsqr_residuals[curr_iter - 1] = qcp.vjp_lsqr_residual
+
+            dP = -step_size * d_theta[0]
+            dA = -step_size * d_theta[1]
+            dq = -step_size * d_theta[2]
+            db = -step_size * d_theta[3]
+            qcp.perturb_data(dP, dA, dq, db)
+            qcp.update_solution(xk, yk, sk)
+
+        f0_traj = f0s[0:curr_iter]
+        del f0s
+        return GradDescTestResult(
+                passed=optimal, num_iterations=curr_iter, obj_traj=f0_traj.cpu().numpy(), lsqr_residuals=lsqr_residuals.cpu().numpy()
+            )
+
+
+    def cp_grad_desc(
+        self,
+        num_iter: int = 150,
+        step_size: float = 0.15,
+        improvement_factor: float = 1e-2,
+        fixed_tol: float = 1e-3
+    ) -> GradDescTestResult:
+        
+        if self.cp_has_descended:
+            self._reset_problems()
+            self.cp_has_descended = True
+
+        curr_iter = 0
+        optimal = False
+        f0s = np.zeros(num_iter)
+        
+        def f0(x: Float[np.ndarray, "n_cp"], y: Float[np.ndarray, "m_cp"], s: Float[np.ndarray, "m_cp"]) -> float:
+            return (0.5 * np.linalg.norm(x - self.target_x_cp)**2 + 0.5 * np.linalg.norm(y - self.target_y_cp)**2
+                    + 0.5 * np.linalg.norm(s - self.target_s_cp)**2)
+
+        while curr_iter < num_iter:
+            
+            A = self.diffcp_cp.A
+            c = self.diffcp_cp.c
+            b = self.diffcp_cp.b
+
+            xk, yk, sk, _, DT = solve_and_derivative(A, b, c, self.linear_cone_dict, solve_method='CLARABEL')
+
+            f0k = f0(xk, yk, sk)
+
+            f0s[curr_iter] = f0k
+            curr_iter += 1
+
+            if curr_iter > 1 and ((f0k / f0s[0]) < improvement_factor or f0k < fixed_tol):
+                optimal = True
+                break
+
+            dA, db, dc = DT(xk - self.target_x_cp, yk - self.target_y_cp, sk - self.target_s_cp)
+
+            self.diffcp_cp.A += -step_size * dA
+            self.diffcp_cp.c += -step_size * dc
+            self.diffcp_cp.b += -step_size * db
+
+        f0_traj = f0s[0:curr_iter]
+        del f0s
+        return GradDescTestResult(
+                passed=optimal, num_iterations=curr_iter, obj_traj=f0_traj
+            )
+
+        
 

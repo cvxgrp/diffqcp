@@ -88,17 +88,17 @@ def generate_sdp(n, p, return_all=True, return_problem_only: bool=False):
                                      random_array=np.random.randn, P_psd=True)
     C = data[0].todense()
     
-    data = generate_problem_data_new(n=n, m=n, sparse_random_array=sparse.random_array,
-                                     random_array=np.random.randn, P_psd=True)
-    D = data[0].todense()
+    # data = generate_problem_data_new(n=n, m=n, sparse_random_array=sparse.random_array,
+    #                                  random_array=np.random.randn, P_psd=True)
+    # D = data[0].todense()
 
     As = [randn_symm(n, np.random.randn) for _ in range(p)]
     Bs = np.random.randn(p)
 
     X = cvx.Variable((n, n), PSD=True)
     y = cvx.Variable(n)
-    objective = cvx.trace(C @ X) + cvx.quad_form(y, D, assume_PSD=True)
-    # objective = cvx.trace(C @ X)
+    # objective = cvx.trace(C @ X) + cvx.quad_form(y, D, assume_PSD=True)
+    objective = cvx.trace(C @ X)
     constraints = [cvx.trace(As[i] @ X) == Bs[i] for i in range(p)]
     prob = cvx.Problem(cvx.Minimize(objective), constraints)
 

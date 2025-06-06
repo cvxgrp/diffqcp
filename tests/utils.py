@@ -20,7 +20,6 @@ from jaxtyping import Float
 import diffqcp.utils as qcp_utils
 from diffqcp.linops import SymmetricOperator
 import diffqcp.cones as cone_utils
-from cvxpy.reductions.solvers.conic_solvers.conic_solver import ConicSolver
 
 def get_transpose(
     A: csr_matrix | csr_array | torch.Tensor, return_tensor: bool=False,
@@ -263,8 +262,7 @@ def data_from_cvxpy_problem_linear(problem: cp.Problem
     scs_probdata, _, _ = problem.get_problem_data(cp.SCS, solver_opts={'use_quad_obj': False})
     A, c, b = scs_probdata['A'], scs_probdata['c'], scs_probdata['b']
     A = A.tocsc()
-    # scs_cone_dict = cp.reductions.solvers.conic_solvers.scs_conif.dims_to_solver_dict(scs_probdata["dims"])
-    scs_cone_dict = scs_probdata[ConicSolver.DIMS]
+    scs_cone_dict = cp.reductions.solvers.conic_solvers.scs_conif.dims_to_solver_dict(scs_probdata["dims"])
 
     return A, c, b, scs_cone_dict
 

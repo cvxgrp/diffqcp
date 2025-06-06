@@ -77,7 +77,9 @@ class QCP:
         '_Dpi_z',
         '_Dz_Q_Pi_z',
         '_F',
-        '_FT'
+        '_FT',
+        'jvp_lsqr_residual',
+        'vjp_lsqr_residual'
     )
     
     def __init__(

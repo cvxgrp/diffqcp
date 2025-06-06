@@ -36,11 +36,8 @@ class GradDescTestResult:
         if self.obj_traj is None:
             raise ValueError("obj_traj is None. Cannot plot.")
 
-        # Move obj_traj to CPU if it's on a device
-        obj_traj_cpu = self.obj_traj.cpu().numpy() if self.obj_traj.is_cuda else self.obj_traj.numpy()
-
         plt.figure(figsize=(8, 6))
-        plt.plot(range(self.num_iterations), obj_traj_cpu, label="Objective Trajectory")
+        plt.plot(range(self.num_iterations), self.obj_traj, label="Objective Trajectory")
         if self.lsqr_residuals is not None:
             plt.plot(range(self.num_iterations), self.lsqr_residuals, label="LSQR residuals")
         plt.xlabel("k")
@@ -89,12 +86,8 @@ class GradDescTestHelper:
         self.target_x_qcp = to_tensor(qcp_data_and_soln[5], dtype=self.dtype)
         self.target_y_qcp = to_tensor(qcp_data_and_soln[6], dtype=self.dtype)
         self.target_s_qcp = to_tensor(qcp_data_and_soln[7], dtype=self.dtype)
-        cp_data = data_from_cvxpy_problem_linear(initial_problem)
-        print("A shape: ", cp_data[0].shape)
-        print("c shape: ", cp_data[1].shape)
-        print("b shape: ", cp_data[2].shape)
-        print("cone dict: ", cp_data[3])
-        target_x_cp, target_y_cp, target_s_cp, _, _ = solve_and_derivative(cp_data[0], cp_data[1], cp_data[2], cp_data[3], solve_method='CLARABEL')
+        cp_data = data_from_cvxpy_problem_linear(target_problem)
+        target_x_cp, target_y_cp, target_s_cp, _, _ = solve_and_derivative(cp_data[0], cp_data[2], cp_data[1], cp_data[3], solve_method='CLARABEL')
         self.target_x_cp = target_x_cp
         self.target_y_cp = target_y_cp
         self.target_s_cp = target_s_cp
@@ -104,17 +97,14 @@ class GradDescTestHelper:
         Pfull, P_upper, A = qcp_data_and_soln[0], qcp_data_and_soln[1], qcp_data_and_soln[2]
         q, b = qcp_data_and_soln[3], qcp_data_and_soln[4]
         x, y, s = qcp_data_and_soln[5], qcp_data_and_soln[6], qcp_data_and_soln[7]
-        scs_quad_cones, clarabel_quad_cones = qcp_data_and_soln[8]
+        scs_quad_cones, clarabel_quad_cones = qcp_data_and_soln[8], qcp_data_and_soln[9]
         self.quad_clarabel_cones = clarabel_quad_cones
         self.clarabel_solver_settings = clarabel.DefaultSettings()
+        self.clarabel_solver_settings.verbose = False
         self.upper_P_qcp = QCP(P_upper, A, q, b, x, y, s, scs_quad_cones, P_is_upper=True, dtype=torch.float64)
         self.full_P_qcp = QCP(Pfull, A, q, b, x, y, s, scs_quad_cones, P_is_upper=False, dtype=torch.float64)
         cp_data = data_from_cvxpy_problem_linear(initial_problem)
-        A_csc = cp_data[0].tocsc()
-        print("A shape: ", A_csc.shape)
-        print("c shape: ", cp_data[1])
-        print("b shape: ", cp_data[2])
-        self.diffcp_cp = DiffcpData(A_csc, cp_data[1], cp_data[2], cp_data[3])
+        self.diffcp_cp = DiffcpData(A=cp_data[0], c=cp_data[1], b=cp_data[2], cone_dict=cp_data[3])
     
     def qcp_grad_desc(
         self,
@@ -186,9 +176,11 @@ class GradDescTestHelper:
             qcp.update_solution(xk, yk, sk)
 
         f0_traj = f0s[0:curr_iter]
+        residuals = lsqr_residuals[0:curr_iter]
         del f0s
+        del lsqr_residuals
         return GradDescTestResult(
-                passed=optimal, num_iterations=curr_iter, obj_traj=f0_traj.cpu().numpy(), lsqr_residuals=lsqr_residuals.cpu().numpy()
+                passed=optimal, num_iterations=curr_iter, obj_traj=f0_traj.cpu().numpy(), lsqr_residuals=residuals.cpu().numpy()
             )
 
 
@@ -218,7 +210,7 @@ class GradDescTestHelper:
             c = self.diffcp_cp.c
             b = self.diffcp_cp.b
 
-            xk, yk, sk, _, DT = solve_and_derivative(A, b, c, self.linear_cone_dict, solve_method='CLARABEL')
+            xk, yk, sk, _, DT = solve_and_derivative(A, b, c, self.diffcp_cp.cone_dict, solve_method='CLARABEL')
 
             f0k = f0(xk, yk, sk)
 

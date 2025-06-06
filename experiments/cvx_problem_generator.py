@@ -1,5 +1,6 @@
 import numpy as np
 import cvxpy as cvx
+import scipy.sparse as sparse
 
 from tests.utils import data_and_soln_from_cvxpy_problem, generate_problem_data_new
 
@@ -31,7 +32,7 @@ def generate_portfolio_problem(n, return_all, return_problem_only):
     else:
         return x, y, s
     
-def generate_least_squares_eq(m, n, return_all):
+def generate_least_squares_eq(m, n, return_all, return_problem_only: bool = False):
     """Generate a conic problem with unique solution."""
     assert m >= n
     x = cvx.Variable(n)
@@ -41,6 +42,8 @@ def generate_least_squares_eq(m, n, return_all):
     objective = cvx.pnorm(A @ x - b, 1)
     constraints = [x >= 0, cvx.sum(x) == 1.0]
     problem = cvx.Problem(cvx.Minimize(objective), constraints)
+    if return_problem_only:
+        return problem
     
     data = data_and_soln_from_cvxpy_problem(problem)
     P, A, q, b = data[0], data[1], data[2], data[3]
@@ -80,7 +83,7 @@ def generate_LS_problem(m, n, return_all=True, return_problem_only: bool=False):
     else:
         return x, y, s
     
-def generate_sdp(n, p, return_all=True):
+def generate_sdp(n, p, return_all=True, return_problem_only: bool=False):
     data = generate_problem_data_new(n=n, m=n, sparse_random_array=sparse.random_array,
                                      random_array=np.random.randn, P_psd=True)
     C = data[0].todense()
@@ -98,6 +101,9 @@ def generate_sdp(n, p, return_all=True):
     # objective = cvx.trace(C @ X)
     constraints = [cvx.trace(As[i] @ X) == Bs[i] for i in range(p)]
     prob = cvx.Problem(cvx.Minimize(objective), constraints)
+
+    if return_problem_only:
+        return prob
 
     P, A, q, b, scs_cone_dict, soln, clarabel_cones = data_and_soln_from_cvxpy_problem(prob)
 

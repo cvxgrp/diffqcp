@@ -30,9 +30,11 @@ class GradDescTestResult:
     passed : bool
     num_iterations : int
     obj_traj : np.ndarray
+    for_qcp: bool
     lsqr_residuals: np.ndarray | None = None
 
     def plot_obj_traj(self, savepath: str | None = None):
+        
         if self.obj_traj is None:
             raise ValueError("obj_traj is None. Cannot plot.")
 
@@ -40,10 +42,15 @@ class GradDescTestResult:
         plt.plot(range(self.num_iterations), self.obj_traj, label="Objective Trajectory")
         if self.lsqr_residuals is not None:
             plt.plot(range(self.num_iterations), self.lsqr_residuals, label="LSQR residuals")
+            print("NUM lsqr_residuals: ", self.lsqr_residuals.shape[0])
         plt.xlabel("k")
         # plt.ylabel("$f_0(p^{k}) = 0.5 \\| z(p) - z^{\\star} \\|^2$")
         plt.ylabel("Objective function")
         plt.legend()
+        if self.for_qcp:
+            plt.title(label="diffqcp")
+        else:
+            plt.title(label="diffcp")
         # plt.show()
         plt.savefig(savepath)
 
@@ -129,7 +136,7 @@ class GradDescTestHelper:
         
         curr_iter = 0
         optimal = False
-        f0s = torch.zeros(num_iter, dtype=self.dtype)
+        f0s = torch.zeros(num_iter+1, dtype=self.dtype)
         step_size = torch.tensor(step_size, dtype=self.dtype)
         lsqr_residuals = torch.zeros(num_iter, dtype=self.dtype)
 
@@ -180,7 +187,7 @@ class GradDescTestHelper:
         del f0s
         del lsqr_residuals
         return GradDescTestResult(
-                passed=optimal, num_iterations=curr_iter, obj_traj=f0_traj.cpu().numpy(), lsqr_residuals=residuals.cpu().numpy()
+                passed=optimal, num_iterations=curr_iter, obj_traj=f0_traj.cpu().numpy(), lsqr_residuals=residuals.cpu().numpy(), for_qcp=True
             )
 
 
@@ -230,7 +237,7 @@ class GradDescTestHelper:
         f0_traj = f0s[0:curr_iter]
         del f0s
         return GradDescTestResult(
-                passed=optimal, num_iterations=curr_iter, obj_traj=f0_traj
+                passed=optimal, num_iterations=curr_iter, obj_traj=f0_traj, for_qcp=False
             )
 
         

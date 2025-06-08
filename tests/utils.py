@@ -251,6 +251,46 @@ def data_and_soln_from_cvxpy_problem_quad(problem: cp.Problem
     return Pfull, P_upper, A, q, b, np.array(soln.x), np.array(soln.z), np.array(soln.s), scs_cone_dict, clarabel_cones
 
 
+def data_from_cvxpy_problem_quad(problem: cp.Problem
+) -> tuple[
+        Float[csr_matrix, 'n n'], Float[csr_matrix, 'n n'], Float[csr_matrix, 'm n'], Float[np.ndarray, 'n'], Float[np.ndarray, 'm'],
+        dict[str, int | list[int]], list
+    ]:
+    clarabel_probdata, _, _ = problem.get_problem_data(cp.CLARABEL)
+    scs_probdata, _, _ = problem.get_problem_data(cp.SCS)
+    q = scs_probdata['c']
+    qcl = clarabel_probdata['c']
+    np.testing.assert_allclose(q, qcl)
+
+    try:
+        Pscs = scs_probdata['P']
+        Pclarabel = clarabel_probdata['P']
+        np.testing.assert_allclose(Pscs.todense(), Pclarabel.todense())
+        Pfull = Pscs
+    except:
+        P = np.zeros((q.size, q.size))
+        Pfull = sparse.csc_matrix(P, shape=P.shape)
+
+    P_upper = sparse.triu(Pfull).tocsc()
+    
+    A, b = scs_probdata['A'], scs_probdata['b']
+    Acl, bcl = clarabel_probdata['A'], clarabel_probdata['b']
+    np.testing.assert_allclose(A.todense(), Acl.todense())
+    np.testing.assert_allclose(b, bcl)
+
+    # NOTE (quill): remember in next version this won't be necessary since we won't be relying
+    #   on SCS cone dict anymore...most likely.
+
+    clarabel_cones = cp.reductions.solvers.conic_solvers.clarabel_conif.dims_to_solver_cones(clarabel_probdata["dims"])
+    scs_cone_dict = cp.reductions.solvers.conic_solvers.scs_conif.dims_to_solver_dict(scs_probdata["dims"])
+
+    Pfull = Pfull.tocsr()
+    P_upper = P_upper.tocsr()
+    A = A.tocsr()
+
+    return Pfull, P_upper, A, q, b, scs_cone_dict, clarabel_cones
+
+
 def data_from_cvxpy_problem_linear(problem: cp.Problem
 ) -> tuple[
         Float[csc_matrix, 'm n'], Float[np.ndarray, 'n'], Float[np.ndarray, 'm'], dict[str, int | list[int]]

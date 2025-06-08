@@ -114,3 +114,23 @@ def generate_sdp(n, p, return_all=True, return_problem_only: bool=False):
         return P, A, q, b, scs_cone_dict, clarabel_cones, x, y, s
     else:
         return x, y, s
+    
+def sigmoid(z):
+  return 1/(1 + np.exp(-z))
+
+
+
+def generate_group_lasso(n: int, m: int) -> cvx.Problem:
+    X = np.random.randn(m, 10 * n)
+    true_beta = np.zeros(10 * n)
+    true_beta[:10 * n // 100] = 1.0
+    y = np.round(sigmoid(X @ true_beta + np.random.randn(m)*0.5)) 
+
+    beta = cvx.Variable(10 * n)
+    lambd = 0.1
+    loss = -cvx.sum(cvx.multiply(y, X @ beta) - cvx.logistic(X @ beta))
+    reg = lambd * cvx.sum( cvx.norm( beta.reshape((-1, 10), 'C'), axis=1 ) )
+
+    prob = cvx.Problem(cvx.Minimize(loss + reg))
+
+    return prob

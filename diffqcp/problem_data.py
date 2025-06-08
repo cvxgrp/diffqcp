@@ -44,6 +44,7 @@ class ProblemData:
         'P_is_upper',
         'P_upper'
         'dtype',
+        'idx_dtype',
         'device',
         'P_original_nnz',
         'P_filtered_nnz',
@@ -79,10 +80,12 @@ class ProblemData:
         dtype: torch.dtype,
         device: torch.device,
         P_is_upper: bool = True,
+        idx_dtype: torch.dtype = torch.int32
     ) -> None:
         # for cone info, is there any more pre-computation I can do?
         self.dtype = dtype
         self.device = device
+        self.idx_dtype = idx_dtype
         self.cones = cone_utils.parse_cone_dict(cone_dict)
 
         self.q = to_tensor(q, dtype=self.dtype, device=self.device)
@@ -140,8 +143,8 @@ class ProblemData:
             rows, cols = indices[0], indices[1]
             # copy the following to device, but keep original rows, cols for now
             #   (if we are using device)
-            self.P_rows = to_tensor(rows, dtype=torch.int64, device=self.device)
-            self.P_cols = to_tensor(cols, dtype=torch.int64, device=self.device)
+            self.P_rows = to_tensor(rows, dtype=self.idx_dtype, device=self.device)
+            self.P_cols = to_tensor(cols, dtype=self.idx_dtype, device=self.device)
 
             P_clean = torch.sparse_coo_tensor(indices, values, size=P.shape).coalesce()
             # P = to_sparse_csr_tensor(P_clean).to(dtype=self.dtype, device=self.device)
@@ -170,9 +173,9 @@ class ProblemData:
                 self.Pcol_indices_T = transposed_csr.col_indices()
                 PT = self._P_transpose(values)
                 # now transfer indices to desired device
-                self.PT_perm = to_tensor(sorted_perm, dtype=torch.int64, device=self.device)
-                self.Pcrow_indices_T = to_tensor(self.Pcrow_indices_T, dtype=torch.int64, device=self.device)
-                self.Pcol_indices_T = to_tensor(self.Pcol_indices_T, dtype=torch.int64, device=self.device)
+                self.PT_perm = to_tensor(sorted_perm, dtype=self.idx_dtype, device=self.device)
+                self.Pcrow_indices_T = to_tensor(self.Pcrow_indices_T, dtype=self.idx_dtype, device=self.device)
+                self.Pcol_indices_T = to_tensor(self.Pcol_indices_T, dtype=self.idx_dtype, device=self.device)
 
                 diag_mask = rows == cols
                 diag_indices = rows[diag_mask]
@@ -182,7 +185,7 @@ class ProblemData:
                 diag = to_tensor(diag, dtype=self.dtype, device=self.device)
 
                 self.P_diag_mask = to_tensor(diag_mask, dtype=torch.bool, device=self.device)
-                self.P_diag_indices = to_tensor(diag_indices, dtype=torch.int64, device=self.device)
+                self.P_diag_indices = to_tensor(diag_indices, dtype=self.idx_dtype, device=self.device)
 
                 mv = lambda v : P @ v + PT @ v - diag * v
                 self._P = SymmetricOperator(self.n, op=mv, device=self.device, supports_operator_matrix=True)
@@ -242,13 +245,13 @@ class ProblemData:
             
             # === For reference ===
             # rows, cols = A.nonzero()
-            # self.A_rows = torch.tensor(rows, dtype=torch.int64, device=self.device)
-            # self.A_cols = torch.tensor(cols, dtype=torch.int64, device=self.device)
+            # self.A_rows = torch.tensor(rows, dtype=self.idx_dtype, device=self.device)
+            # self.A_cols = torch.tensor(cols, dtype=self.idx_dtype, device=self.device)
             
             # rows_T, cols_T = cols, rows
             # transposed_idx = rows_T * A.shape[0] + cols_T
             # sorted_perm = np.argsort(transposed_idx)
-            # self.AT_perm = torch.tensor(sorted_perm, dtype=torch.int64, device=self.device)
+            # self.AT_perm = torch.tensor(sorted_perm, dtype=self.idx_dtype, device=self.device)
             # ========== ==========
             
         if isinstance(A, torch.Tensor):
@@ -269,8 +272,8 @@ class ProblemData:
             self.A_filtered_nnz = values.shape[0]
             rows, cols = indices[0], indices[1]
             # save since need rows and cols when constructing vector outer products
-            self.A_rows = to_tensor(rows, dtype=torch.int64, device=self.device)
-            self.A_cols = to_tensor(cols, dtype=torch.int64, device=self.device)
+            self.A_rows = to_tensor(rows, dtype=self.idx_dtype, device=self.device)
+            self.A_cols = to_tensor(cols, dtype=self.idx_dtype, device=self.device)
 
             # A_clean is on whatever device A was allocated on.
             A_clean = torch.sparse_coo_tensor(indices, values, size=A.shape).coalesce()
@@ -287,7 +290,7 @@ class ProblemData:
 
         # Now create infrastructure for cheap transposes.
         transposed_indices = torch.stack([rows_T[sorted_perm], cols_T[sorted_perm]], dim=0)
-        self.AT_perm = to_tensor(sorted_perm, dtype=torch.int64, device=self.device)
+        self.AT_perm = to_tensor(sorted_perm, dtype=self.idx_dtype, device=self.device)
         # NOTE: we are staying on the device that A came to us on for all intermediate operations.
         dummy_values = torch.ones_like(values, dtype=values.dtype)
         transposed_coo = torch.sparse_coo_tensor(
@@ -298,8 +301,8 @@ class ProblemData:
         self.Acrow_indices_T = transposed_csr.crow_indices()
         self.Acol_indices_T = transposed_csr.col_indices()
         self._AT = self._A_transpose(self._A.values())
-        self.Acrow_indices_T = to_tensor(self.Acrow_indices_T, dtype=torch.int64, device=self.device)
-        self.Acol_indices_T = to_tensor(self.Acol_indices_T, dtype=torch.int64, device=self.device)
+        self.Acrow_indices_T = to_tensor(self.Acrow_indices_T, dtype=self.idx_dtype, device=self.device)
+        self.Acol_indices_T = to_tensor(self.Acol_indices_T, dtype=self.idx_dtype, device=self.device)
             
     def _A_transpose(self, values: torch.Tensor) -> Float[Tensor, 'm n']:
         """

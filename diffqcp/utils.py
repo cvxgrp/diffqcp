@@ -47,6 +47,7 @@ def to_tensor(
 def to_sparse_csc_tensor(
         sparse_array : spmatrix | sparray,
         dtype: torch.dtype = torch.float32,
+        idx_dtype: torch.dtype = torch.int32,
         device: torch.device | None = None
 ) -> torch.Tensor:
     """Convert a scipy.sparse.spmatrix to a torch.sparse_csc_matrix.
@@ -79,8 +80,8 @@ def to_sparse_csc_tensor(
         if not isinstance(sparse_array, csc_matrix) or not isinstance(sparse_array, csc_array):
             sparse_array = csc_array(sparse_array)
 
-        ccol_indices = torch.tensor(sparse_array.indptr, dtype=torch.int64, device=device)
-        row_indices = torch.tensor(sparse_array.indices, dtype=torch.int64, device=device)
+        ccol_indices = torch.tensor(sparse_array.indptr, dtype=idx_dtype, device=device)
+        row_indices = torch.tensor(sparse_array.indices, dtype=idx_dtype, device=device)
         values = torch.tensor(sparse_array.data, dtype=dtype, device=device)
 
         return torch.sparse_csc_tensor(
@@ -99,6 +100,7 @@ def to_sparse_csc_tensor(
 def to_sparse_csr_tensor(
         sparse_array: spmatrix | sparray,
         dtype: torch.dtype = torch.float32,
+        idx_dtype: torch.dtype = torch.int32,
         device: torch.device | None = None
 ) -> torch.Tensor:
     """Convert a scipy.sparse.spmatrix to a torch.sparse_csr_matrix.
@@ -125,8 +127,8 @@ def to_sparse_csr_tensor(
 
         # TODO (quill): Note the dtype of the indices does matter depending on
         #   if we want to change LA backend.
-        crow_indices = torch.tensor(sparse_array.indptr, dtype=torch.int64, device=device)
-        col_indices = torch.tensor(sparse_array.indices, dtype=torch.int64, device=device)
+        crow_indices = torch.tensor(sparse_array.indptr, dtype=idx_dtype, device=device)
+        col_indices = torch.tensor(sparse_array.indices, dtype=idx_dtype, device=device)
         values = torch.tensor(sparse_array.data, dtype=dtype, device=device)
 
         return torch.sparse_csr_tensor(

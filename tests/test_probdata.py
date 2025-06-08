@@ -32,7 +32,7 @@ def test_prob_data_full_P_scipy(device):
     
     K = {} # just use an empty cone dict. `parse_cone_dict` will just return empty list.
 
-    data = ProblemData(K, P, A, q, b, dtype=torch.float64, device=device, P_is_upper=False)
+    data = ProblemData(K, P, A, q, b, dtype=torch.float64, device=device, P_is_upper=False, idx_dtype=torch.int64)
 
     assert torch.allclose(diffqcp_utils.to_tensor(P.todense(), torch.float64, device=device),
                           data.P.to_dense())
@@ -135,7 +135,7 @@ def test_prob_data_upper_P_scipy(device):
     
     K = {} # just use an empty cone dict. `parse_cone_dict` will just return empty list.
 
-    data = ProblemData(K, P_upper, A, q, b, dtype=torch.float64, device=device, P_is_upper=True)
+    data = ProblemData(K, P_upper, A, q, b, dtype=torch.float64, device=device, P_is_upper=True, idx_dtype=torch.int64)
 
     assert torch.allclose(diffqcp_utils.to_tensor(P.todense(), torch.float64, device=device),
                           data.materialize_P())

@@ -26,6 +26,10 @@ def torch_csr_to_cupy_csr(X: torch.Tensor) -> csr_matrix:
     col_cp = from_dlpack(to_dlpack(col_indices))
     val_cp = from_dlpack(to_dlpack(values))
 
+    assert crow_cp.__cuda_array_interface__['data'][0] == crow_indices.__cuda_array_interface__['data'][0]
+    assert col_cp.__cuda_array_interface__['data'][0] == col_indices.__cuda_array_interface__['data'][0]
+    assert val_cp.__cuda_array_interface__['data'][0] == values.__cuda_array_interface__['data'][0]
+
     # Build CuPy CSR matrix
     shape = X.shape
     Xcupy = csr_matrix((val_cp, col_cp, crow_cp), shape=shape)
@@ -71,14 +75,16 @@ if __name__ == '__main__':
     # Pcupy = torch_csr_to_cupy_csr(P) # need to handle when P is all zeros
     Acupy = torch_csr_to_cupy_csr(A)
 
-    # TODO (quill): the following fail
     # assert Pcupy.indptr.__cuda_array_interface__['data'][0] == P.crow_indices().__cuda_array_interface__['data'][0]
-    # assert Acupy.indptr.__cuda_array_interface__['data'][0] == A.crow_indices().__cuda_array_interface__['data'][0]
+    # TODO (quill): the following fail
+    assert Acupy.indptr.__cuda_array_interface__['data'][0] == A.crow_indices().__cuda_array_interface__['data'][0]
+    # The next passes
+    assert Acupy.data.__cuda_array_interface__['data'][0] == A.values().__cuda_array_interface__['data'][0]
     
     # Pcupy = cp.asarray(P)
     # Acupy = cp.asarray()
     qcupy = cp.asarray(q)
-    # the following passes
+    # the following also passes
     assert qcupy.__cuda_array_interface__['data'][0] == q.__cuda_array_interface__['data'][0]
     # bcupy
 

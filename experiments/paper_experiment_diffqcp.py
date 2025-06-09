@@ -73,9 +73,6 @@ def torch_to_jl(P, A, q, b, Pnnz, Annz):
         Pjl = jl.CuSparseMatrixCSR(jl.spzeros(n, n))
     else:
         Pcupy = torch_csr_to_cupy_csr(P)
-        # assert Pcupy.indptr.__cuda_array_interface__['data'][0] == P.crow_indices().__cuda_array_interface__['data'][0]
-        # assert Pcupy.indices.__cuda_array_interface__['data'][0] == P.col_indices().__cuda_array_interface__['data'][0]
-        # assert Pcupy.data.__cuda_array_interface__['data'][0] == P.values().__cuda_array_interface__['data'][0]
 
         data_ptr    = int(Pcupy.data.data.ptr)
         indices_ptr = int(Pcupy.indices.data.ptr)
@@ -104,7 +101,15 @@ def torch_to_jl(P, A, q, b, Pnnz, Annz):
     bcupy = cp.asarray(b)
     # assert bcupy.__cuda_array_interface__['data'][0] == b.__cuda_array_interface__['data'][0]
     bjl = jl.Clarabel.cupy_to_cuvector(jl.Float64, int(bcupy.data.ptr), bcupy.size)
-    return Pjl, Ajl, qjl, bjl
+    # also return cupy arrays so they aren't GCed, which might break being able to point
+    if Pnnz == 0 and Annz == 0:
+        return Pjl, Ajl, qjl, bjl, qcupy, bcupy
+    elif Pnnz == 0:
+        return Pjl, Ajl, qjl, bjl, Acupy, qcupy, bcupy
+    elif Annz == 0:
+        return Pjl, Ajl, qjl, bjl, Pcupy, qcupy, bcupy
+    else:
+        return Pjl, Ajl, qjl, bjl, Pcupy, Acupy, qcupy, bcupy
 
 
 def grad_desc(
@@ -129,7 +134,9 @@ def grad_desc(
             return (0.5 * torch.linalg.norm(x - target_x)**2 + 0.5 * torch.linalg.norm(y - target_y)**2
                     + 0.5 * torch.linalg.norm(s - target_s)**2)
     
-    Pjl, Ajl, qjl, bjl = torch_to_jl(qcp.P, qcp.A, qcp.q, qcp.b, qcp.data.P_filtered_nnz, qcp.data.A_filtered_nnz)
+    data = torch_to_jl(qcp.P, qcp.A, qcp.q, qcp.b, qcp.data.P_filtered_nnz, qcp.data.A_filtered_nnz)
+    Pjl, Ajl, qjl, bjl = data[0], data[1], data[2], data[3]
+    # the cupy arrays should be in scope / not GCed since they are in the data tuple?
     
     torch.cuda.synchronize()
     start_time = time.perf_counter()
@@ -167,7 +174,9 @@ def grad_desc(
         dq = -step_size * d_theta[2]
         db = -step_size * d_theta[3]
 
-        dPjl, dAjl, dqjl, dbjl = torch_to_jl(dP, dA, dq, db, qcp.data.P_filtered_nnz, qcp.data.A_filtered_nnz)
+        ddata = torch_to_jl(dP, dA, dq, db, qcp.data.P_filtered_nnz, qcp.data.A_filtered_nnz)
+        dPjl, dAjl, dqjl, dbjl = ddata[0], ddata[1], ddata[2], ddata[3]
+        # d (cupy arrays) still in scope since returned
 
         Pjl = Pjl + dPjl
         Ajl = Ajl + dAjl
@@ -199,6 +208,8 @@ def grad_desc(
 
 
 if __name__ == '__main__':
+
+    np.random.seed(0)
 
     # generate high-dimensional problem:
     #   - choose m = n since `generate_group_lasso` takes p = 10n
@@ -305,10 +316,6 @@ if __name__ == '__main__':
     x_target = torch.as_tensor(xcupy, dtype=dtype, device=device)
     y_target = torch.as_tensor(ycupy, dtype=dtype, device=device)
     s_target = torch.as_tensor(scupy, dtype=dtype, device=device)
-
-    # TODO(quill): check if data is the same (haven't modified.)
-    # remove data (how to do in Julia)
-    # how to synchronize with host in Julia
 
     print('starting to build initial learning problem.')
     initial_problem = generate_group_lasso(n=n, m=m)

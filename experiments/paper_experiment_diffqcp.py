@@ -66,16 +66,52 @@ def torch_csr_to_cupy_csr(X: torch.Tensor) -> csr_matrix:
     Xcupy = csr_matrix((val_cp, col_cp, crow_cp), shape=shape)
     return Xcupy
 
+def torch_to_jl(P, A, q, b, Pnnz, Annz):
+    """returns Pjl, Ajl, qjl, bjl"""
+
+    if Pnnz == 0:
+        Pjl = jl.CuSparseMatrixCSR(jl.spzeros(n, n))
+    else:
+        Pcupy = torch_csr_to_cupy_csr(P)
+        # assert Pcupy.indptr.__cuda_array_interface__['data'][0] == P.crow_indices().__cuda_array_interface__['data'][0]
+        # assert Pcupy.indices.__cuda_array_interface__['data'][0] == P.col_indices().__cuda_array_interface__['data'][0]
+        # assert Pcupy.data.__cuda_array_interface__['data'][0] == P.values().__cuda_array_interface__['data'][0]
+
+        data_ptr    = int(Pcupy.data.data.ptr)
+        indices_ptr = int(Pcupy.indices.data.ptr)
+        indptr_ptr  = int(Pcupy.indptr.data.ptr)
+
+        Pjl = jl.Clarabel.cupy_to_cucsrmat(jl.Float64, data_ptr, indices_ptr, indptr_ptr, n, n, Pnnz)
+    
+    if Annz == 0:
+        Ajl = jl.CuSparseMatrixCSR(jl.spzeros(m, n))
+    else:
+        Acupy = torch_csr_to_cupy_csr(A)
+        # assert Acupy.indptr.__cuda_array_interface__['data'][0] == A.crow_indices().__cuda_array_interface__['data'][0]
+        # assert Acupy.indices.__cuda_array_interface__['data'][0] == A.col_indices().__cuda_array_interface__['data'][0]
+        # assert Acupy.data.__cuda_array_interface__['data'][0] == A.values().__cuda_array_interface__['data'][0]
+
+        data_ptr    = int(Acupy.data.data.ptr)
+        indices_ptr = int(Acupy.indices.data.ptr)
+        indptr_ptr  = int(Acupy.indptr.data.ptr)
+
+        Ajl = jl.Clarabel.cupy_to_cucsrmat(jl.Float64, data_ptr, indices_ptr, indptr_ptr, m, n, Annz)
+    
+    qcupy = cp.asarray(q)
+    # the following also passes
+    # assert qcupy.__cuda_array_interface__['data'][0] == q.__cuda_array_interface__['data'][0]
+    qjl = jl.Clarabel.cupy_to_cuvector(jl.Float64, int(qcupy.data.ptr), qcupy.size)
+    bcupy = cp.asarray(b)
+    # assert bcupy.__cuda_array_interface__['data'][0] == b.__cuda_array_interface__['data'][0]
+    bjl = jl.Clarabel.cupy_to_cuvector(jl.Float64, int(bcupy.data.ptr), bcupy.size)
+    return Pjl, Ajl, qjl, bjl
+
+
 def grad_desc(
     qcp: QCP,
     target_x: torch.Tensor,
     target_y: torch.Tensor,
     target_s: torch.Tensor,
-    Pjl,
-    Ajl,
-    qjl,
-    bjl,
-    clarabel_jl,
     solver_jl,
     num_iter: int = 1000,
     step_size: float = 0.01,
@@ -93,30 +129,28 @@ def grad_desc(
             return (0.5 * torch.linalg.norm(x - target_x)**2 + 0.5 * torch.linalg.norm(y - target_y)**2
                     + 0.5 * torch.linalg.norm(s - target_s)**2)
     
+    Pjl, Ajl, qjl, bjl = torch_to_jl(qcp.P, qcp.A, qcp.q, qcp.b, qcp.data.P_filtered_nnz, qcp.data.A_filtered_nnz)
+    
     torch.cuda.synchronize()
     start_time = time.perf_counter()
     
     while curr_iter < num_iter:
 
-        clarabel_jl.update_P_b(solver_jl, Pjl)
-        clarabel_jl.update_A_b(solver_jl, Ajl)
-        clarabel_jl.update_q_b(solver_jl, qjl)
-        clarabel_jl.update_b_b(solver_jl, bjl)
+        jl.Clarabel.update_P_b(solver_jl, Pjl)
+        jl.Clarabel.update_A_b(solver_jl, Ajl)
+        jl.Clarabel.update_q_b(solver_jl, qjl)
+        jl.Clarabel.update_b_b(solver_jl, bjl)
 
-        clarabel_jl.solve_b(solver_jl)
-        print("made it past the solve")
+        jl.Clarabel.solve_b(solver_jl)
         xcupy = JuliaCuVector2CuPyArray(solver_jl.solution.x)
         ycupy = JuliaCuVector2CuPyArray(solver_jl.solution.z)
         scupy = JuliaCuVector2CuPyArray(solver_jl.solution.s)
-        print("made it past transfer to cupy")
 
         xk = torch.as_tensor(xcupy, dtype=dtype, device=device)
         yk = torch.as_tensor(ycupy, dtype=dtype, device=device)
         sk = torch.as_tensor(scupy, dtype=dtype, device=device)
-        print('made it past transfer to torch')
 
         qcp.update_solution(xk, yk, sk)
-        print('made it past qcp update')
 
         f0k = f0(xk, yk, sk)
         f0s[curr_iter] = f0k
@@ -126,23 +160,32 @@ def grad_desc(
             optimal = True
             break
         
-        print('to vjp')
         d_theta = qcp.vjp(xk - target_x, yk - target_y, sk - target_s)
-        print('past vjp')
 
         dP = -step_size * d_theta[0]
         dA = -step_size * d_theta[1]
         dq = -step_size * d_theta[2]
         db = -step_size * d_theta[3]
-        print('past creation of perturbations')
+
+        dPjl, dAjl, dqjl, dbjl = torch_to_jl(dP, dA, dq, db, qcp.data.P_filtered_nnz, qcp.data.A_filtered_nnz)
+
+        Pjl = Pjl + dPjl
+        Ajl = Ajl + dAjl
+        qjl = qjl + dqjl
+        bjl = bjl + dbjl
+
+        # print("dA type: ", type(dA))
+        # print("dA shape: ", dA.shape)
+        # print("dA layout: ", dA.layout)
+
+        # qcp.perturb_data(dP, dA, dq, db)
 
         # the following operate in place, so shouldn't have to repoint Julia data
-        qcp.data._P += dP
-        qcp.data._A += dA
-        qcp.data._AT = qcp.data._A_transpose(qcp.data_A.values())
-        qcp.data.q += dq
-        qcp.data.b += db
-        print('past updates')
+        # qcp.data._P += dP
+        # qcp.data._A += dA
+        # qcp.data._AT = qcp.data._A_transpose(qcp.data_A.values())
+        # qcp.data.q += dq
+        # qcp.data.b += db
 
     torch.cuda.synchronize()
     end_time = time.perf_counter()
@@ -193,7 +236,7 @@ if __name__ == '__main__':
     # === ===
     # TODO(quill): can we just use `torch` directly?
     
-    Pnnz = Pcpu.nnz # TODO(quill): need to ensure no explicit zeros like I do in `ProblemData`?
+    Pnnz = Pcpu.nnz
     Annz = Acpu.nnz
 
     if Pnnz == 0:
@@ -286,57 +329,8 @@ if __name__ == '__main__':
     b = to_tensor(bcpu,dtype=dtype, device=device)
     
     qcp = QCP(P, A, q, b, cone_dict=scs_cones, P_is_upper=False, dtype=torch.float64, device=device, reduce_fp_flops=True)
-
-    # references for convenience
-    P = qcp.P
-    A = qcp.A
-    q = qcp.q
-    b = qcp.b
-
-    Pnnz = Pcpu.nnz # TODO(quill): need to ensure no explicit zeros like I do in `ProblemData`?
-    Annz = Acpu.nnz
-
-    if Pnnz == 0:
-        Pjl_new = jl.CuSparseMatrixCSR(jl.spzeros(n, n))
-    else:
-        Pcupy = torch_csr_to_cupy_csr(P)
-        assert Pcupy.indptr.__cuda_array_interface__['data'][0] == P.crow_indices().__cuda_array_interface__['data'][0]
-        assert Pcupy.indices.__cuda_array_interface__['data'][0] == P.col_indices().__cuda_array_interface__['data'][0]
-        assert Pcupy.data.__cuda_array_interface__['data'][0] == P.values().__cuda_array_interface__['data'][0]
-
-        data_ptr    = int(Pcupy.data.data.ptr)
-        indices_ptr = int(Pcupy.indices.data.ptr)
-        indptr_ptr  = int(Pcupy.indptr.data.ptr)
-
-        Pjl_new = jl.Clarabel.cupy_to_cucsrmat(jl.Float64, data_ptr, indices_ptr, indptr_ptr, n, n, Pnnz)
     
-    if Annz == 0:
-        Ajl_new = jl.CuSparseMatrixCSR(jl.spzeros(m, n))
-    else:
-        Acupy = torch_csr_to_cupy_csr(A)
-        assert Acupy.indptr.__cuda_array_interface__['data'][0] == A.crow_indices().__cuda_array_interface__['data'][0]
-        assert Acupy.indices.__cuda_array_interface__['data'][0] == A.col_indices().__cuda_array_interface__['data'][0]
-        assert Acupy.data.__cuda_array_interface__['data'][0] == A.values().__cuda_array_interface__['data'][0]
-
-        data_ptr    = int(Acupy.data.data.ptr)
-        indices_ptr = int(Acupy.indices.data.ptr)
-        indptr_ptr  = int(Acupy.indptr.data.ptr)
-
-        Ajl_new = jl.Clarabel.cupy_to_cucsrmat(jl.Float64, data_ptr, indices_ptr, indptr_ptr, m, n, Annz)
-    
-    qcupy = cp.asarray(q)
-    # the following also passes
-    assert qcupy.__cuda_array_interface__['data'][0] == q.__cuda_array_interface__['data'][0]
-    qjl_new = jl.Clarabel.cupy_to_cuvector(jl.Float64, int(qcupy.data.ptr), qcupy.size)
-    bcupy = cp.asarray(b)
-    assert bcupy.__cuda_array_interface__['data'][0] == b.__cuda_array_interface__['data'][0]
-    bjl_new = jl.Clarabel.cupy_to_cuvector(jl.Float64, int(bcupy.data.ptr), bcupy.size)
-
-    # delete references
-    del P, A, q, b
-    
-    result = grad_desc(qcp, x_target, y_target, s_target, Pjl_new, Ajl_new, qjl_new, bjl_new,
-                       jl.Clarabel, jl.solver, num_iter=20)
+    result = grad_desc(qcp, x_target, y_target, s_target, jl.solver, num_iter=20)
     
     save_path = os.path.join(results_dir, "diffqcp_paper_experiment.png")
     result.plot_obj_traj(save_path)

@@ -345,9 +345,11 @@ class ProblemData:
             P = P.to_sparse_csr() # returns self if P is already sparse csr
             values = P.values()
             values = to_tensor(values, dtype=self.dtype, device=self.device)
-            if values.shape[0] == self.P_original_nnz:
+            if values.shape[0] == self.P_filtered_nnz:
+                pass
+            elif values.shape[0] == self.P_original_nnz:
                 values = values[self.P_nonzero_mask]
-            elif values.shape[0] != self.P_filtered_nnz:
+            else:
                 raise ValueError("The new `P` must have the same sparsity pattern as the"
                                  + " original or filtered `P`. Since the provided tensor doesn't"
                                  + " have the same number of nonzero elements as the"
@@ -396,9 +398,11 @@ class ProblemData:
             
             # assume A is on self.device when provided now
             values = to_tensor(values, dtype=self.dtype, device=self.device)
-            if values.shape[0] == self.A_original_nnz:
+            if values.shape[0] == self.A_filtered_nnz:
+                pass
+            elif values.shape[0] == self.A_original_nnz:
                 values = values[self.A_nonzero_mask] 
-            elif values.shape[0] != self.A_filtered_nnz:
+            else:
                 raise ValueError("The new `A` must have the same sparsity pattern as the"
                                  + " original or filtered `A`. Since the provided tensor doesn't"
                                  + " have the same number of nonzero elements as the"

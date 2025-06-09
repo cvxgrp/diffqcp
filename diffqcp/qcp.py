@@ -88,11 +88,11 @@ class QCP:
         A: Float[Union[Tensor, sparray, spmatrix], 'm n'],
         q: Float[Union[Tensor, np.ndarray], 'n'],
         b: Float[Union[Tensor, np.ndarray], 'm'],
-        x: Float[Union[Tensor, np.ndarray], 'n'],
-        y: Float[Union[Tensor, np.ndarray], 'm'],
-        s: Float[Union[Tensor, np.ndarray], 'm'],
         cone_dict: dict[str, int | list[int]],
         P_is_upper: bool,
+        x: Float[Union[Tensor, np.ndarray], 'n'] | None = None,
+        y: Float[Union[Tensor, np.ndarray], 'm'] | None = None,
+        s: Float[Union[Tensor, np.ndarray], 'm'] | None = None,
         dtype: torch.dtype | None = None,
         device: torch.device | None = None,
         reduce_fp_flops: bool = False
@@ -114,11 +114,16 @@ class QCP:
         self.data = ProblemData(
             cone_dict=cone_dict, P=P, A=A, q=q, b=b, dtype=self.dtype, device=self.device, P_is_upper=P_is_upper
         )
-        self._x = to_tensor(x, dtype=self.dtype, device=self.device)
-        self._y = to_tensor(y, dtype=self.dtype, device=self.device)
-        self._s = to_tensor(s, dtype=self.dtype, device=self.device)
-        self.n = self._x.shape[0]
-        self.m = y.shape[0]
+        if x is not None and y is not None and s is not None:
+            self._x = to_tensor(x, dtype=self.dtype, device=self.device)
+            self._y = to_tensor(y, dtype=self.dtype, device=self.device)
+            self._s = to_tensor(s, dtype=self.dtype, device=self.device)
+        else:
+            self._x = None
+            self._y = None
+            self._s = None
+        self.n = P.shape[0]
+        self.m = A.shape[0]
         self.N = self.n + self.m + 1
         self._reduce_fp_flops = reduce_fp_flops
         self._atoms_computed = False
@@ -128,6 +133,11 @@ class QCP:
             self._form_atoms()
     
     def _form_atoms(self) -> None:
+        if self._x is None or self._y is None or self._s is None:
+            raise ValueError("All solution variables must be provided to"
+                             + " the `QCP` before the derivative atoms can"
+                             + " be formed.")
+
         self._Pi_Kstar_v, self._D_Pi_kstar_v = cone_utils.proj_and_dproj(self._y - self._s, self.data.cones, dual=True)
         self._Pi_z = torch.cat((self._x,
                                self._Pi_Kstar_v,
@@ -166,6 +176,9 @@ class QCP:
     ) -> tuple[
             Float[Tensor, 'n'], Float[Tensor, 'm'], Float[Tensor, 'm']
         ]:
+        if self._x is None or self._y is None or self._s is None:
+            raise ValueError("All solution variables must be provided to"
+                             + " the `QCP` before JVPs can be computed.")
         if not self._atoms_computed:
             self._form_atoms()
 
@@ -197,6 +210,9 @@ class QCP:
         """
         Returns dP and dA as `Tensor`s in `sparse_csr` layout.
         """
+        if self._x is None or self._y is None or self._s is None:
+            raise ValueError("All solution variables must be provided to"
+                             + " the `QCP` before VJPs can be computed.")
         if not self._atoms_computed:
             self._form_atoms()
         
@@ -331,7 +347,7 @@ class QCP:
         self._atoms_computed = False
 
     @property
-    def x(self) -> Float[Tensor, 'n']:
+    def x(self) -> Float[Tensor, 'n'] | None:
         return self._x
     
     @x.setter
@@ -340,7 +356,7 @@ class QCP:
         self._atoms_computed = False
 
     @property
-    def y(self) -> Float[Tensor, 'm']:
+    def y(self) -> Float[Tensor, 'm'] | None:
         return self._y
     
     @y.setter
@@ -349,7 +365,7 @@ class QCP:
         self._atoms_computed = False
 
     @property
-    def s(self) -> Float[Tensor, 'm']:
+    def s(self) -> Float[Tensor, 'm'] | None:
         return self._s
     
     @s.setter

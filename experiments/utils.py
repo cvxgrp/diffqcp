@@ -39,7 +39,8 @@ class GradDescTestResult:
             raise ValueError("obj_traj is None. Cannot plot.")
 
         plt.figure(figsize=(8, 6))
-        plt.plot(range(self.num_iterations), np.log(self.obj_traj), label="Objective Trajectory")
+        plt.plot(range(self.num_iterations), self.obj_traj, label="Objective Trajectory")
+        # plt.plot(range(self.num_iterations), np.log(self.obj_traj), label="Objective Trajectory")
         if self.lsqr_residuals is not None:
             plt.plot(range(self.num_iterations), np.log(self.lsqr_residuals), label="LSQR residuals")
             print("NUM lsqr_residuals: ", self.lsqr_residuals.shape[0])

@@ -149,6 +149,12 @@ class ProblemData:
             P_clean = torch.sparse_coo_tensor(indices, values, size=P.shape).coalesce()
             # P = to_sparse_csr_tensor(P_clean).to(dtype=self.dtype, device=self.device)
             P = P_clean.to_sparse_csr().to(dtype=self.dtype, device=self.device)
+            P = torch.sparse_csr_tensor(
+                crow_indices=P.crow_indices().to(dtype=self.idx_dtype),
+                col_indices=P.col_indices().to(dtype=self.idx_dtype),
+                values = P.values(),
+                size=(self.n, self.n)
+            )
             self.Pcrow_indices = P.crow_indices()
             self.Pcol_indices = P.col_indices()
 
@@ -278,6 +284,12 @@ class ProblemData:
             # A_clean is on whatever device A was allocated on.
             A_clean = torch.sparse_coo_tensor(indices, values, size=A.shape).coalesce()
             self._A = A_clean.to_sparse_csr().to(dtype=self.dtype, device=self.device)
+            self._A = torch.sparse_csr_tensor(
+                crow_indices=self._A.crow_indices().to(dtype=self.idx_dtype),
+                col_indices=self._A.col_indices().to(dtype=self.idx_dtype),
+                values = self._A.values(),
+                size = (self.m, self.n)
+            )
             self.Acrow_indices = self._A.crow_indices()
             self.Acol_indices = self._A.col_indices()
 

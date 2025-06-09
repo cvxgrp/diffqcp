@@ -5,7 +5,7 @@ jl.seval('using Clarabel, LinearAlgebra, SparseArrays')
 jl.seval('using CUDA, CUDA.CUSPARSE')
 
 import time
-from copy import deepcopy
+import os
 import torch
 import numpy as np
 import cupy as cp
@@ -15,8 +15,38 @@ from cupy import from_dlpack
 
 from diffqcp import QCP
 from diffqcp.utils import to_tensor, to_sparse_csr_tensor
-from tests.utils import data_from_cvxpy_problem_quad, data_from_cvxpy_problem_linear
+from tests.utils import data_from_cvxpy_problem_quad
 from experiments.cvx_problem_generator import generate_group_lasso
+from experiments.utils import GradDescTestResult
+
+results_dir = os.path.join(os.path.dirname(__file__), "results")
+
+def JuliaCuVector2CuPyArray(jl_arr):
+    """Taken from https://github.com/cvxgrp/CuClarabel/blob/main/src/python/jl2py.py.
+    """
+    # Get the device pointer from Julia
+    pDevice = jl.Int(jl.pointer(jl_arr))
+
+    # Get array length and element type
+    span = jl.size(jl_arr)
+    dtype = jl.eltype(jl_arr)
+
+    # Map Julia type to CuPy dtype
+    if dtype == jl.Float64:
+        dtype = cp.float64
+    else:
+        dtype = cp.float32
+
+    # Compute memory size in bytes (assuming 1D vector)
+    size_bytes = int(span[0] * cp.dtype(dtype).itemsize)
+
+    # Create CuPy memory view from the Julia pointer
+    mem = cp.cuda.UnownedMemory(pDevice, size_bytes, owner=None)
+    memptr = cp.cuda.MemoryPointer(mem, 0)
+
+    # Wrap into CuPy ndarray
+    arr = cp.ndarray(shape=span, dtype=dtype, memptr=memptr)
+    return arr
 
 def torch_csr_to_cupy_csr(X: torch.Tensor) -> csr_matrix:
     crow_indices = X.crow_indices()
@@ -36,8 +66,94 @@ def torch_csr_to_cupy_csr(X: torch.Tensor) -> csr_matrix:
     Xcupy = csr_matrix((val_cp, col_cp, crow_cp), shape=shape)
     return Xcupy
 
-def grad_desc():
-    pass
+def grad_desc(
+    qcp: QCP,
+    target_x: torch.Tensor,
+    target_y: torch.Tensor,
+    target_s: torch.Tensor,
+    Pjl,
+    Ajl,
+    qjl,
+    bjl,
+    clarabel_jl,
+    solver_jl,
+    num_iter: int = 1000,
+    step_size: float = 0.01,
+    improvement_factor: float = 1e-2,
+    fixed_tol: float = 1e-4,
+    dtype: torch.dtype = torch.float64,
+    device: torch.device | None = None
+):
+    curr_iter = 0
+    optimal = False
+    f0s = torch.zeros(num_iter+1, dtype=dtype, device=device)
+    step_size = torch.tensor(step_size, dtype=dtype, device=device)
+
+    def f0(x: torch.Tensor, y: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
+            return (0.5 * torch.linalg.norm(x - target_x)**2 + 0.5 * torch.linalg.norm(y - target_y)**2
+                    + 0.5 * torch.linalg.norm(s - target_s)**2)
+    
+    torch.cuda.synchronize()
+    start_time = time.perf_counter()
+    
+    while curr_iter < num_iter:
+
+        clarabel_jl.update_P_b(solver_jl, Pjl)
+        clarabel_jl.update_A_b(solver_jl, Ajl)
+        clarabel_jl.update_q_b(solver_jl, qjl)
+        clarabel_jl.update_b_b(solver_jl, bjl)
+
+        clarabel_jl.solve_b(solver_jl)
+        print("made it past the solve")
+        xcupy = JuliaCuVector2CuPyArray(solver_jl.solution.x)
+        ycupy = JuliaCuVector2CuPyArray(solver_jl.solution.z)
+        scupy = JuliaCuVector2CuPyArray(solver_jl.solution.s)
+        print("made it past transfer to cupy")
+
+        xk = torch.as_tensor(xcupy, dtype=dtype, device=device)
+        yk = torch.as_tensor(ycupy, dtype=dtype, device=device)
+        sk = torch.as_tensor(scupy, dtype=dtype, device=device)
+        print('made it past transfer to torch')
+
+        qcp.update_solution(xk, yk, sk)
+        print('made it past qcp update')
+
+        f0k = f0(xk, yk, sk)
+        f0s[curr_iter] = f0k
+        curr_iter += 1
+
+        if curr_iter > 1 and ((f0k / f0s[0]) < improvement_factor or f0k < fixed_tol):
+            optimal = True
+            break
+        
+        print('to vjp')
+        d_theta = qcp.vjp(xk - target_x, yk - target_y, sk - target_s)
+        print('past vjp')
+
+        dP = -step_size * d_theta[0]
+        dA = -step_size * d_theta[1]
+        dq = -step_size * d_theta[2]
+        db = -step_size * d_theta[3]
+        print('past creation of perturbations')
+
+        # the following operate in place, so shouldn't have to repoint Julia data
+        qcp.data._P += dP
+        qcp.data._A += dA
+        qcp.data._AT = qcp.data._A_transpose(qcp.data_A.values())
+        qcp.data.q += dq
+        qcp.data.b += db
+        print('past updates')
+
+    torch.cuda.synchronize()
+    end_time = time.perf_counter()
+    print("Learning time: ", end_time - start_time)
+
+    f0_traj = f0s[0:curr_iter]
+    del f0s
+    return GradDescTestResult(
+            passed=optimal, num_iterations=curr_iter, obj_traj=f0_traj.cpu().numpy(), for_qcp=True
+        )
+
 
 if __name__ == '__main__':
 
@@ -53,7 +169,6 @@ if __name__ == '__main__':
     print("starting to build problem")
 
     target_problem = generate_group_lasso(n=n, m=m)
-    # initial_problem = generate_group_lasso(n=n, m=m)
 
     print("built problem")
 
@@ -64,6 +179,7 @@ if __name__ == '__main__':
     Pcpu, Acpu = qcp_data[0], qcp_data[2] # NOTE we take full `P` (not upper triangular)
     qcpu, bcpu = qcp_data[3], qcp_data[4]
     scs_cones, clarabel_cones = qcp_data[5], qcp_data[6]
+    del qcp_data
 
     # Move data to device for `diffqcp` to access
     P = to_sparse_csr_tensor(Pcpu, dtype=dtype, device=device)
@@ -75,9 +191,7 @@ if __name__ == '__main__':
     m = A.shape[0]
 
     # === ===
-    # Now create `cupy` pointers to data, then Julia pointers to data.
     # TODO(quill): can we just use `torch` directly?
-    
     
     Pnnz = Pcpu.nnz # TODO(quill): need to ensure no explicit zeros like I do in `ProblemData`?
     Annz = Acpu.nnz
@@ -95,7 +209,6 @@ if __name__ == '__main__':
         indptr_ptr  = int(Pcupy.indptr.data.ptr)
 
         Pjl = jl.Clarabel.cupy_to_cucsrmat(jl.Float64, data_ptr, indices_ptr, indptr_ptr, n, n, Pnnz)
-    
     
     if Annz == 0:
         Ajl = jl.CuSparseMatrixCSR(jl.spzeros(m, n))
@@ -120,22 +233,6 @@ if __name__ == '__main__':
     bjl = jl.Clarabel.cupy_to_cuvector(jl.Float64, int(bcupy.data.ptr), bcupy.size)
 
     # === construct target problem ===
-    # TODO(quill): remove `ed` from `scs_cones` if it exists
-    #   Also make sure power cone has positive exponent
-    # jl_cones = deepcopy(scs_cones)
-    # jl_cones['f'] = jl_cones.pop('z')
-    # jl.cones = jl_cones
-
-    # zero_cone = scs_cones['z']
-    # nonneg_cone = scs_cones['l']
-    # soc = scs_cones['q']
-    # psd_cone = scs_cones['s']
-    # exp_cones = scs_cones['ep']
-
-    # jl.seval('''
-    #    cones = Dict("f" => {zero_cone}, "l" => {nonneg_cone}, "q" => {soc}, "s" => {psd_cone}, "ep" => {exp_cones})
-    #    settings = Clarabel.Settings(direct_solve_method = :cudss) 
-    # ''')
 
     # Assign Python variables to Julia variables
     jl.zero_cone = scs_cones['z']
@@ -144,7 +241,7 @@ if __name__ == '__main__':
     jl.psd_cone = scs_cones['s']
     jl.exp_cones = scs_cones['ep']
 
-    # Now use those Julia variables in your Julia code
+    # Now use Julia variables in Julia code
     jl.seval('''
         cones = Dict(
             "f" => zero_cone,
@@ -155,17 +252,92 @@ if __name__ == '__main__':
         )
         settings = Clarabel.Settings(direct_solve_method = :cudss)
     ''')
-    result = jl.seval("methods(Clarabel.Solver)")
-    print(result)
-    print("-> after which call")
     jl.solver = jl.Clarabel.Solver(Pjl, qjl, Ajl, bjl, jl.cones, jl.settings)
     jl.Clarabel.solve_b(jl.solver) # solve new problem w/o creating memory
 
+    xcupy = JuliaCuVector2CuPyArray(jl.solver.solution.x)
+    ycupy = JuliaCuVector2CuPyArray(jl.solver.solution.z)
+    scupy = JuliaCuVector2CuPyArray(jl.solver.solution.s)
 
-    # should be able to do Pjl = jl.Clarabel.cupy ...
-    # then jl.solver = jl.Clarabel.solver(Pjl, ...)
+    x_target = torch.as_tensor(xcupy, dtype=dtype, device=device)
+    y_target = torch.as_tensor(ycupy, dtype=dtype, device=device)
+    s_target = torch.as_tensor(scupy, dtype=dtype, device=device)
+
+    # TODO(quill): check if data is the same (haven't modified.)
+    # remove data (how to do in Julia)
+    # how to synchronize with host in Julia
+
+    print('starting to build initial learning problem.')
+    initial_problem = generate_group_lasso(n=n, m=m)
+    print('finished building initial learning problem.')
+
+    print("extracting data from problem")
+    qcp_data = data_from_cvxpy_problem_quad(target_problem)
+    print("finished extracting data from problem")
+
+    Pcpu, Acpu = qcp_data[0], qcp_data[2] # NOTE we take full `P` (not upper triangular)
+    qcpu, bcpu = qcp_data[3], qcp_data[4]
+    del qcp_data
     
+    # Move data to device for `diffqcp` to access
+    P = to_sparse_csr_tensor(Pcpu, dtype=dtype, device=device)
+    A = to_sparse_csr_tensor(Acpu, dtype=dtype, device=device)
+    q = to_tensor(qcpu, dtype=dtype, device=device)
+    b = to_tensor(bcpu,dtype=dtype, device=device)
+    
+    qcp = QCP(P, A, q, b, cone_dict=scs_cones, P_is_upper=False, dtype=torch.float64, device=device, reduce_fp_flops=True)
 
-    # target_x_qcp = to_tensor(qcp_data_and_soln[5], dtype=dtype, device=device)
-    # target_y_qcp = to_tensor(qcp_data_and_soln[6], dtype=dtype, device=device)
-    # target_s_qcp = to_tensor(qcp_data_and_soln[7], dtype=dtype, device=device)
+    # references for convenience
+    P = qcp.P
+    A = qcp.A
+    q = qcp.q
+    b = qcp.b
+
+    Pnnz = Pcpu.nnz # TODO(quill): need to ensure no explicit zeros like I do in `ProblemData`?
+    Annz = Acpu.nnz
+
+    if Pnnz == 0:
+        Pjl_new = jl.CuSparseMatrixCSR(jl.spzeros(n, n))
+    else:
+        Pcupy = torch_csr_to_cupy_csr(P)
+        assert Pcupy.indptr.__cuda_array_interface__['data'][0] == P.crow_indices().__cuda_array_interface__['data'][0]
+        assert Pcupy.indices.__cuda_array_interface__['data'][0] == P.col_indices().__cuda_array_interface__['data'][0]
+        assert Pcupy.data.__cuda_array_interface__['data'][0] == P.values().__cuda_array_interface__['data'][0]
+
+        data_ptr    = int(Pcupy.data.data.ptr)
+        indices_ptr = int(Pcupy.indices.data.ptr)
+        indptr_ptr  = int(Pcupy.indptr.data.ptr)
+
+        Pjl_new = jl.Clarabel.cupy_to_cucsrmat(jl.Float64, data_ptr, indices_ptr, indptr_ptr, n, n, Pnnz)
+    
+    if Annz == 0:
+        Ajl_new = jl.CuSparseMatrixCSR(jl.spzeros(m, n))
+    else:
+        Acupy = torch_csr_to_cupy_csr(A)
+        assert Acupy.indptr.__cuda_array_interface__['data'][0] == A.crow_indices().__cuda_array_interface__['data'][0]
+        assert Acupy.indices.__cuda_array_interface__['data'][0] == A.col_indices().__cuda_array_interface__['data'][0]
+        assert Acupy.data.__cuda_array_interface__['data'][0] == A.values().__cuda_array_interface__['data'][0]
+
+        data_ptr    = int(Acupy.data.data.ptr)
+        indices_ptr = int(Acupy.indices.data.ptr)
+        indptr_ptr  = int(Acupy.indptr.data.ptr)
+
+        Ajl_new = jl.Clarabel.cupy_to_cucsrmat(jl.Float64, data_ptr, indices_ptr, indptr_ptr, m, n, Annz)
+    
+    qcupy = cp.asarray(q)
+    # the following also passes
+    assert qcupy.__cuda_array_interface__['data'][0] == q.__cuda_array_interface__['data'][0]
+    qjl_new = jl.Clarabel.cupy_to_cuvector(jl.Float64, int(qcupy.data.ptr), qcupy.size)
+    bcupy = cp.asarray(b)
+    assert bcupy.__cuda_array_interface__['data'][0] == b.__cuda_array_interface__['data'][0]
+    bjl_new = jl.Clarabel.cupy_to_cuvector(jl.Float64, int(bcupy.data.ptr), bcupy.size)
+
+    # delete references
+    del P, A, q, b
+    
+    result = grad_desc(qcp, x_target, y_target, s_target, Pjl_new, Ajl_new, qjl_new, bjl_new,
+                       jl.Clarabel, jl.solver, num_iter=20)
+    
+    save_path = os.path.join(results_dir, "diffqcp_paper_experiment.png")
+    result.plot_obj_traj(save_path)
+    

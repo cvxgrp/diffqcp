@@ -17,6 +17,7 @@ from cupy import from_dlpack
 
 from diffqcp import QCP
 from diffqcp.utils import to_tensor, to_sparse_csr_tensor
+from diffqcp.problem_data import ProblemData
 from tests.utils import data_from_cvxpy_problem_quad
 from experiments.cvx_problem_generator import generate_group_lasso
 from experiments.utils import GradDescTestResult
@@ -175,6 +176,8 @@ def grad_desc(
 
         print("Ajl shape: ", jl.size(Ajl))
         print("Ajl nnz: ", Ajl.nnz)
+        print("Acupy nnz: ", Acupy.nnz)
+        print("Acupy count nonzero: ", Acupy.count_nonzero())
         print("qcp A original nnz", qcp.data.A_original_nnz)
         print("qcp A filtered nnz", qcp.data.A_filtered_nnz)
 
@@ -296,11 +299,18 @@ if __name__ == '__main__':
     scs_cones, clarabel_cones = qcp_data[5], qcp_data[6]
     del qcp_data
 
+    print("Acpu nnz: ", Acpu.nnz)
+    print("Acpu count nonzero: ", Acpu.count_nonzero())
+
     # Move data to device for `diffqcp` to access
     P = to_sparse_csr_tensor(Pcpu, dtype=dtype, device=device)
     A = to_sparse_csr_tensor(Acpu, dtype=dtype, device=device)
     q = to_tensor(qcpu, dtype=dtype, device=device)
     b = to_tensor(bcpu,dtype=dtype, device=device)
+
+    data0 = ProblemData([], P, A, q, b, dtype=torch.float64, device=device, P_is_upper=False)
+    print("outside loop  A nnz original", data0.A_original_nnz)
+    print("outside loop  A nnz filtered", data0.A_filtered_nnz)
 
     n = P.shape[0]
     m = A.shape[0]
@@ -338,6 +348,8 @@ if __name__ == '__main__':
         indptr_ptr  = int(Acupy.indptr.data.ptr)
 
         Ajl = jl.Clarabel.cupy_to_cucsrmat(jl.Float64, data_ptr, indices_ptr, indptr_ptr, m, n, Annz)
+    
+    print("outside loop Ajl nnz: ", Ajl.nnz)
     
     qcupy = cp.asarray(q)
     # the following also passes

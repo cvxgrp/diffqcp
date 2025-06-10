@@ -157,29 +157,22 @@ def grad_desc(
             return (0.5 * torch.linalg.norm(x - target_x)**2 + 0.5 * torch.linalg.norm(y - target_y)**2
                     + 0.5 * torch.linalg.norm(s - target_s)**2)
     
-    # data = torch_to_jl(qcp.P, qcp.A, qcp.q, qcp.b, qcp.data.P_filtered_nnz, qcp.data.A_filtered_nnz)
-    # Pjl, Ajl, qjl, bjl = data[0], data[1], data[2], data[3]
-    # Pcupy, Acupy = data[4], data[5]
+    data = torch_to_jl(qcp.P, qcp.A, qcp.q, qcp.b, qcp.data.P_filtered_nnz, qcp.data.A_filtered_nnz)
+    Pjl, Ajl, qjl, bjl = data[0], data[1], data[2], data[3]
+    Pcupy, Acupy = data[4], data[5]
     
     torch.cuda.synchronize()
     start_time = time.perf_counter()
     
     while curr_iter < num_iter:
 
-        data = torch_to_jl(qcp.P, qcp.A, qcp.q, qcp.b, qcp.data.P_filtered_nnz, qcp.data.A_filtered_nnz)
+        # data = torch_to_jl(qcp.P, qcp.A, qcp.q, qcp.b, qcp.data.P_filtered_nnz, qcp.data.A_filtered_nnz)
         
-        assert torch.equal(qcp.A.crow_indices(), qcp.data.Acrow_indices)
-        assert torch.equal(qcp.A.col_indices(), qcp.data.Acol_indices)
+        # assert torch.equal(qcp.A.crow_indices(), qcp.data.Acrow_indices)
+        # assert torch.equal(qcp.A.col_indices(), qcp.data.Acol_indices)
         
-        Pjl, Ajl, qjl, bjl = data[0], data[1], data[2], data[3]
-        Pcupy, Acupy = data[4], data[5]
-
-        print("Ajl shape: ", jl.size(Ajl))
-        print("Ajl nnz: ", Ajl.nnz)
-        print("Acupy nnz: ", Acupy.nnz)
-        print("Acupy count nonzero: ", Acupy.count_nonzero())
-        print("qcp A original nnz", qcp.data.A_original_nnz)
-        print("qcp A filtered nnz", qcp.data.A_filtered_nnz)
+        # Pjl, Ajl, qjl, bjl = data[0], data[1], data[2], data[3]
+        # Pcupy, Acupy = data[4], data[5]
 
         jl.Clarabel.update_P_b(solver_jl, Pjl)
         jl.Clarabel.update_A_b(solver_jl, Ajl)
@@ -220,19 +213,14 @@ def grad_desc(
         
         if qcp.data.A_filtered_nnz != 0:
             dA_cupy = torch_csr_to_cupy_csr(dA)
-            print("dA_cupy shape", dA_cupy.shape)
-            print("dA_cupy data length: ", dA_cupy.data.size)
-            print("Acupy shape", Acupy.shape)
-            print("Acupy data length: ", Acupy.data.size)
-            # Acupy = csr_matrix((Acupy.data + dA_cupy.data, Acupy.indices, Acupy.indptr), shape=Acupy.shape)
-            Acupy.data += dA_cupy.data
-            Atch = cupy_csr_to_torch_csr(Acupy)
-            print("Atch crow_indices")
-            assert torch.equal(dA.crow_indices(), qcp.data.Acrow_indices)
-            assert torch.equal(dA.col_indices(), qcp.data.Acol_indices)
-            assert torch.equal(Atch.crow_indices(), qcp.data.Acrow_indices)
-            assert torch.equal(Atch.col_indices(), qcp.data.Acol_indices)
-            qcp.data._A = Atch
+            # newA = csr_matrix((Acupy.data + dA_cupy.data, Acupy.indices, Acupy.indptr), shape=Acupy.shape)
+            Acupy.data += dA_cupy.data # this should modify A in qcp, but not AT
+            # Atch = cupy_csr_to_torch_csr(newA)
+            # assert torch.equal(dA.crow_indices(), qcp.data.Acrow_indices)
+            # assert torch.equal(dA.col_indices(), qcp.data.Acol_indices)
+            # assert torch.equal(Atch.crow_indices(), qcp.data.Acrow_indices)
+            # assert torch.equal(Atch.col_indices(), qcp.data.Acol_indices)
+            # qcp.data._A = Atch
             qcp.data._AT = qcp.data._A_transpose(qcp.data._A.values())
         
         qcp.data.q += dq
@@ -299,8 +287,8 @@ if __name__ == '__main__':
     scs_cones, clarabel_cones = qcp_data[5], qcp_data[6]
     del qcp_data
 
-    print("Acpu nnz: ", Acpu.nnz)
-    print("Acpu count nonzero: ", Acpu.count_nonzero())
+    # print("Acpu nnz: ", Acpu.nnz)
+    # print("Acpu count nonzero: ", Acpu.count_nonzero())
 
     # Move data to device for `diffqcp` to access
     P = to_sparse_csr_tensor(Pcpu, dtype=dtype, device=device)
@@ -308,9 +296,9 @@ if __name__ == '__main__':
     q = to_tensor(qcpu, dtype=dtype, device=device)
     b = to_tensor(bcpu,dtype=dtype, device=device)
 
-    data0 = ProblemData([], P, A, q, b, dtype=torch.float64, device=device, P_is_upper=False)
-    print("outside loop  A nnz original", data0.A_original_nnz)
-    print("outside loop  A nnz filtered", data0.A_filtered_nnz)
+    # data0 = ProblemData([], P, A, q, b, dtype=torch.float64, device=device, P_is_upper=False)
+    # print("outside loop  A nnz original", data0.A_original_nnz)
+    # print("outside loop  A nnz filtered", data0.A_filtered_nnz)
 
     n = P.shape[0]
     m = A.shape[0]
@@ -349,7 +337,7 @@ if __name__ == '__main__':
 
         Ajl = jl.Clarabel.cupy_to_cucsrmat(jl.Float64, data_ptr, indices_ptr, indptr_ptr, m, n, Annz)
     
-    print("outside loop Ajl nnz: ", Ajl.nnz)
+    # print("outside loop Ajl nnz: ", Ajl.nnz) # DEBUG
     
     qcupy = cp.asarray(q)
     # the following also passes
@@ -395,7 +383,7 @@ if __name__ == '__main__':
     print('finished building initial learning problem.')
 
     print("extracting data from problem")
-    qcp_data = data_from_cvxpy_problem_quad(target_problem)
+    qcp_data = data_from_cvxpy_problem_quad(initial_problem)
     print("finished extracting data from problem")
 
     Pcpu, Acpu = qcp_data[0], qcp_data[2] # NOTE we take full `P` (not upper triangular)

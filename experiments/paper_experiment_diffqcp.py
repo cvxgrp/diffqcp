@@ -89,7 +89,7 @@ def cupy_csr_to_torch_csr(X: csr_matrix) -> csr_matrix:
     return Xtorch
 
 def torch_to_jl(P, A, q, b, Pnnz, Annz):
-    """returns Pjl, Ajl, qjl, bjl"""
+    """returns Pjl, Ajl, qjl, bjl and their respective `cupy` arrays, if they exist."""
 
     n = P.shape[0]
     m = A.shape[0]
@@ -174,6 +174,9 @@ def grad_desc(
         Pcupy, Acupy = data[4], data[5]
 
         print("Ajl shape: ", jl.size(Ajl))
+        print("Ajl nnz: ", Ajl.nnz)
+        print("qcp A original nnz", qcp.data.A_original_nnz)
+        print("qcp A filtered nnz", qcp.data.A_filtered_nnz)
 
         jl.Clarabel.update_P_b(solver_jl, Pjl)
         jl.Clarabel.update_A_b(solver_jl, Ajl)
@@ -218,9 +221,12 @@ def grad_desc(
             print("dA_cupy data length: ", dA_cupy.data.size)
             print("Acupy shape", Acupy.shape)
             print("Acupy data length: ", Acupy.data.size)
-            Acupy = csr_matrix((Acupy.data + dA_cupy.data, Acupy.indices, Acupy.indptr), shape=Acupy.shape)
+            # Acupy = csr_matrix((Acupy.data + dA_cupy.data, Acupy.indices, Acupy.indptr), shape=Acupy.shape)
+            Acupy.data += dA_cupy.data
             Atch = cupy_csr_to_torch_csr(Acupy)
             print("Atch crow_indices")
+            assert torch.equal(dA.crow_indices(), qcp.data.Acrow_indices)
+            assert torch.equal(dA.col_indices(), qcp.data.Acol_indices)
             assert torch.equal(Atch.crow_indices(), qcp.data.Acrow_indices)
             assert torch.equal(Atch.col_indices(), qcp.data.Acol_indices)
             qcp.data._A = Atch

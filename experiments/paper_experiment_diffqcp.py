@@ -11,7 +11,9 @@ import numpy as np
 import cupy as cp
 from cupyx.scipy.sparse import csr_matrix
 from torch.utils.dlpack import to_dlpack
+from torch.utils.dlpack import from_dlpack as torch_from_dlpack
 from cupy import from_dlpack
+# from cupy import to_dlpack as cupy_to_dlpack
 
 from diffqcp import QCP
 from diffqcp.utils import to_tensor, to_sparse_csr_tensor
@@ -66,8 +68,31 @@ def torch_csr_to_cupy_csr(X: torch.Tensor) -> csr_matrix:
     Xcupy = csr_matrix((val_cp, col_cp, crow_cp), shape=shape)
     return Xcupy
 
+def cupy_csr_to_torch_csr(X: csr_matrix) -> csr_matrix:
+    crow_indices = X.indptr
+    col_indices = X.indices
+    values = X.data
+
+    crow_tch = torch_from_dlpack(crow_indices.toDlpack())
+    col_tch = torch_from_dlpack(col_indices.toDlpack())
+    val_tch = torch_from_dlpack(values.toDlpack())
+
+    assert crow_tch.__cuda_array_interface__['data'][0] == crow_indices.__cuda_array_interface__['data'][0]
+    assert col_tch.__cuda_array_interface__['data'][0] == col_indices.__cuda_array_interface__['data'][0]
+    assert val_tch.__cuda_array_interface__['data'][0] == values.__cuda_array_interface__['data'][0]
+
+    # Build CuPy CSR matrix
+    shape = X.shape
+    Xtorch = torch.sparse_csr_tensor(
+        crow_indices=crow_tch, col_indices=col_tch, values=val_tch, size=shape
+    )
+    return Xtorch
+
 def torch_to_jl(P, A, q, b, Pnnz, Annz):
     """returns Pjl, Ajl, qjl, bjl"""
+
+    n = P.shape[0]
+    m = A.shape[0]
 
     if Pnnz == 0:
         Pjl = jl.CuSparseMatrixCSR(jl.spzeros(n, n))
@@ -84,9 +109,9 @@ def torch_to_jl(P, A, q, b, Pnnz, Annz):
         Ajl = jl.CuSparseMatrixCSR(jl.spzeros(m, n))
     else:
         Acupy = torch_csr_to_cupy_csr(A)
-        # assert Acupy.indptr.__cuda_array_interface__['data'][0] == A.crow_indices().__cuda_array_interface__['data'][0]
-        # assert Acupy.indices.__cuda_array_interface__['data'][0] == A.col_indices().__cuda_array_interface__['data'][0]
-        # assert Acupy.data.__cuda_array_interface__['data'][0] == A.values().__cuda_array_interface__['data'][0]
+        assert Acupy.indptr.__cuda_array_interface__['data'][0] == A.crow_indices().__cuda_array_interface__['data'][0]
+        assert Acupy.indices.__cuda_array_interface__['data'][0] == A.col_indices().__cuda_array_interface__['data'][0]
+        assert Acupy.data.__cuda_array_interface__['data'][0] == A.values().__cuda_array_interface__['data'][0]
 
         data_ptr    = int(Acupy.data.data.ptr)
         indices_ptr = int(Acupy.indices.data.ptr)
@@ -95,19 +120,16 @@ def torch_to_jl(P, A, q, b, Pnnz, Annz):
         Ajl = jl.Clarabel.cupy_to_cucsrmat(jl.Float64, data_ptr, indices_ptr, indptr_ptr, m, n, Annz)
     
     qcupy = cp.asarray(q)
-    # the following also passes
-    # assert qcupy.__cuda_array_interface__['data'][0] == q.__cuda_array_interface__['data'][0]
     qjl = jl.Clarabel.cupy_to_cuvector(jl.Float64, int(qcupy.data.ptr), qcupy.size)
     bcupy = cp.asarray(b)
-    # assert bcupy.__cuda_array_interface__['data'][0] == b.__cuda_array_interface__['data'][0]
     bjl = jl.Clarabel.cupy_to_cuvector(jl.Float64, int(bcupy.data.ptr), bcupy.size)
     # also return cupy arrays so they aren't GCed, which might break being able to point
     if Pnnz == 0 and Annz == 0:
-        return Pjl, Ajl, qjl, bjl, qcupy, bcupy
+        return Pjl, Ajl, qjl, bjl, None, None, qcupy, bcupy
     elif Pnnz == 0:
-        return Pjl, Ajl, qjl, bjl, Acupy, qcupy, bcupy
+        return Pjl, Ajl, qjl, bjl, None, Acupy, qcupy, bcupy
     elif Annz == 0:
-        return Pjl, Ajl, qjl, bjl, Pcupy, qcupy, bcupy
+        return Pjl, Ajl, qjl, bjl, Pcupy, None, qcupy, bcupy
     else:
         return Pjl, Ajl, qjl, bjl, Pcupy, Acupy, qcupy, bcupy
 
@@ -134,14 +156,24 @@ def grad_desc(
             return (0.5 * torch.linalg.norm(x - target_x)**2 + 0.5 * torch.linalg.norm(y - target_y)**2
                     + 0.5 * torch.linalg.norm(s - target_s)**2)
     
-    data = torch_to_jl(qcp.P, qcp.A, qcp.q, qcp.b, qcp.data.P_filtered_nnz, qcp.data.A_filtered_nnz)
-    Pjl, Ajl, qjl, bjl = data[0], data[1], data[2], data[3]
-    # the cupy arrays should be in scope / not GCed since they are in the data tuple?
+    # data = torch_to_jl(qcp.P, qcp.A, qcp.q, qcp.b, qcp.data.P_filtered_nnz, qcp.data.A_filtered_nnz)
+    # Pjl, Ajl, qjl, bjl = data[0], data[1], data[2], data[3]
+    # Pcupy, Acupy = data[4], data[5]
     
     torch.cuda.synchronize()
     start_time = time.perf_counter()
     
     while curr_iter < num_iter:
+
+        data = torch_to_jl(qcp.P, qcp.A, qcp.q, qcp.b, qcp.data.P_filtered_nnz, qcp.data.A_filtered_nnz)
+        
+        assert torch.equal(qcp.A.crow_indices(), qcp.data.Acrow_indices)
+        assert torch.equal(qcp.A.col_indices(), qcp.data.Acol_indices)
+        
+        Pjl, Ajl, qjl, bjl = data[0], data[1], data[2], data[3]
+        Pcupy, Acupy = data[4], data[5]
+
+        print("Ajl shape: ", jl.size(Ajl))
 
         jl.Clarabel.update_P_b(solver_jl, Pjl)
         jl.Clarabel.update_A_b(solver_jl, Ajl)
@@ -174,14 +206,37 @@ def grad_desc(
         dq = -step_size * d_theta[2]
         db = -step_size * d_theta[3]
 
-        ddata = torch_to_jl(dP, dA, dq, db, qcp.data.P_filtered_nnz, qcp.data.A_filtered_nnz)
-        dPjl, dAjl, dqjl, dbjl = ddata[0], ddata[1], ddata[2], ddata[3]
+        if qcp.data.P_filtered_nnz != 0:
+            dP_cupy = torch_csr_to_cupy_csr(dP)
+            Pcupy = csr_matrix((Pcupy.data + dP_cupy.data, Pcupy.indices, Pcupy.indptr), shape=Pcupy.shape)
+            Ptch = cupy_csr_to_torch_csr(Pcupy)
+            qcp.data._P = Ptch
+        
+        if qcp.data.A_filtered_nnz != 0:
+            dA_cupy = torch_csr_to_cupy_csr(dA)
+            print("dA_cupy shape", dA_cupy.shape)
+            print("dA_cupy data length: ", dA_cupy.data.size)
+            print("Acupy shape", Acupy.shape)
+            print("Acupy data length: ", Acupy.data.size)
+            Acupy = csr_matrix((Acupy.data + dA_cupy.data, Acupy.indices, Acupy.indptr), shape=Acupy.shape)
+            Atch = cupy_csr_to_torch_csr(Acupy)
+            print("Atch crow_indices")
+            assert torch.equal(Atch.crow_indices(), qcp.data.Acrow_indices)
+            assert torch.equal(Atch.col_indices(), qcp.data.Acol_indices)
+            qcp.data._A = Atch
+            qcp.data._AT = qcp.data._A_transpose(qcp.data._A.values())
+        
+        qcp.data.q += dq
+        qcp.data.b += db        
+
+        # ddata = torch_to_jl(dP, dA, dq, db, qcp.data.P_filtered_nnz, qcp.data.A_filtered_nnz)
+        # dPjl, dAjl, dqjl, dbjl = ddata[0], ddata[1], ddata[2], ddata[3]
         # d (cupy arrays) still in scope since returned
 
-        Pjl = Pjl + dPjl
-        Ajl = Ajl + dAjl
-        qjl = qjl + dqjl
-        bjl = bjl + dbjl
+        # Pjl = Pjl + dPjl
+        # qjl = qjl + dqjl
+        # bjl = bjl + dbjl
+        # Ajl = Ajl + dAjl
 
         # print("dA type: ", type(dA))
         # print("dA shape: ", dA.shape)
@@ -216,7 +271,7 @@ if __name__ == '__main__':
     #       as number of features.
 
     # m = n = 1000
-    m = n = 25
+    m = n = 10
     dtype = torch.float64
     device = torch.device('cuda')
 

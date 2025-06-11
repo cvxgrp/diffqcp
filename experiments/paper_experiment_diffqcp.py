@@ -19,7 +19,7 @@ from diffqcp import QCP
 from diffqcp.utils import to_tensor, to_sparse_csr_tensor
 from diffqcp.problem_data import ProblemData
 from tests.utils import data_from_cvxpy_problem_quad
-from experiments.cvx_problem_generator import generate_group_lasso
+from experiments.cvx_problem_generator import generate_group_lasso, generate_least_squares_eq, generate_LS_problem
 from experiments.utils import GradDescTestResult
 
 results_dir = os.path.join(os.path.dirname(__file__), "results")
@@ -207,20 +207,12 @@ def grad_desc(
 
         if qcp.data.P_filtered_nnz != 0:
             dP_cupy = torch_csr_to_cupy_csr(dP)
-            Pcupy = csr_matrix((Pcupy.data + dP_cupy.data, Pcupy.indices, Pcupy.indptr), shape=Pcupy.shape)
-            Ptch = cupy_csr_to_torch_csr(Pcupy)
-            qcp.data._P = Ptch
+            # Pcupy = csr_matrix((Pcupy.data + dP_cupy.data, Pcupy.indices, Pcupy.indptr), shape=Pcupy.shape)
+            Pcupy.data += dP_cupy.data # this should modify A in qcp
         
         if qcp.data.A_filtered_nnz != 0:
             dA_cupy = torch_csr_to_cupy_csr(dA)
-            # newA = csr_matrix((Acupy.data + dA_cupy.data, Acupy.indices, Acupy.indptr), shape=Acupy.shape)
             Acupy.data += dA_cupy.data # this should modify A in qcp, but not AT
-            # Atch = cupy_csr_to_torch_csr(newA)
-            # assert torch.equal(dA.crow_indices(), qcp.data.Acrow_indices)
-            # assert torch.equal(dA.col_indices(), qcp.data.Acol_indices)
-            # assert torch.equal(Atch.crow_indices(), qcp.data.Acrow_indices)
-            # assert torch.equal(Atch.col_indices(), qcp.data.Acol_indices)
-            # qcp.data._A = Atch
             qcp.data._AT = qcp.data._A_transpose(qcp.data._A.values())
         
         qcp.data.q += dq
@@ -261,20 +253,21 @@ def grad_desc(
 
 if __name__ == '__main__':
 
-    np.random.seed(0)
+    np.random.seed(13)
 
     # generate high-dimensional problem:
     #   - choose m = n since `generate_group_lasso` takes p = 10n
     #       as number of features.
 
-    # m = n = 1000
-    m = n = 10
+    m_cvx = n_cvx = 100
+    # m_cvx = n_cvx = 10
     dtype = torch.float64
     device = torch.device('cuda')
 
     print("starting to build problem")
 
-    target_problem = generate_group_lasso(n=n, m=m)
+    # target_problem = generate_group_lasso(n=n_cvx, m=m_cvx)
+    target_problem = generate_LS_problem(n=n_cvx, m=m_cvx, return_problem_only=True)
 
     print("built problem")
 
@@ -347,6 +340,21 @@ if __name__ == '__main__':
     assert bcupy.__cuda_array_interface__['data'][0] == b.__cuda_array_interface__['data'][0]
     bjl = jl.Clarabel.cupy_to_cuvector(jl.Float64, int(bcupy.data.ptr), bcupy.size)
 
+    print("P shape: ", Pcupy.shape)
+    print("P nnz: ", Pcupy.nnz)
+    print("P count nnz: ", Pcupy.count_nonzero())
+    print("P data", Pcupy.data)
+    print("P indices", Pcupy.indices)
+    print("P indtpr", Pcupy.indptr)
+    print("A shape: ", Acupy.shape)
+    print("A nnz: ", Acupy.nnz)
+    print("A count nnz: ", Acupy.count_nonzero())
+    print("A data", Acupy.data)
+    print("A indices", Acupy.indices)
+    print("A indtpr", Acupy.indptr)
+    print(qcupy)
+    print(bcupy)
+
     # === construct target problem ===
 
     # Assign Python variables to Julia variables
@@ -366,39 +374,57 @@ if __name__ == '__main__':
             "ep" => exp_cones
         )
         settings = Clarabel.Settings(direct_solve_method = :cudss)
+        settings.verbose = false
     ''')
     jl.solver = jl.Clarabel.Solver(Pjl, qjl, Ajl, bjl, jl.cones, jl.settings)
     jl.Clarabel.solve_b(jl.solver) # solve new problem w/o creating memory
 
-    xcupy = JuliaCuVector2CuPyArray(jl.solver.solution.x)
+    xcupy = JuliaCuVector2CuPyArray(jl.solver.solution.x) # these get updated during loop
     ycupy = JuliaCuVector2CuPyArray(jl.solver.solution.z)
     scupy = JuliaCuVector2CuPyArray(jl.solver.solution.s)
 
-    x_target = torch.as_tensor(xcupy, dtype=dtype, device=device)
-    y_target = torch.as_tensor(ycupy, dtype=dtype, device=device)
-    s_target = torch.as_tensor(scupy, dtype=dtype, device=device)
+    # create copies so we don't get 0 cost
+    xcupy_copy = cp.array(xcupy, copy=True)
+    ycupy_copy = cp.array(ycupy, copy=True)
+    scupy_copy = cp.array(scupy, copy=True)
+
+    x_target = torch.as_tensor(xcupy_copy, dtype=dtype, device=device)
+    y_target = torch.as_tensor(ycupy_copy, dtype=dtype, device=device)
+    s_target = torch.as_tensor(scupy_copy, dtype=dtype, device=device)
 
     print('starting to build initial learning problem.')
-    initial_problem = generate_group_lasso(n=n, m=m)
+    # initial_problem = generate_group_lasso(n=n_cvx, m=m_cvx)
+    initial_problem = generate_LS_problem(n=n_cvx, m=m_cvx, return_problem_only=True)
     print('finished building initial learning problem.')
 
     print("extracting data from problem")
-    qcp_data = data_from_cvxpy_problem_quad(initial_problem)
+    qcp_data_initial = data_from_cvxpy_problem_quad(initial_problem)
     print("finished extracting data from problem")
 
-    Pcpu, Acpu = qcp_data[0], qcp_data[2] # NOTE we take full `P` (not upper triangular)
-    qcpu, bcpu = qcp_data[3], qcp_data[4]
-    del qcp_data
+    Pcpu_initial, Acpu_initial = qcp_data_initial[0], qcp_data_initial[2] # NOTE we take full `P` (not upper triangular)
+    qcpu_initial, bcpu_initial = qcp_data_initial[3], qcp_data_initial[4]
+
+    np.testing.assert_array_equal(Pcpu_initial.indptr, Pcpu.indptr)
+    np.testing.assert_array_equal(Pcpu_initial.indices, Pcpu.indices)
+    np.testing.assert_array_equal(Acpu_initial.indptr, Acpu.indptr)
+    np.testing.assert_array_equal(Acpu_initial.indices, Acpu.indices)
+
+    assert not np.allclose(Acpu_initial.data, Acpu.data)
     
     # Move data to device for `diffqcp` to access
-    P = to_sparse_csr_tensor(Pcpu, dtype=dtype, device=device)
-    A = to_sparse_csr_tensor(Acpu, dtype=dtype, device=device)
-    q = to_tensor(qcpu, dtype=dtype, device=device)
-    b = to_tensor(bcpu,dtype=dtype, device=device)
+    P = to_sparse_csr_tensor(Pcpu_initial, dtype=dtype, device=device)
+    A = to_sparse_csr_tensor(Acpu_initial, dtype=dtype, device=device)
+    q = to_tensor(qcpu_initial, dtype=dtype, device=device)
+    b = to_tensor(bcpu_initial,dtype=dtype, device=device)
     
     qcp = QCP(P, A, q, b, cone_dict=scs_cones, P_is_upper=False, dtype=torch.float64, device=device, reduce_fp_flops=True)
     
-    result = grad_desc(qcp, x_target, y_target, s_target, jl.solver, num_iter=20)
+    print("=== begin learning loop ===")
+    
+    result = grad_desc(qcp, x_target, y_target, s_target, jl.solver, num_iter=200, step_size = 1e-4)
+    
+    print("The starting obj value was: ", result.obj_traj[0])
+    print("The final obj value was: ", result.obj_traj[-1])
     
     save_path = os.path.join(results_dir, "diffqcp_paper_experiment.png")
     result.plot_obj_traj(save_path)

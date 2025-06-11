@@ -32,7 +32,7 @@ def generate_portfolio_problem(n, return_all, return_problem_only):
     else:
         return x, y, s
     
-def generate_least_squares_eq(m, n, return_all, return_problem_only: bool = False):
+def generate_least_squares_eq(m, n, return_all: bool=False, return_problem_only: bool = False):
     """Generate a conic problem with unique solution."""
     assert m >= n
     x = cvx.Variable(n)
@@ -120,15 +120,30 @@ def sigmoid(z):
 
 
 
+# def generate_group_lasso(n: int, m: int) -> cvx.Problem:
+#     X = np.random.randn(m, 10 * n)
+#     true_beta = np.zeros(10 * n)
+#     true_beta[:10 * n // 100] = 1.0
+#     y = np.round(sigmoid(X @ true_beta + np.random.randn(m)*0.5)) 
+
+#     beta = cvx.Variable(10 * n)
+#     lambd = 0.1
+#     loss = -cvx.sum(cvx.multiply(y, X @ beta) - cvx.logistic(X @ beta))
+#     reg = lambd * cvx.sum( cvx.norm( beta.reshape((-1, 10), 'C'), axis=1 ) )
+
+#     prob = cvx.Problem(cvx.Minimize(loss + reg))
+
+#     return prob
+
 def generate_group_lasso(n: int, m: int) -> cvx.Problem:
     X = np.random.randn(m, 10 * n)
     true_beta = np.zeros(10 * n)
     true_beta[:10 * n // 100] = 1.0
-    y = np.round(sigmoid(X @ true_beta + np.random.randn(m)*0.5)) 
+    y = X @ true_beta + np.random.randn(m)*0.5
 
     beta = cvx.Variable(10 * n)
     lambd = 0.1
-    loss = -cvx.sum(cvx.multiply(y, X @ beta) - cvx.logistic(X @ beta))
+    loss = cvx.sum_squares(y - X @ beta)
     reg = lambd * cvx.sum( cvx.norm( beta.reshape((-1, 10), 'C'), axis=1 ) )
 
     prob = cvx.Problem(cvx.Minimize(loss + reg))

@@ -1,0 +1,60 @@
+diffcp Least Squares learning experiment:
+  Iterations: 300
+  Learning time: 1.3677890095859766
+  Improvement factor: 1.1021553080235935
+  Final loss: 121.43496713683103
+
+=== ===
+diffqcp Least Squares learning experiment:
+  Iterations: 300
+  Learning time: 46.5635856166482
+  Improvement factor: 1.132815919407544
+  Final loss: 56.796238476782364
+
+   Number of nondifferentiable points: 0
+=== ===
+diffcp Least Squares eq. learning experiment:
+  Iterations: 300
+  Learning time: 1.5821283794939518
+  Improvement factor: 1.217681942300237
+  Final loss: 81.99872863736275
+
+=== ===
+diffqcp Least Squares eq. learning experiment:
+  Iterations: 300
+  Learning time: 141.39135224372149
+  Improvement factor: 1.2173250848558443
+  Final loss: 82.02276647007399
+
+   Number of nondifferentiable points: 0
+=== ===
+diffcp Logistic group lasso. learning experiment:
+  Iterations: 300
+  Learning time: 18.337170949205756
+  Improvement factor: 1.6835776836751133
+  Final loss: 269.39131873569374
+
+=== ===
+diffqcp Logistic group lasso. learning experiment:
+  Iterations: 300
+  Learning time: 3496.5406558085233
+  Improvement factor: 1.6841816811247305
+  Final loss: 269.2947070272961
+
+   Number of nondifferentiable points: 8
+=== ===
+diffcp Portfolio learning experiment:
+  Iterations: 300
+  Learning time: 1.204307371750474
+  Improvement factor: 0.851732472691006
+  Final loss: 10068.507104920456
+
+=== ===
+diffqcp Portfolio learning experiment:
+  Iterations: 300
+  Learning time: 17.43428481183946
+  Improvement factor: 1.2204693943659595
+  Final loss: 1370.5786658544466
+
+   Number of nondifferentiable points: 300
+=== ===

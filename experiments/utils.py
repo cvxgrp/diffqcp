@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from typing import Optional, Callable, Union
+import time
 
 import numpy as np
 from scipy.sparse import spmatrix, sparray
@@ -31,9 +32,18 @@ class GradDescTestResult:
     num_iterations : int
     obj_traj : np.ndarray
     for_qcp: bool
+    learning_time: float
     lsqr_residuals: np.ndarray | None = None
+    improvement_factor: float = field(init=False)
+    num_non_differentiable_points: float = field(init=False)
 
-    def plot_obj_traj(self, savepath: str | None = None):
+    def __post_init__(self):
+        self.improvement_factor = self.obj_traj[0] / self.obj_traj[-1]
+        if self.lsqr_residuals is not None:
+            self.num_non_differentiable_points = np.sum(self.lsqr_residuals > 1)
+
+
+    def plot_obj_traj(self, savepath: str) -> None:
         
         if self.obj_traj is None:
             raise ValueError("obj_traj is None. Cannot plot.")
@@ -41,10 +51,9 @@ class GradDescTestResult:
         plt.figure(figsize=(8, 6))
         plt.plot(range(self.num_iterations), self.obj_traj, label="Objective Trajectory")
         # plt.plot(range(self.num_iterations), np.log(self.obj_traj), label="Objective Trajectory")
-        if self.lsqr_residuals is not None:
-            plt.plot(range(self.num_iterations), np.log(self.lsqr_residuals), label="LSQR residuals")
-            print("NUM lsqr_residuals: ", self.lsqr_residuals.shape[0])
-        plt.xlabel("k")
+        # if self.lsqr_residuals is not None:
+            # plt.plot(range(self.num_iterations), np.log(self.lsqr_residuals), label="LSQR residuals")
+        plt.xlabel("num. iterations")
         # plt.ylabel("$f_0(p^{k}) = 0.5 \\| z(p) - z^{\\star} \\|^2$")
         plt.ylabel("Objective function")
         plt.legend()
@@ -52,8 +61,31 @@ class GradDescTestResult:
             plt.title(label="diffqcp")
         else:
             plt.title(label="diffcp")
-        # plt.show()
         plt.savefig(savepath)
+
+    def save_result(self, savepath: str, experiment_name: str, verbose: bool=False) -> None:
+        log_content = []
+        log_content.append(
+            f"{"diffqcp" if self.for_qcp else "diffcp"} {experiment_name} learning experiment:\n"
+            f"  Iterations: {self.num_iterations}\n"
+            f"  Learning time: {self.learning_time}\n"
+            f"  Improvement factor: {self.improvement_factor}\n"
+            f"  Final loss: {self.obj_traj[-1]}\n"
+        )
+        if self.for_qcp:
+            log_content.append(
+                f"   Number of nondifferentiable points: {self.num_non_differentiable_points}"
+            )
+
+        if verbose:
+            print(log_content)
+            print("=== ===")
+        
+        with open(savepath, "a") as f:
+            f.write("\n".join(log_content))
+            f.write("\n")
+            f.write("=== ===\n")
+
 
 @dataclass
 class GradDescTestHelper:
@@ -109,8 +141,8 @@ class GradDescTestHelper:
         self.quad_clarabel_cones = clarabel_quad_cones
         self.clarabel_solver_settings = clarabel.DefaultSettings()
         self.clarabel_solver_settings.verbose = False
-        self.upper_P_qcp = QCP(P_upper, A, q, b, x, y, s, scs_quad_cones, P_is_upper=True, dtype=torch.float64)
-        self.full_P_qcp = QCP(Pfull, A, q, b, x, y, s, scs_quad_cones, P_is_upper=False, dtype=torch.float64)
+        self.upper_P_qcp = QCP(P=P_upper, A=A, q=q, b=b, x=x, y=y, s=s, cone_dict=scs_quad_cones, P_is_upper=True, dtype=torch.float64)
+        self.full_P_qcp = QCP(P=Pfull, A=A, q=q, b=b, x=x, y=y, s=s, cone_dict=scs_quad_cones, P_is_upper=True, dtype=torch.float64)
         cp_data = data_from_cvxpy_problem_linear(initial_problem)
         self.diffcp_cp = DiffcpData(A=cp_data[0], c=cp_data[1], b=cp_data[2], cone_dict=cp_data[3])
     
@@ -118,7 +150,7 @@ class GradDescTestHelper:
         self,
         num_iter: int = 150,
         step_size: float = 0.15,
-        improvement_factor: float = 1e-2,
+        improvement_factor: float = 1e-1, # 10x improvement
         fixed_tol: float = 1e-4,
         use_full_P: bool = True
     ) -> GradDescTestResult:
@@ -146,6 +178,8 @@ class GradDescTestHelper:
                     + 0.5 * torch.linalg.norm(s - self.target_s_qcp)**2)
         
         f0s[0] = f0(qcp.x, qcp.y, qcp.s)
+
+        start_time = time.perf_counter()
         
         while curr_iter < num_iter:
             P_upper = qcp.get_Pcsc_cpu_upper()
@@ -183,12 +217,15 @@ class GradDescTestHelper:
             qcp.perturb_data(dP, dA, dq, db)
             qcp.update_solution(xk, yk, sk)
 
+        end_time = time.perf_counter()
+        
         f0_traj = f0s[0:curr_iter]
         residuals = lsqr_residuals[0:curr_iter]
         del f0s
         del lsqr_residuals
         return GradDescTestResult(
-                passed=optimal, num_iterations=curr_iter, obj_traj=f0_traj.cpu().numpy(), lsqr_residuals=residuals.cpu().numpy(), for_qcp=True
+                passed=optimal, num_iterations=curr_iter, obj_traj=f0_traj.cpu().numpy(),
+                learning_time=(end_time - start_time), lsqr_residuals=residuals.cpu().numpy(), for_qcp=True
             )
 
 
@@ -196,7 +233,7 @@ class GradDescTestHelper:
         self,
         num_iter: int = 150,
         step_size: float = 0.15,
-        improvement_factor: float = 1e-2,
+        improvement_factor: float = 1e-1, #10x improvement
         fixed_tol: float = 1e-3
     ) -> GradDescTestResult:
         
@@ -212,6 +249,8 @@ class GradDescTestHelper:
             return (0.5 * np.linalg.norm(x - self.target_x_cp)**2 + 0.5 * np.linalg.norm(y - self.target_y_cp)**2
                     + 0.5 * np.linalg.norm(s - self.target_s_cp)**2)
 
+        start_time = time.perf_counter()
+        
         while curr_iter < num_iter:
             
             A = self.diffcp_cp.A
@@ -235,10 +274,12 @@ class GradDescTestHelper:
             self.diffcp_cp.c += -step_size * dc
             self.diffcp_cp.b += -step_size * db
 
+        end_time = time.perf_counter()
+        
         f0_traj = f0s[0:curr_iter]
         del f0s
         return GradDescTestResult(
-                passed=optimal, num_iterations=curr_iter, obj_traj=f0_traj, for_qcp=False
+                passed=optimal, num_iterations=curr_iter, obj_traj=f0_traj, for_qcp=False, learning_time=(end_time - start_time)
             )
 
         

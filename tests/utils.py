@@ -212,32 +212,35 @@ def data_and_soln_from_cvxpy_problem_quad(problem: cp.Problem
         Float[np.ndarray, 'n'], Float[np.ndarray, 'm'], Float[np.ndarray, 'm'], dict[str, int | list[int]], list
     ]:
     clarabel_probdata, _, _ = problem.get_problem_data(cp.CLARABEL)
-    scs_probdata, _, _ = problem.get_problem_data(cp.SCS)
-    q = scs_probdata['c']
-    qcl = clarabel_probdata['c']
-    np.testing.assert_allclose(q, qcl)
+    # scs_probdata, _, _ = problem.get_problem_data(cp.SCS)
+    # q = scs_probdata['c']
+    # qcl = clarabel_probdata['c']
+    # np.testing.assert_allclose(q, qcl)
 
-    try:
-        Pscs = scs_probdata['P']
-        Pclarabel = clarabel_probdata['P']
-        np.testing.assert_allclose(Pscs.todense(), Pclarabel.todense())
-        Pfull = Pscs
-    except:
-        P = np.zeros((q.size, q.size))
-        Pfull = sparse.csc_matrix(P, shape=P.shape)
+    # try:
+    #     Pscs = scs_probdata['P']
+    #     Pclarabel = clarabel_probdata['P']
+    #     np.testing.assert_allclose(Pscs.todense(), Pclarabel.todense())
+    #     Pfull = Pscs
+    # except:
+    #     P = np.zeros((q.size, q.size))
+    #     Pfull = sparse.csc_matrix(P, shape=P.shape)
 
-    P_upper = sparse.triu(Pfull).tocsc()
+    # P_upper = sparse.triu(Pfull).tocsc()
     
-    A, b = scs_probdata['A'], scs_probdata['b']
-    Acl, bcl = clarabel_probdata['A'], clarabel_probdata['b']
-    np.testing.assert_allclose(A.todense(), Acl.todense())
-    np.testing.assert_allclose(b, bcl)
+    # A, b = scs_probdata['A'], scs_probdata['b']
+    # Acl, bcl = clarabel_probdata['A'], clarabel_probdata['b']
+    # np.testing.assert_allclose(A.todense(), Acl.todense())
+    # np.testing.assert_allclose(b, bcl)
 
-    # NOTE (quill): remember in next version this won't be necessary since we won't be relying
-    #   on SCS cone dict anymore...most likely.
+    Pfull = clarabel_probdata['P']
+    P_upper = sparse.triu(Pfull).tocsc()
+    A = clarabel_probdata['A']
+    q = clarabel_probdata['c']
+    b = clarabel_probdata['b']
 
     clarabel_cones = cp.reductions.solvers.conic_solvers.clarabel_conif.dims_to_solver_cones(clarabel_probdata["dims"])
-    scs_cone_dict = cp.reductions.solvers.conic_solvers.scs_conif.dims_to_solver_dict(scs_probdata["dims"])
+    scs_cone_dict = cp.reductions.solvers.conic_solvers.scs_conif.dims_to_solver_dict(clarabel_probdata["dims"])
 
     solver_settings = clarabel.DefaultSettings()
     solver_settings.verbose = False
@@ -299,10 +302,10 @@ def data_from_cvxpy_problem_linear(problem: cp.Problem
     Note that A is returned as a `csc_matrix`, since it is only used by `diffcp`, which accepts
     `csc` not `csr`.
     """
-    scs_probdata, _, _ = problem.get_problem_data(cp.SCS, solver_opts={'use_quad_obj': False})
-    A, c, b = scs_probdata['A'], scs_probdata['c'], scs_probdata['b']
+    probdata, _, _ = problem.get_problem_data(cp.CLARABEL, solver_opts={'use_quad_obj': False})
+    A, c, b = probdata['A'], probdata['c'], probdata['b']
     A = A.tocsc()
-    scs_cone_dict = cp.reductions.solvers.conic_solvers.scs_conif.dims_to_solver_dict(scs_probdata["dims"])
+    scs_cone_dict = cp.reductions.solvers.conic_solvers.scs_conif.dims_to_solver_dict(probdata["dims"])
 
     return A, c, b, scs_cone_dict
 

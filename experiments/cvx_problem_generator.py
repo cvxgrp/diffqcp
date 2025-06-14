@@ -1,6 +1,7 @@
 import numpy as np
 import cvxpy as cvx
 import scipy.sparse as sparse
+import scipy.linalg as la
 
 from tests.utils import generate_problem_data_new
 
@@ -10,14 +11,19 @@ def randn_symm(n, random_array):
 
 
 def generate_portfolio_problem(n):
-    mu = np.random.randn(n)
+    mu = cvx.Parameter(n)
+    mu.value = np.random.randn(n)
     Sigma = np.random.randn(n, n)
-    Sigma = Sigma.T.dot(Sigma)
-    w = cvx.Variable(n)
+    Sigma = Sigma.T @ Sigma
+    Sigma_sqrt = cvx.Parameter((n, n))
+    w = cvx.Variable((n, 1))
     gamma = cvx.Parameter(nonneg=True)
-    gamma.value = 3.43046929e+01
+    # gamma.value = 3.43046929e+01
+    gamma = 3.43046929e+01
     ret = mu.T @ w
-    risk = cvx.quad_form(w, Sigma)
+    # risk = cvx.quad_form(w, Sigma)
+    risk = cvx.sum_squares(Sigma_sqrt @ w)
+    Sigma_sqrt.value = la.sqrtm(Sigma)
     problem = cvx.Problem(cvx.Maximize(ret - gamma * risk), [cvx.sum(w) == 1, w >= 0])
 
     return problem
@@ -52,21 +58,32 @@ def generate_LS_problem(m, n):
 def generate_sdp(n, p):
     data = generate_problem_data_new(n=n, m=n, sparse_random_array=sparse.random_array,
                                      random_array=np.random.randn, P_psd=True)
-    C = data[0].todense()
+    C = cvx.Parameter((n, n))
+    C.value = data[0].todense()
     
-    # data = generate_problem_data_new(n=n, m=n, sparse_random_array=sparse.random_array,
-    #                                  random_array=np.random.randn, P_psd=True)
-    # D = data[0].todense()
+    data = generate_problem_data_new(n=n, m=n, sparse_random_array=sparse.random_array,
+                                     random_array=np.random.randn, P_psd=True)
+    D = data[0].todense()
+    Dsqrt = cvx.Parameter((n, n))
+    Dsqrt.value = la.sqrtm(D)
 
-    As = [randn_symm(n, np.random.randn) for _ in range(p)]
-    Bs = np.random.randn(p)
+    As = []
+    for _ in range(p):
+        Ai = cvx.Parameter((n, n))
+        Ai.value = randn_symm(n, np.random.randn)
+        As.append(Ai)
+    
+    # As = [randn_symm(n, np.random.randn) for _ in range(p)]
+    Bs = cvx.Parameter(p)
+    Bs.value = np.random.randn(p)
 
     X = cvx.Variable((n, n), PSD=True)
-    y = cvx.Variable(n)
-    # objective = cvx.trace(C @ X) + cvx.quad_form(y, D, assume_PSD=True)
-    objective = cvx.trace(C @ X)
+    y = cvx.Variable((n, 1))
+    objective = cvx.trace(C @ X) + cvx.sum_squares(Dsqrt @ y)
+    # objective = cvx.trace(C @ X)
     constraints = [cvx.trace(As[i] @ X) == Bs[i] for i in range(p)]
     prob = cvx.Problem(cvx.Minimize(objective), constraints)
+    assert prob.is_dpp()
     return prob
     
 def sigmoid(z):

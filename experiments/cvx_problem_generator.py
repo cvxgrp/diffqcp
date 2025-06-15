@@ -10,7 +10,7 @@ def randn_symm(n, random_array):
     return (A + A.T) / 2
 
 
-def generate_portfolio_problem(n):
+def generate_portfolio_problem(n) -> cvx.Problem:
     mu = cvx.Parameter(n)
     mu.value = np.random.randn(n)
     Sigma = np.random.randn(n, n)
@@ -29,7 +29,7 @@ def generate_portfolio_problem(n):
     return problem
     
 
-def generate_least_squares_eq(m, n):
+def generate_least_squares_eq(m, n) -> cvx.Problem:
     """Generate a conic problem with unique solution.
     Taken from diffcp.
     """
@@ -44,7 +44,7 @@ def generate_least_squares_eq(m, n):
     return problem
     
 
-def generate_LS_problem(m, n):
+def generate_LS_problem(m, n) -> cvx.Problem:
     A = np.random.randn(m, n)
     b = np.random.randn(m)
 
@@ -55,7 +55,7 @@ def generate_LS_problem(m, n):
     return problem
 
     
-def generate_sdp(n, p):
+def generate_sdp(n, p) -> cvx.Problem:
     data = generate_problem_data_new(n=n, m=n, sparse_random_array=sparse.random_array,
                                      random_array=np.random.randn, P_psd=True)
     C = cvx.Parameter((n, n))
@@ -105,16 +105,134 @@ def generate_group_lasso_logistic(n: int, m: int) -> cvx.Problem:
     return prob
 
 def generate_group_lasso(n: int, m: int) -> cvx.Problem:
-    X = np.random.randn(m, 10 * n)
+    X = cvx.Parameter((m, 10*n))
+    X.value = np.random.randn(m, 10 * n)
     true_beta = np.zeros(10 * n)
     true_beta[:10 * n // 100] = 1.0
     y = X @ true_beta + np.random.randn(m)*0.5
 
     beta = cvx.Variable(10 * n)
-    lambd = 0.1
+    lambd = cvx.Parameter()
+    lambd.value = 0.1
     loss = cvx.sum_squares(y - X @ beta)
     reg = lambd * cvx.sum( cvx.norm( beta.reshape((-1, 10), 'C'), axis=1 ) )
 
     prob = cvx.Problem(cvx.Minimize(loss + reg))
 
+    assert prob.is_dpp()
+
     return prob
+
+def generate_robust_mvdr_beamformer(n: int) -> cvx.Problem:
+    """`n` is the number of sensors."""
+
+    w = cvx.Variable((n, 1), complex=True)
+
+    Sigma = np.random.randn(n, n) + 1j * np.random.randn(n, n)
+    Sigma = Sigma @ Sigma.conj().T + 0.1 * np.eye(n) # Make Hermitian PSD
+    Sigma_sqrt = cvx.Parameter((n, n), complex=True)
+    Sigma_sqrt.value = la.sqrtm(Sigma)
+
+    a_hat = 5 * np.random.randn(n) + 1j * np.random.randn(n) # Fake array manifold/response
+    P = cvx.Parameter((n, n), complex=True) # uncertainty matrix
+    P.value = np.random.randn(n, n) + 1j * np.random.randn(n, n)
+
+    # f0 = cvx.real(cvx.sum_squares(Sigma_sqrt @ w))
+    f0 = cvx.sum_squares(Sigma_sqrt @ w)
+    obj = cvx.Minimize(f0)
+
+    gamma = 1.0   # desired signal constraint
+    delta = 0.5   # uncertainty size
+
+    constraints = [
+        cvx.real(a_hat.conj().T @ w) >= gamma,
+        cvx.norm(P.conj().T @ w, 2) <= delta
+    ]
+
+    prob = cvx.Problem(obj, constraints)
+    assert prob.is_dpp()
+    return prob
+
+
+def generate_kalman_smoother(
+    random_inputs, random_noise, T: int=5, n: int=100
+) -> cvx.Problem:
+    """
+    `n` is number of time steps.
+    `T` is time horizon.
+
+    Largely taken from: https://www.cvxpy.org/examples/applications/robust_kalman.html.
+    """
+    _, delt = np.linspace(0,T,n,endpoint=True, retstep=True)
+    gamma = .05 # damping, 0 is no damping
+
+    A = np.zeros((4,4))
+    B = np.zeros((4,2))
+    C = np.zeros((2,4))
+
+    A[0,0] = 1
+    A[1,1] = 1
+    A[0,2] = (1-gamma*delt/2)*delt
+    A[1,3] = (1-gamma*delt/2)*delt
+    A[2,2] = 1 - gamma*delt
+    A[3,3] = 1 - gamma*delt
+
+    B[0,0] = delt**2/2
+    B[1,1] = delt**2/2
+    B[2,0] = delt
+    B[3,1] = delt
+
+    C[0,0] = 1
+    C[1,1] = 1
+
+    x = np.zeros((4,n+1))
+    x[:,0] = [0,0,0,0]
+    y = np.zeros((2,n))
+
+    # generate random input and noise vectors
+    w = random_inputs
+    v = random_noise
+
+    # simulate the system forward in time
+    for t in range(n):
+        y[:,t] = C @ x[:,t] + v[:,t]
+        x[:,t+1] = A @ x[:,t] + B @ w[:,t]
+
+    x = cvx.Variable(shape=(4, n+1))
+    w = cvx.Variable(shape=(2, n))
+    v = cvx.Variable(shape=(2, n))
+
+    tau = cvx.Parameter(pos=True)
+    tau.value = np.random.uniform(0.1, 5)
+
+    obj = cvx.sum_squares(w) + tau*cvx.sum_squares(v)
+    obj = cvx.Minimize(obj)
+
+    constr = []
+    for t in range(n):
+        constr += [ x[:,t+1] == A@x[:,t] + B@w[:,t] ,
+                    y[:,t]   == C@x[:,t] + v[:,t]  ]
+
+    prob = cvx.Problem(obj, constr)
+    assert prob.is_dpp()
+    return prob
+
+
+# if __name__ == '__main__':
+    # beamform = generate_robust_mvdr_beamformer(12)
+    # data, _, _ = beamform.get_problem_data(cvx.CLARABEL)
+    # print(data)
+    # print(data["P"].nnz)
+    # print(data["P"].count_nonzero())
+    # result = beamform.solve(cvx.CLARABEL)
+    # print(result)
+
+    # w = np.random.randn(2,100)
+    # v = np.random.randn(2,100)
+    # prob = generate_kalman_smoother(w, v)
+    # data, _, _ = prob.get_problem_data(cvx.CLARABEL)
+    # print(data)
+    # print(data["P"].nnz)
+    # print(data["P"].count_nonzero())
+    # result = prob.solve(cvx.CLARABEL)
+    # print(result)

@@ -1,9 +1,11 @@
 from dataclasses import dataclass, field
 from typing import Optional, Callable, Union
 import time
+import os
+import json
 
 import numpy as np
-from scipy.sparse import spmatrix, sparray
+from scipy.sparse import spmatrix, sparray, save_npz
 import torch
 from torch import Tensor
 import cvxpy as cvx
@@ -15,6 +17,14 @@ from jaxtyping import Float
 from diffqcp import QCP
 from diffqcp.utils import to_tensor
 from tests.utils import data_and_soln_from_cvxpy_problem_quad, data_from_cvxpy_problem_linear
+
+def _convert(obj):
+    """Helper function for saving cone dictionaries"""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
 
 @dataclass
 class DiffcpData:
@@ -35,16 +45,12 @@ class GradDescTestResult:
     learning_time: float
     lsqr_residuals: np.ndarray | None = None
     improvement_factor: float = field(init=False)
-    num_non_differentiable_points: float = field(init=False)
 
     def __post_init__(self):
         self.improvement_factor = self.obj_traj[0] / self.obj_traj[-1]
-        if self.lsqr_residuals is not None:
-            self.num_non_differentiable_points = np.sum(self.lsqr_residuals > 1)
-
 
     def plot_obj_traj(self, savepath: str) -> None:
-        
+
         if self.obj_traj is None:
             raise ValueError("obj_traj is None. Cannot plot.")
 
@@ -62,8 +68,11 @@ class GradDescTestResult:
         else:
             plt.title(label="diffcp")
         plt.savefig(savepath)
+        plt.close()
 
-    def save_result(self, savepath: str, experiment_name: str, verbose: bool=False) -> None:
+    def save_result(self, savepath: str, experiment_name: str, experiment_count: int=0, verbose: bool=False) -> None:
+        log_path = os.path.join(savepath, f"logs/experiment_{experiment_count}_log.txt")
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
         log_content = []
         log_content.append(
             f"{"diffqcp" if self.for_qcp else "diffcp"} {experiment_name} learning experiment:\n"
@@ -72,19 +81,20 @@ class GradDescTestResult:
             f"  Improvement factor: {self.improvement_factor}\n"
             f"  Final loss: {self.obj_traj[-1]}\n"
         )
-        if self.for_qcp:
-            log_content.append(
-                f"   Number of nondifferentiable points: {self.num_non_differentiable_points}"
-            )
 
         if verbose:
             print(log_content)
             print("=== ===")
         
-        with open(savepath, "a") as f:
+        with open(log_path, "a") as f:
             f.write("\n".join(log_content))
             f.write("\n")
             f.write("=== ===\n")
+
+        if self.lsqr_residuals is not None:
+            lsqr_dir = os.path.join(savepath, f"data/run_{experiment_count}/qcp")
+            os.makedirs(lsqr_dir, exist_ok=True)
+            np.save(os.path.join(lsqr_dir, "lsqr_residuals.npy"), self.lsqr_residuals)
 
 
 @dataclass
@@ -94,8 +104,8 @@ class GradDescTestHelper:
     # passing criteria? (multiple?)
     verbose: bool = False
     dtype: torch.dtype = torch.float64
+    save_dir: Optional[str] = None
     
-
     # post init attributes
     linear_cone_dict: dict[str, int | list[int]] = field(init=False)
     quad_cone_dict: dict[str, int | list[int]] = field(init=False)
@@ -109,12 +119,14 @@ class GradDescTestHelper:
     target_x_cp: Float[np.ndarray, "n_cp"] = field(init=False)
     target_y_cp: Float[np.ndarray, "m_cp"] = field(init=False)
     target_s_cp: Float[np.ndarray, "m_cp"] = field(init=False)
+    reset_counter: int = field(default=0, init=False)
 
     def __post_init__(self):
 
         self._reset_problems()
     
     def _reset_problems(self):
+        self.reset_counter += 1
         target_problem = self.problem_generator()
         initial_problem = self.problem_generator()
         self.P_full_qcp_has_descended: bool = False
@@ -131,19 +143,52 @@ class GradDescTestHelper:
         self.target_x_cp = target_x_cp
         self.target_y_cp = target_y_cp
         self.target_s_cp = target_s_cp
+
+                # Save targets if save_dir is provided
+        if self.save_dir is not None:
+            os.makedirs(f"{self.save_dir}/data/run_{self.reset_counter}/qcp", exist_ok=True)
+            os.makedirs(f"{self.save_dir}/data/run_{self.reset_counter}/cp", exist_ok=True)
+            np.save(os.path.join(self.save_dir, f"data/run_{self.reset_counter}/qcp/x_target.npy"), self.target_x_qcp.cpu().numpy())
+            np.save(os.path.join(self.save_dir, f"data/run_{self.reset_counter}/qcp/y_target.npy"), self.target_y_qcp.cpu().numpy())
+            np.save(os.path.join(self.save_dir, f"data/run_{self.reset_counter}/qcp/s_target.npy"), self.target_s_qcp.cpu().numpy())
+            np.save(os.path.join(self.save_dir, f"data/run_{self.reset_counter}/cp/x_target.npy"), self.target_x_cp)
+            np.save(os.path.join(self.save_dir, f"data/run_{self.reset_counter}/cp/y_target.npy"), self.target_y_cp)
+            np.save(os.path.join(self.save_dir, f"data/run_{self.reset_counter}/cp/s_target.npy"), self.target_s_cp)
         
         # Now grab starting data for the learning problem
         qcp_data_and_soln = data_and_soln_from_cvxpy_problem_quad(initial_problem)
         Pfull, P_upper, A = qcp_data_and_soln[0], qcp_data_and_soln[1], qcp_data_and_soln[2]
+        assert P_upper.nnz > 0
+        assert P_upper.count_nonzero() > 0
         q, b = qcp_data_and_soln[3], qcp_data_and_soln[4]
         x, y, s = qcp_data_and_soln[5], qcp_data_and_soln[6], qcp_data_and_soln[7]
         scs_quad_cones, clarabel_quad_cones = qcp_data_and_soln[8], qcp_data_and_soln[9]
+        if self.save_dir is not None:
+            # Save as .npy for arrays, .npz for sparse matrices
+            np.save(os.path.join(self.save_dir, f"data/run_{self.reset_counter}/qcp/q_initial.npy"), q)
+            np.save(os.path.join(self.save_dir, f"data/run_{self.reset_counter}/qcp/b_initial.npy"), b)
+            # Save sparse matrices as .npz as well
+            if isinstance(P_upper, spmatrix) or isinstance(P_upper, sparray):
+                save_npz(os.path.join(self.save_dir, f"data/run_{self.reset_counter}/qcp/P_upper_initial.npz"), P_upper)
+            if isinstance(A, spmatrix) or isinstance(A, sparray):
+                save_npz(os.path.join(self.save_dir, f"data/run_{self.reset_counter}/qcp/A_initial.npz"), A)
+            with open(os.path.join(self.save_dir, f"data/run_{self.reset_counter}/qcp/scs_cones.json"), "w") as f:
+                json.dump(scs_quad_cones, f, default=_convert)
         self.quad_clarabel_cones = clarabel_quad_cones
         self.clarabel_solver_settings = clarabel.DefaultSettings()
         self.clarabel_solver_settings.verbose = False
         self.upper_P_qcp = QCP(P=P_upper, A=A, q=q, b=b, x=x, y=y, s=s, cone_dict=scs_quad_cones, P_is_upper=True, dtype=torch.float64)
-        self.full_P_qcp = QCP(P=Pfull, A=A, q=q, b=b, x=x, y=y, s=s, cone_dict=scs_quad_cones, P_is_upper=True, dtype=torch.float64)
+        self.full_P_qcp = QCP(P=Pfull, A=A, q=q, b=b, x=x, y=y, s=s, cone_dict=scs_quad_cones, P_is_upper=False, dtype=torch.float64)
         cp_data = data_from_cvxpy_problem_linear(initial_problem)
+        if self.save_dir is not None:
+            # Save as .npy for arrays, .npz for sparse matrices
+            np.save(os.path.join(self.save_dir, f"data/run_{self.reset_counter}/cp/c_initial.npy"), cp_data[1])
+            np.save(os.path.join(self.save_dir, f"data/run_{self.reset_counter}/cp/b_initial.npy"), cp_data[2])
+            # Save sparse matrices as .npz as well
+            if isinstance(A, spmatrix) or isinstance(A, sparray):
+                save_npz(os.path.join(self.save_dir, f"data/run_{self.reset_counter}/cp/A_initial.npz"), cp_data[0])
+            with open(os.path.join(self.save_dir, f"data/run_{self.reset_counter}/cp/scs_cones.json"), "w") as f:
+                json.dump(cp_data[3], f, default=_convert)
         self.diffcp_cp = DiffcpData(A=cp_data[0], c=cp_data[1], b=cp_data[2], cone_dict=cp_data[3])
     
     def qcp_grad_desc(
@@ -177,7 +222,7 @@ class GradDescTestHelper:
             return (0.5 * torch.linalg.norm(x - self.target_x_qcp)**2 + 0.5 * torch.linalg.norm(y - self.target_y_qcp)**2
                     + 0.5 * torch.linalg.norm(s - self.target_s_qcp)**2)
         
-        f0s[0] = f0(qcp.x, qcp.y, qcp.s)
+        # f0s[0] = f0(qcp.x, qcp.y, qcp.s)
 
         start_time = time.perf_counter()
         
@@ -196,8 +241,8 @@ class GradDescTestHelper:
 
             f0k = f0(xk, yk, sk)
 
-            curr_iter += 1 # so curr_iter is number of forward passes
             f0s[curr_iter] = f0k
+            curr_iter += 1
 
             if curr_iter > 1 and ((f0k / f0s[0]) < improvement_factor or f0k < fixed_tol):
                 optimal = True

@@ -17,9 +17,7 @@ def generate_portfolio_problem(n) -> cvx.Problem:
     Sigma = Sigma.T @ Sigma
     Sigma_sqrt = cvx.Parameter((n, n))
     w = cvx.Variable((n, 1))
-    gamma = cvx.Parameter(nonneg=True)
-    # gamma.value = 3.43046929e+01
-    gamma = 3.43046929e+01
+    gamma = 3.43046929e+01 # fix the risk-aversion parameter.
     ret = mu.T @ w
     # risk = cvx.quad_form(w, Sigma)
     risk = cvx.sum_squares(Sigma_sqrt @ w)
@@ -112,7 +110,7 @@ def generate_group_lasso(n: int, m: int) -> cvx.Problem:
     y = X @ true_beta + np.random.randn(m)*0.5
 
     beta = cvx.Variable(10 * n)
-    lambd = cvx.Parameter()
+    lambd = cvx.Parameter(pos=True)
     lambd.value = 0.1
     loss = cvx.sum_squares(y - X @ beta)
     reg = lambd * cvx.sum( cvx.norm( beta.reshape((-1, 10), 'C'), axis=1 ) )

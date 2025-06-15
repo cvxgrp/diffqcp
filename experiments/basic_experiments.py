@@ -1,3 +1,6 @@
+"""
+TODO(quill): Need to change paths to match new experiment folder structure.
+"""
 import os
 from datetime import datetime
 from functools import partial
@@ -12,7 +15,7 @@ from experiments.cvx_problem_generator import (generate_LS_problem, generate_lea
 
 timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 results_dir = os.path.join(os.path.dirname(__file__), f"results/results_{timestamp}")
-os.makedirs(results_dir, exist_ok=True)  # <-- Add this line
+os.makedirs(results_dir, exist_ok=True)
 log_path = os.path.join(results_dir, f"experiment_log.txt")
 log_content = []
 

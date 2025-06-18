@@ -230,7 +230,6 @@ class QCP:
             d_data_N = torch.zeros(dz.shape[0], dtype=self.dtype, device=self.device)
         else:
             d_data_N = lsqr(self._F.T, -dz)
-            # TODO (quill): make this save optional?
             self.vjp_lsqr_residual = torch.linalg.norm(self._F.T @ d_data_N + dz)**2
 
         return dData_Q_adjoint_efficient(

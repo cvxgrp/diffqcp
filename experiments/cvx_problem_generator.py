@@ -33,12 +33,16 @@ def generate_least_squares_eq(m, n) -> cvx.Problem:
     """
     assert m >= n
     x = cvx.Variable(n)
-    b = np.random.randn(m)
-    A = np.random.randn(m, n)
-    assert np.linalg.matrix_rank(A) == n
-    objective = cvx.pnorm(A @ x - b, 1)
+    b = cvx.Parameter(m)
+    b.value = np.random.randn(m)
+    A = cvx.Parameter((m, n))
+    A.value = np.random.randn(m, n)
+    assert np.linalg.matrix_rank(A.value) == n
+    # objective = cvx.pnorm(A @ x - b, 2)
+    objective = cvx.sum_squares(A@x - b)
     constraints = [x >= 0, cvx.sum(x) == 1.0]
     problem = cvx.Problem(cvx.Minimize(objective), constraints)
+    assert problem.is_dpp()
     return problem
     
 

@@ -1,0 +1,14 @@
+[project]
+name = "diffqcp"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "equinox>=0.12.2",
+    "jax[cuda12]>=0.6.2",
+    "jaxtyping>=0.3.2",
+    "lineax>=0.0.8",
+    "numpy>=2.3.1",
+    "scipy>=1.15.3",
+]

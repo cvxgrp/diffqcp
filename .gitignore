@@ -1,0 +1,20 @@
+# mix of .gitignore from `equinox` and the original one (Numpy/SciPy and Torch branches) in `diffqcp`
+#   and default GitHub ignore.
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.env
+.venv
+*.lock
+
+# MyPy & pytest
+.mypy_cache/
+.pytest_cache/
+
+# IDE/editor files
+.vscode/
+*.swp
+.DS_Store

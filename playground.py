@@ -150,9 +150,11 @@ def soc_proj_dproj(x: PyTree[Array]):
     
     
 p = jnp.array([3.0, 3.0, 4.0])
+p2 = jnp.array([2.0, 6.0, 6.0])
+tree = (p, p2)
 dp = jnp.array([.001, .002, .001])
 # proj_x, dproj_x = soc_proj_dproj(p)
-proj_x = soc_proj_dproj(p)
+proj_x = soc_proj_dproj(tree)
 # print(dproj_x.mv(dp))
 
 # vec1_key, vec2_key, vec3_key = jr.split(jr.PRNGKey(0), 3)

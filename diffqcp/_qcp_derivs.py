@@ -5,13 +5,13 @@ from jaxtyping import Array, Float, Integer
 
 def _Du_Q(
     n: int,
-    x: Float[Array, "n"],
+    x: Float[Array, " n"],
     tau: Float[Array, ""],
     P: AbstractLinearOperator,
     A: Float[Array, "m n"],
     AT: Float[Array, "n m"],
-    q: Float[Array, "n"],
-    b: Float[Array, "m"],
+    q: Float[Array, " n"],
+    b: Float[Array, " m"],
 ) -> AbstractLinearOperator:
     # TODO(quill): determine how to handle `n`
     #   -- before I grabbed P.shape[0]. have to be careful with batch dimension

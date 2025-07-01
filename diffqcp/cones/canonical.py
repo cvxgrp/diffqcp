@@ -20,21 +20,21 @@ _POW = 'p'
 # The ordering of CONES matches SCS.
 CONES = [_ZERO, _NONNEGATIVE, _SOC, _PSD, _EXP, _EXP_DUAL, _POW]
 
-class Cone(eqx.Module):
+class ConeProjector(eqx.Module):
     is_dual: AbstractVar[bool]
 
     @abstractmethod
-    def proj_dproj(x: Float[Array, "d"]) -> tuple[Float[Array, "d"], AbstractLinearOperator]:
+    def proj_dproj(self, x: Float[Array, " d"]) -> tuple[Float[Array, " d"], AbstractLinearOperator]:
         pass
 
-class ZeroCone(Cone):
+class ZeroConeProjector(ConeProjector):
     is_dual: bool
 
-    def proj_dproj(x: Float[Array, "d"]) -> tuple[Float[Array, "d"], AbstractLinearOperator]:
+    def proj_dproj(self, x: Float[Array, " d"]) -> tuple[Float[Array, " d"], AbstractLinearOperator]:
         pass
 
-class NonnegativeCone(Cone):
+class NonnegativeConeProjector(ConeProjector):
     is_dual: bool
 
-    def proj_dproj(x: Float[Array]):
+    def proj_dproj(self, x: Float[Array]):
         pass

@@ -2,12 +2,9 @@ import numpy as np
 import scipy.sparse as sp
 import jax
 import jax.numpy as jnp
-import jax.numpy.linalg as la
 import jax.random as jr
 import jax.experimental.sparse as jsparse
-import lineax as lx
 import equinox as eqx
-from jaxtyping import Array, Float, PyTree
 
 def tree_allclose(x, y, *, rtol=1e-5, atol=1e-8):
     return eqx.tree_equal(x, y, typematch=True, rtol=rtol, atol=atol)
@@ -117,72 +114,3 @@ assert tree_allclose(Cv3, batched_csr_result[2])
 assert tree_allclose(Av1, batched_csr_result2[0])
 assert tree_allclose(Bv2, batched_csr_result2[1])
 assert tree_allclose(Cv3, batched_csr_result2[2])
-
-# === now test transposes ===
-
-# === test PyTree functionality ===
-
-@jax.jit
-def soc_proj_dproj(x: PyTree[Array]):
-    n = x.shape[0] # TODO(quill): what kind of filter needed to get list of these?
-    t, z = x[0], x[1:]
-    norm_z = la.norm(z)
-
-    proj_x = 0.5 * (1 + t / norm_z) * jnp.concatenate([jnp.array([norm_z]), z])
-    unit_z = z / norm_z
-    
-    def mv(dx: PyTree[Array]) -> PyTree[Array]:
-        dt, dz = dx[0], dx[1:n]
-        first_entry = jnp.array([dt*norm_z + z @ dz])
-        second_chunk = dt*z + (t + norm_z)*dz \
-                        - t * unit_z * (unit_z @ dz)
-        output = jnp.concatenate([first_entry, second_chunk])
-        return (1.0 / (2.0 * norm_z)) * output
-    
-    # NOTE(quill): let's just try third case for now and see if passses through JAX API boundary
-    # in_structure = jax.eval_shape(mv)
-    y = 1.0 * jnp.arange(0, n)
-    in_structure = jax.eval_shape(lambda: y)
-    dproj = lx.FunctionLinearOperator(mv, input_structure=in_structure, tags=[lx.symmetric_tag, lx.positive_semidefinite_tag])
-    # NOTE(quill) cannot return `dproj` and JIT compile
-    # TODO(quill): place this in SOC and see if you can jit compile a learnig loop, perhaps? (or maybe something simpler.)
-    return proj_x
-    
-    
-p = jnp.array([3.0, 3.0, 4.0])
-p2 = jnp.array([2.0, 6.0, 6.0])
-tree = (p, p2)
-dp = jnp.array([.001, .002, .001])
-# proj_x, dproj_x = soc_proj_dproj(p)
-proj_x = soc_proj_dproj(tree)
-# print(dproj_x.mv(dp))
-
-# vec1_key, vec2_key, vec3_key = jr.split(jr.PRNGKey(0), 3)
-
-
-# === TORCH VERSION ===
-# def _proj_dproj_soc(x: torch.Tensor) -> tuple[torch.Tensor, lo.LinearOperator]:
-#     """Self-adjoint."""
-#     n = x.shape[0]
-#     t, z = x[0], x[1:]
-#     norm_z = torch.norm(z)
-#     if norm_z <= t or torch.isclose(norm_z, t, atol=1e-8):
-#         return (x, lo.IdentityOperator(n))
-#     elif norm_z <= -t:
-#         return (torch.zeros(x.shape[0], dtype=x.dtype, device=x.device),
-#                 lo.ZeroOperator((n, n)))
-#     else:
-#         proj_x = 0.5 * (1 + t / norm_z) * torch.cat((norm_z.unsqueeze(0), z))
-#         unit_z = z / norm_z
-
-#         def mv(dx: torch.Tensor) -> torch.Tensor:
-#             dt, dz = dx[0], dx[1:dx.shape[0]]
-#             first_entry = dt*norm_z + z @ dz
-#             second_chunk = dt*z + (t + norm_z)*dz \
-#                             - t * unit_z * (unit_z @ dz)
-#             output = torch.empty_like(dx)
-#             output[0] = first_entry
-#             output[1:] = second_chunk
-#             return (1.0 / (2.0 * norm_z)) * output
-        
-#         return (proj_x, SymmetricOperator(x.shape[0], mv, device=x.device))

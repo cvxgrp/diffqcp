@@ -2,6 +2,7 @@ import equinox as eqx
 from jaxtyping import Float, Array
 from jax.experimental.sparse import BCOO, BCSR
 
+from diffqcp.cones.canonical import ConeProjector
 # TODO(quill): provide helpers to convert problem data?
 
 class QCP(eqx.Module):
@@ -30,9 +31,10 @@ class QCP(eqx.Module):
     y: Float[Array, "*batch m"]
     s: Float[Array, "*batch m"]
 
-    cones: dict[str, int | list[int] | list[float]] # TODO(quill): refactor somehow?
+    # cones: dict[str, int | list[int] | list[float]] # NOTE(quill): don't need since just store projector?
     # TODO(quill): need to pass in dtype or device?
     # cone_projector: ConeProjector
+    cone_projector: ConeProjector
     n: int
     m : int
     N: int
@@ -60,6 +62,11 @@ class QCP(eqx.Module):
             self.is_batched = False
             self.n = P_shape[0]
             # TODO(quill): add check(s) on `P`?
+            #   e.g., full (i.e., not upper triangular), symmetric
+            #   Also, this `__init__` will be run each time...so
+            #   consider what's critical. Can always create a helper
+            #   function to run on the data before creating a `QCP`
+            #   the first time.
         elif P_num_dims == 3:
             self.is_batched = True
             self.n = P_shape[1]
@@ -102,6 +109,7 @@ class QCP(eqx.Module):
     def _form_atoms_batched(
         self
     ):
+        # NOTE(quill): return matrix operator?
         pass
     
     def jvp(
@@ -112,6 +120,7 @@ class QCP(eqx.Module):
         db: Float[Array, "*batch m"]
     ):
         # TODO(quill): return a `PyTree` or a `tuple`?
+        # TODO(quill): should be a pure function / can be jited, vmaped, autodiffed, etc.
         pass
 
     def vjp(
@@ -121,6 +130,7 @@ class QCP(eqx.Module):
         ds: Float[Array, "*batch m"]
     ):
         # TODO(quill): return a `PyTree` or a tuple?
+        # TODO(quill): should be a pure function / can be jited, vmaped, autodiffed, etc.
         pass
 
 QCP.__init__.__doc__ = """**Parameters**

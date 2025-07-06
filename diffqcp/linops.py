@@ -2,9 +2,14 @@ import numpy as np
 from jax import ShapeDtypeStruct, eval_shape
 import jax.numpy as jnp
 import lineax as lx
+import equinox as eqx
 from jaxtyping import Array, Float, Integer
 
 from diffqcp._helpers import _to_int_list
+
+
+ZeroOperator = lambda x, y : 0.0 * lx.IdentityLinearOperator(eval_shape(lambda: x), eval_shape(lambda: y))
+
 
 class BlockOperator(lx.AbstractLinearOperator):
 
@@ -12,7 +17,8 @@ class BlockOperator(lx.AbstractLinearOperator):
     num_blocks: int
     _in_sizes: list[int]
     _out_sizes: list[int]
-    split_indices: Integer[list, "..."]
+    # split_indices: Integer[list, "..."]
+    split_indices: Integer[list, "..."] = eqx.field(static=True)
 
     def __init__(
         self,

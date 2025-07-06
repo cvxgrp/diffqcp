@@ -1,7 +1,14 @@
+"""
+TODO(quill): unimportant for `qcp` purposes, but allow the cone ops to work on `PyTrees`.
+TODO(quill): add ability to compute `proj` or `dproj` (i.e., don't have to compute both)
+    -> again, unimportant for `qcp`, but would be nice if you want to provide a `jax` cone
+    projection library.
+"""
+
 import numpy as np
-from jax import vmap
+import jax
 import jax.numpy as jnp
-import jax.numpy.linalg as la
+import jax.numpy.linalg as jla
 import lineax as lx
 from lineax import AbstractLinearOperator
 import equinox as eqx
@@ -9,7 +16,7 @@ from abc import abstractmethod
 from jaxtyping import Array, Float
 
 from diffqcp._helpers import _to_int_list
-from diffqcp.linops import _to_2d_symmetric_psd_func_op, BlockOperator
+from diffqcp.linops import _to_2d_symmetric_psd_func_op, BlockOperator, ZeroOperator
 
 # TODO(quill): determine if we want to make these public--easier to work with the "magic keys"
 #   -> consequential action item: remove the prepended underscore.
@@ -25,6 +32,11 @@ _POW = 'p'
 
 # The ordering of CONES matches SCS.
 CONES = [_ZERO, _NONNEGATIVE, _SOC, _PSD, _EXP, _EXP_DUAL, _POW]
+
+if jax.config.jax_enable_x64:
+    EPS = 1e-12
+else:
+    EPS = 1e-6
 
 def _parse_cone_dict(cone_dict: dict[str, int | list[int]]
 ) -> list[tuple[str, int | list[int]]]:
@@ -84,17 +96,24 @@ class ConeProjector(eqx.Module):
 
     # is_dual: AbstractVar[bool]
     is_dual: bool
-    dims: list[int]
+    # NOTE(quill): list of floats needed for the power cone
+    dims: int | list[int] | list[float]
 
     @abstractmethod
     def proj_dproj(self, x: Float[Array, " d"]) -> tuple[Float[Array, " d"], AbstractLinearOperator]:
         pass
 
+    def __call__(self, x: Float[Array, " d"]):
+        return self.proj_dproj(x)
+
 class ZeroConeProjector(ConeProjector):
     is_dual: bool
 
     def proj_dproj(self, x: Float[Array, " d"]) -> tuple[Float[Array, " d"], AbstractLinearOperator]:
-        pass
+        if self.is_dual:
+            return (x, lx.IdentityLinearOperator(jax.eval_shape(x)))
+        else:
+            return (jnp.zeros_like(x), ZeroOperator(x, x))
 
 class NonnegativeConeProjector(ConeProjector):
     is_dual: bool
@@ -106,39 +125,97 @@ class NonnegativeConeProjector(ConeProjector):
         return proj_x, dproj_x
 
 
+class _ProjSecondOrderConeJacobian(lx.AbstractLinearOperator):
+    t: Float[Array, "..."]
+    z: Float[Array, "..."]
+    unit_z: Float[Array, "..."]
+    norm_z: float
+    n: int
+
+    def mv(self, dx: Float[Array, "..."]):
+        dt, dz = dx[..., 0], dx[..., 1:]
+        first_entry = jnp.array([dt * self.norm_z + self.z @ dz])
+        second_chunk = (dt * self.z + (self.t + self.norm_z)
+                        - self.t * self.unit_z * (self.unit_z @ dz))
+        output = jnp.concatenate([first_entry, second_chunk])
+        return (1.0 / (2.0 * self.norm_z)) * output
+
+    def as_matrix(self):
+        return self.mv(jnp.eye(self.n))
+    
+    def transpose(self):
+        return self
+    
+    def in_structure(self):
+        # TODO(quill): no, need to 
+        return jax.ShapeDtypeStruct(shape=(self.n,), dtype=self.z.dtype)
+    
+    # def out_structure
+
+class _SecondOrderConeProjector(ConeProjector):
+    is_dual: bool
+    dims: int # TODO(quill): determine if to use static or not
+
+    def __check_init__(self):
+        if not isinstance(self.dims, int):
+            raise ValueError(f"The private class `_SecondOrderConeProjector`"
+                             + " expects `dims` to be an integer,"
+                             + f" but received a {type(self.dims)}")
+    
+    def proj_dproj(self, x):
+        n = self.dims
+        t, z = x[..., 0], x[..., 1:]
+        norm_z = jnp.maximum(jla.norm(z, axis=-1), EPS) # safe norm
+
+        def identity_case():
+            return x, lx.IdentityLinearOperator(jax.eval_shape(lambda: x))
+        
+        def zero_case():
+            return jnp.zeros_like(x), ZeroOperator(x, x)
+        
+        def proj_case():
+            proj_x = 0.5 * (1 + t / norm_z) * jnp.concatenate([jnp.array([norm_z]), z])
+            unit_z = z / norm_z
+            return proj_x, _ProjSecondOrderConeJacobian(t, z, norm_z, unit_z, n)
+        
+        return jax.lax.cond(norm_z <= t + EPS,
+                            identity_case,
+                            lambda: jax.lax.cond(norm_z <= -t,
+                                                 zero_case,
+                                                 proj_case,
+                                                 operand=None),
+                            operand=None)
+
+
 class SecondOrderConeProjector(ConeProjector):
     is_dual: bool
     dims: list[int]
-    dims_batches: list[list[int]]
+    # dims_batches: list[list[int]]
+    dims_batches: list[tuple[int | float, int]]
+    projectors: list[_SecondOrderConeProjector]
 
     def __init__(self, is_dual: bool, dims: list[int]):
         self.dims = dims
         self.dims_batches = _collect_cone_batch_info(_group_cones_in_order(dims))
         # self.split_indices = _to_int_list(np.cumsum(dims[:-1]))
-
-    def _proj_dproj(self, x):
-        # TODO(quill):in progress
-        n = x.shape[0]
-        t, z = x[0], x[1:]
-        norm_z = la.norm(z)
-
-        proj_x = 0.5 * (1 + t / norm_z) * jnp.concatenate([jnp.array([norm_z]), z])
-        unit_z = z / norm_z
+        self.projectors = [_SecondOrderConeProjector(is_dual=self.is_dual, dims=dim_batch[0])
+                           for dim_batch in self.dims_batches]
     
     def proj_dproj(self, x: Float[Array, " d"]) -> tuple[Float[Array, " d"], AbstractLinearOperator]:
         projs, dproj_ops = [], []
         start_idx = 0
-        for dim_batch in self.dims_batches:
+        for i, dim_batch in enumerate(self.dims_batches):
+            projector = self.projectors[i]
             dim = dim_batch[0]
             num_batches = dim_batch[1]
             slice_size = dim*num_batches
             xi = x[start_idx:start_idx+slice_size]
             if num_batches == 1:
-                proj_x, dproj_x = self._proj_dproj(xi)
+                proj_x, dproj_x = projector(xi)
             else:
                 xi = jnp.reshape(xi, (num_batches, dim))
-                proj_xi, dproj_xi = vmap(self._proj_dproj)(xi)
-                proj_x = jnp.ravel(xi)
+                proj_xi, dproj_xi = jax.vmap(projector)(xi)
+                proj_x = jnp.ravel(proj_xi)
                 dproj_x = _to_2d_symmetric_psd_func_op(dproj_xi, xi)
             projs.append(proj_x)
             dproj_ops.append(dproj_x)

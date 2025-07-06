@@ -11,6 +11,9 @@ import equinox as eqx
 from jaxtyping import Array, Float, PyTree
 from diffqcp.linops import BlockOperator, _to_2d_symmetric_psd_func_op
 
+def tree_allclose(x, y, *, rtol=1e-5, atol=1e-8):
+    return eqx.tree_equal(x, y, typematch=True, rtol=rtol, atol=atol)
+
 # === test PyTree functionality ===
 def soc_proj_dproj(x: PyTree[Array]):
     n = x.shape[-1] # TODO(quill): what kind of filter needed to get list of these?
@@ -52,6 +55,7 @@ print("regular call p: ", f1(p, dp))
 print("regular call p2: ", f1(p2, dp))
 print("batched call: ", f1_upgraded(p3, dp3))
 
+
 # Now try `vmap`ing a function that returns a linear operator
 # This works!
 
@@ -63,10 +67,10 @@ ops = jax.vmap(make_operator)(A_batch)  # Tuple of MatrixLinearOperators
 print("batched matrix ops: ", ops)
 print("batched matrix ops type: ", type(ops))
 print("batched matrix eval shape ", jax.eval_shape(ops.mv, jnp.arange(9).reshape((3, 3))))
-new_op = _to_2d_symmetric_psd_func_op(ops, jnp.reshape(jnp.arange(9), (3, 3)))
+# new_op = _to_2d_symmetric_psd_func_op(ops, jnp.reshape(jnp.arange(9), (3, 3)))
 # probably have to use `einsum` to make multiplications work.
-print("new op mv", new_op.mv(jnp.arange(9)))
-# print("batched matrix ops shape: ", ops.out_structure())
+# print("new op mv", new_op.mv(jnp.arange(9)))
+print("batched matrix ops shape: ", ops.out_structure())
 
 
 # === try nonnegative cone implementation ===
@@ -93,7 +97,8 @@ def _some_op(linop, vec):
 # print(jax.jit(block_op.mv)(jnp.ones(5)))
 
 _vec = jnp.arange(5)
-some_op = eqx.filter_jit(_some_op)
+# some_op = eqx.filter_jit(_some_op)
+some_op = jax.jit(_some_op)
 print(some_op(lx.MatrixLinearOperator(5*jnp.eye(5)), _vec))
 print("first one success")
 print(some_op(block_op, _vec))

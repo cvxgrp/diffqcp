@@ -10,15 +10,26 @@ from jax import ShapeDtypeStruct, eval_shape
 import jax.numpy as jnp
 import lineax as lx
 import equinox as eqx
-from jaxtyping import Array, Integer
+from jaxtyping import Array, Integer, Float
 
 from diffqcp._helpers import _to_int_list
 
 
-_ZeroOperator = lambda x, y : 0.0 * lx.IdentityLinearOperator(eval_shape(lambda: x), eval_shape(lambda: y))
+def _ZeroOperator(
+    x: Float[Array, " _d1"], y: Float[Array, " _d2"] | None = None
+) -> lx.AbstractLinearOperator:
+    in_struc = eval_shape(lambda: x)
+    if y is None:
+        out_struc = in_struc
+    else:
+        out_struc = eval_shape(lambda: y)
+    # NOTE(quill): safe to multiply by 0.0 (so a float), since we're assuming the linops are arrays of floats.
+    return 0.0 * lx.IdentityLinearOperator(in_struc, out_struc)
 
-# `_ScalarOpeartor.in_structure.shape == (1,)`
-_ScalarOperator = lambda alpha: alpha * lx.IdentityLinearOperator(eval_shape(lambda: jnp.arange(1.0)))
+
+def _ScalarOperator(alpha: float) -> lx.AbstractLinearOperator:
+    # `_ScalarOperator.in_structure.shape == (1,)`
+    return alpha * lx.IdentityLinearOperator(eval_shape(lambda: jnp.arange(1.0)))
 
 
 class _BlockOperator(lx.AbstractLinearOperator):
@@ -97,22 +108,38 @@ class _BlockOperator(lx.AbstractLinearOperator):
 def _(op):
     return all(lx.is_symmetric(block) for block in op.blocks)
 
-# def _as_symmetric_psd_func_op(A: lx.AbstractLinearOperator, v: Array) -> lx.FunctionLinearOperator:
-def _to_2d_symmetric_psd_func_op(A: lx.AbstractLinearOperator, v: Array) -> lx.FunctionLinearOperator:
-    """FLOPless
-    
-    Assumed `A` is symmetric.
 
+def _to_2D_symmetric_psd_func_op(A: lx.AbstractLinearOperator, v: Float[Array, "_B _d"]) -> lx.FunctionLinearOperator:
+    """Collapse a batch of 2D operators.
+
+    Helper function that takes a batch of AbstractLinearOperators that map 1D Arrays to 1D Arrays
+    and wraps it in a `FunctionLinearOperator` so that
+
+    TODO(quill): finish docstring
+    NOTE / TODO (quill): This function does not currently work when `MatrixLinearOperator`s
+    are stacked on top of one another (see the NOTE in `jax_transform_playground.py`).
+    I'm unsure if this method will also fail on other linops, but I'm assuming it will.
+    For the `MatrixLinearOperator` the problem is that its `mv` definition uses `jnp.matmul`, so
+    when a batch of vectors is supplied to the function, a batch of matrix-matrix multiplications
+    are performed (as opposed to applying each matrix operator to a single vector). I need to consider
+    how I can specify to only apply `mv` to a single vector at a time.
+    
+    Parameters
+    ----------
+    `A` : lx.AbstractLinearOperator
+        Each operator within the batch is assumed to be symmetric and positive semidefinite.
+    This is a flopless 
     """
     
     A_shape_dtype = eval_shape(A.mv, v)
     A_shape = A_shape_dtype.shape
 
-    def mv(dx: Array):
-        # dx is 1D
+    def mv(dx: Float[Array, " _Bd"]):
         dx = jnp.reshape(dx, (A_shape[0], A_shape[-1]))
         out = A.mv(dx)
         return jnp.ravel(out)
+    
+    breakpoint()
     
     in_structure = ShapeDtypeStruct(shape=(A_shape[0]*A_shape[-1],), dtype=A_shape_dtype.dtype)
     return lx.FunctionLinearOperator(mv, input_structure=in_structure, tags=[lx.symmetric_tag, lx.positive_semidefinite_tag])

@@ -1,5 +1,4 @@
 """Helper/Utility functions used """
-from typing import Sequence
 import numpy as np
 
 def _to_int_list(v: np.ndarray) -> list[int]:

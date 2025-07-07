@@ -1,6 +1,5 @@
-import lineax as lx
 from lineax import AbstractLinearOperator
-from jaxtyping import Array, Float, Integer
+from jaxtyping import Array, Float
 
 
 def _Du_Q(

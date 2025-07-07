@@ -5,7 +5,6 @@ TODO(quill): add ability to compute `proj` or `dproj` (i.e., don't have to compu
     projection library.
 """
 
-import numpy as np
 import jax
 import jax.numpy as jnp
 import jax.numpy.linalg as jla
@@ -15,8 +14,7 @@ import equinox as eqx
 from abc import abstractmethod
 from jaxtyping import Array, Float
 
-from diffqcp._helpers import _to_int_list
-from diffqcp.linops import _to_2d_symmetric_psd_func_op, BlockOperator, ZeroOperator
+from diffqcp._linops import _to_2d_symmetric_psd_func_op, _BlockOperator, _ZeroOperator
 
 # TODO(quill): determine if we want to make these public--easier to work with the "magic keys"
 #   -> consequential action item: remove the prepended underscore.
@@ -113,7 +111,7 @@ class ZeroConeProjector(ConeProjector):
         if self.is_dual:
             return (x, lx.IdentityLinearOperator(jax.eval_shape(x)))
         else:
-            return (jnp.zeros_like(x), ZeroOperator(x, x))
+            return (jnp.zeros_like(x), _ZeroOperator(x, x))
 
 class NonnegativeConeProjector(ConeProjector):
     is_dual: bool
@@ -158,7 +156,7 @@ class _SecondOrderConeProjector(ConeProjector):
 
     def __check_init__(self):
         if not isinstance(self.dims, int):
-            raise ValueError(f"The private class `_SecondOrderConeProjector`"
+            raise ValueError("The private class `_SecondOrderConeProjector`"
                              + " expects `dims` to be an integer,"
                              + f" but received a {type(self.dims)}")
     
@@ -171,7 +169,7 @@ class _SecondOrderConeProjector(ConeProjector):
             return x, lx.IdentityLinearOperator(jax.eval_shape(lambda: x))
         
         def zero_case():
-            return jnp.zeros_like(x), ZeroOperator(x, x)
+            return jnp.zeros_like(x), _ZeroOperator(x, x)
         
         def proj_case():
             proj_x = 0.5 * (1 + t / norm_z) * jnp.concatenate([jnp.array([norm_z]), z])
@@ -221,7 +219,7 @@ class SecondOrderConeProjector(ConeProjector):
             dproj_ops.append(dproj_x)
             start_idx += slice_size
         
-        return jnp.concatenate(projs), BlockOperator(dproj_ops)
+        return jnp.concatenate(projs), _BlockOperator(dproj_ops)
         
             
 
@@ -233,3 +231,12 @@ def _construct_product_cone(
     dual: bool = False
 ) -> ConeProjector:
     pass
+
+SecondOrderConeProjector.__init__.__doc__ = r"""
+Parameters
+----------
+- `is_dual`: bool
+    Whether the projection should be onto the SOC or the dual of the SOC
+- `dims`: list[int]
+
+"""

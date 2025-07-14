@@ -1,11 +1,8 @@
 # `uv run playground.py` vs `uv run python playground.py`
-
-import numpy as np
-import scipy.sparse as sp
+from typing import Callable
 import jax
 import jax.numpy as jnp
 import jax.numpy.linalg as la
-import jax.random as jr
 import lineax as lx
 import equinox as eqx
 from jaxtyping import Array, Float, PyTree
@@ -75,6 +72,18 @@ new_op = _to_2D_symmetric_psd_func_op(ops, jnp.reshape(jnp.arange(9), (3, 3)))
 # print("new op mv", new_op.mv(jnp.arange(9)))
 print("batched matrix ops shape: ", ops.out_structure())
 
+
+# === toy of what I want ===
+
+def inner_func(n: int) -> Callable[[Float[Array, "n"]], Float[Array, " "]]:
+    a = jnp.arange(n, dtype=jnp.float32)
+    return lambda x: a @ x
+
+def outer_func(x) -> Callable[[]]:
+    n = jnp.size(x)
+    return inner_func(x)
+
+batched_inner_prod = jax.vmap(outer_func(jnp.arange(10.0)))
 
 # === try nonnegative cone implementation ===
 

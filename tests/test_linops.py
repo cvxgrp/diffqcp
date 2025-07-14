@@ -2,16 +2,10 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 import lineax as lx
-import pytest
 
 from diffqcp._linops import _ZeroOperator, _ScalarOperator, _BlockOperator
 
 from .helpers import tree_allclose
-
-# Tests
-# - Block Operator
-#   - All blocks are symmetric (`_BlockOperator` should then be symmetric)
-#   - `vmap` (So instead of applying `_BlockOperator` to (d,), apply `vmap(_BlockOperator.mv)` to (B, d).)
 
 def test_zero_operator(getkey):
     dim_in = 5
@@ -121,40 +115,6 @@ def test_block_operator(getkey):
     out4 = jax.vmap(op4.transpose().mv)(jnp.reshape(u[:, -1], (5, 1)))
     out_correct = jnp.concatenate([out1, out2, out3, out4], axis=1)
     assert tree_allclose(out_correct, jax.vmap(block_op.transpose().mv)(u))
-
-# def test_block_diag_operator(device):
-#     n = 10
-#     m = 5
-#     N = 2*n + 1
-#     rng = torch.Generator(device=device).manual_seed(0)
-
-#     for _ in range(10):
-
-#         x = torch.randn(n, generator=rng, device=device)
-#         A = torch.randn((m, n), generator=rng, device=device)
-
-#         op1: lo.LinearOperator = lo.DiagonalOperator(x)
-#         op2 : lo.LinearOperator = lo.MatrixOperator(A)
-#         op3 : lo.LinearOperator = ScalarOperator(torch.tensor(2, device=device))
-#         block_op = BlockDiag([op1, op2, op3], device=device)
-
-#         v = torch.randn(N, generator=rng, device=device)
-#         x, y, tau = v[0:n], v[n:2*n], v[-1]
-
-#         out = torch.empty(n+m+1, device=device)
-#         out[0:n] = op1 @ x
-#         out[n:n+m] = op2 @ y
-#         out[-1] = op3 @ tau.unsqueeze(0)
-
-#         u = torch.randn(n+m+1, generator=rng, device=device)
-#         out_transpose = torch.empty(N, device=device)
-#         out_transpose[0:n] = op1.T @ u[0:n]
-#         out_transpose[n:2*n] = op2.T @ u[n:n+m]
-#         out_transpose[-1] = op3.T @ u[-1].unsqueeze(0)
-
-
-#         assert torch.allclose(out, block_op @ v)
-#         assert torch.allclose(out_transpose, block_op.T @ u)
 
 # TODO(quill): will need to create a wrapper function so I can batch ops on top of each other
 # NOTE(quill): a `vmap` test in `lineax` does this.

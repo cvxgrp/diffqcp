@@ -2,7 +2,7 @@ import equinox as eqx
 from jaxtyping import Float, Array
 from jax.experimental.sparse import BCOO, BCSR
 
-from diffqcp.cones.canonical import ConeProjector
+from diffqcp.cones.canonical import AbstractConeProjector
 # TODO(quill): provide helpers to convert problem data?
 
 class QCP(eqx.Module):
@@ -33,8 +33,8 @@ class QCP(eqx.Module):
 
     # cones: dict[str, int | list[int] | list[float]] # NOTE(quill): don't need since just store projector?
     # TODO(quill): need to pass in dtype or device?
-    # cone_projector: ConeProjector
-    cone_projector: ConeProjector
+    # cone_projector: AbstractConeProjector
+    cone_projector: AbstractConeProjector
     n: int
     m : int
     N: int

@@ -38,7 +38,7 @@ def test_zero_projector(getkey):
 
     for dual in [True, False]:
 
-        _zero_projector = cone_lib.ZeroConeProjector(dims=n, is_dual=dual)
+        _zero_projector = cone_lib.ZeroConeProjector(is_dual=dual)
         zero_projector = jit(_zero_projector)
         batched_zero_projector = jit(vmap(_zero_projector))
 
@@ -63,7 +63,7 @@ def test_nonnegative_projector(getkey):
     n = 100
     num_batches = 10
 
-    _nn_projector = cone_lib.NonnegativeConeProjector(dims=n)
+    _nn_projector = cone_lib.NonnegativeConeProjector()
     nn_projector = jit(_nn_projector)
     batched_nn_projector = jit(vmap(_nn_projector))
 
@@ -86,6 +86,11 @@ def test_soc_private_projector(getkey):
     n = 100
     num_batches = 10
 
+    _soc_projector = cone_lib._SecondOrderConeProjector(dim=n)
+    soc_projector = jit(_soc_projector)
+    # NOTE(quill): to test batched will have to loop through cvxpy problems.
+    batched_soc_projector = jit(vmap(_soc_projector))
+
     for _ in range(15):
         x_jnp = jr.normal(getkey(), n)
         x_np = np.array(x_jnp)
@@ -96,9 +101,9 @@ def test_soc_private_projector(getkey):
         prob.solve(solver=cvx.CLARABEL)
         z_star_jnp = jnp.array(z.value)
         
-        soc_projector = cone_lib._SecondOrderConeProjector(dims=n)
         proj_x, _ = soc_projector(x_jnp)
         assert tree_allclose(proj_x, z_star_jnp)
+        _test_dproj_finite_diffs(soc_projector, getkey, dim=n, num_batches=0)
 
 
 # def test_soc_projector(getkey):

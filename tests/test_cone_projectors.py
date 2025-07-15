@@ -88,8 +88,6 @@ def test_soc_private_projector(getkey):
 
     _soc_projector = cone_lib._SecondOrderConeProjector(dim=n)
     soc_projector = jit(_soc_projector)
-    # NOTE(quill): to test batched will have to loop through cvxpy problems.
-    batched_soc_projector = jit(vmap(_soc_projector))
 
     for _ in range(15):
         x_jnp = jr.normal(getkey(), n)
@@ -104,6 +102,12 @@ def test_soc_private_projector(getkey):
         proj_x, _ = soc_projector(x_jnp)
         assert tree_allclose(proj_x, z_star_jnp)
         _test_dproj_finite_diffs(soc_projector, getkey, dim=n, num_batches=0)
+
+        # NOTE(quill): to test a `batched_soc_projector`'s projecting functionality,
+        #   will have to loop through the batched `x` and use each to solve the `cvxpy`
+        #   problem. 
+
+        _test_dproj_finite_diffs(_soc_projector, getkey, dim=n, num_batches=num_batches)
 
 
 # def test_soc_projector(getkey):

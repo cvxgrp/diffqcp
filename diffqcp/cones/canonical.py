@@ -29,7 +29,7 @@ from equinox import AbstractVar
 from abc import abstractmethod
 from jaxtyping import Array, Float
 
-from diffqcp._linops import _BlockOperator
+from diffqcp._linops import _BlockOperator, _to_2D_symmetric_psd_func_op
 
 # TODO(quill): determine if we want to make these public--easier to work with the "magic keys"
 #   -> consequential action item: remove the prepended underscore.
@@ -302,7 +302,7 @@ class SecondOrderConeProjector(AbstractConeProjector):
         self.dims = dims
         # NOTE(quill): `_collect_cone_batch_info` will only return tuples with 0th element as dtype int.
         self.dims_batches = _collect_cone_batch_info(_group_cones_in_order(dims))
-        self.projectors = [_SecondOrderConeProjector(dims=dim_batch[0]) for dim_batch in self.dims_batches]
+        self.projectors = [_SecondOrderConeProjector(dim=dim_batch[0]) for dim_batch in self.dims_batches]
     
     def proj_dproj(self, x: Float[Array, "*B _d"]) -> tuple[Float[Array, "*B _d"], AbstractLinearOperator]:
         projs, dproj_ops = [], []
@@ -317,9 +317,9 @@ class SecondOrderConeProjector(AbstractConeProjector):
                 proj_x, dproj_x = projector(xi)
             else:
                 xi = jnp.reshape(xi, (num_batches, dim))
-                proj_xi, dproj_x = jax.vmap(projector)(xi)
+                proj_xi, dproj_xi = jax.vmap(projector)(xi)
                 proj_x = jnp.ravel(proj_xi)
-                # dproj_x = _to_2D_symmetric_psd_func_op(dproj_xi, xi)
+                dproj_x = _to_2D_symmetric_psd_func_op(dproj_xi, xi)
             projs.append(proj_x)
             dproj_ops.append(dproj_x)
             start_idx += slice_size

@@ -68,9 +68,16 @@ class _BlockOperator(lx.AbstractLinearOperator):
         # NOTE(quill): `int(idx)` is needed else `eqx.filter_{...}` doesn't filter out these indices
         #   (Since I've declared `split_indices` as static this isn't necessary, but there's no true cost
         #       to keeping.)
+        print("blocks: ", self.blocks) # DEBUG
+        print("self._in_sizes", self._in_sizes) # DEBUG
         self.split_indices = _to_int_list(np.cumsum(self._in_sizes[:-1]))
+        print("split indices: ", self.split_indices) # DEBUG
     
     def mv(self, x):
+        print("split indices in `mv`: ", self.split_indices)
+        print("x shape: ", jnp.shape(x)) # TODO(quill): failing when `x shape:  (10, 55)`
+        # NOTE(quill): probably need to handle this similarly to how the Jacobian operators are handled?
+        #   -> see note at top of `cones/canonical.py`
         chunks = jnp.split(x, self.split_indices)
         results = [op.mv(xi) for op, xi in zip(self.blocks, chunks)]
         return jnp.concatenate(results)
@@ -109,7 +116,7 @@ def _(op):
     return all(lx.is_symmetric(block) for block in op.blocks)
 
 
-def _to_2D_symmetric_psd_func_op(A: lx.AbstractLinearOperator, v: Float[Array, "_B _d"]) -> lx.FunctionLinearOperator:
+def _to_2D_symmetric_psd_func_op(A: lx.AbstractLinearOperator, v: Float[Array, "B n"]) -> lx.FunctionLinearOperator:
     """Collapse a batch of 2D operators.
 
     Helper function that takes a batch of AbstractLinearOperators that map 1D Arrays to 1D Arrays
@@ -131,15 +138,19 @@ def _to_2D_symmetric_psd_func_op(A: lx.AbstractLinearOperator, v: Float[Array, "
     This is a flopless 
     """
     
-    A_shape_dtype = eval_shape(A.mv, v)
-    A_shape = A_shape_dtype.shape
+    in_shape = jnp.shape(v)
+    v_dim = len(in_shape)
 
-    def mv(dx: Float[Array, " _Bd"]):
-        dx = jnp.reshape(dx, (A_shape[0], A_shape[-1]))
+    if v_dim != 2:
+        raise ValueError("`_to_2D_symmetric_psd_func_op` is meant to wrap around"
+                         + " linear operators that map from 2D arrays to 2D arrays"
+                         + " but the provided vector the operator supposedly operates"
+                         + f" on is {v_dim}D.")
+
+    def mv(dx: Float[Array, " Bn"]):
+        dx = jnp.reshape(dx, jnp.shape(v))
         out = A.mv(dx)
         return jnp.ravel(out)
     
-    breakpoint()
-    
-    in_structure = ShapeDtypeStruct(shape=(A_shape[0]*A_shape[-1],), dtype=A_shape_dtype.dtype)
+    in_structure = ShapeDtypeStruct(shape=(in_shape[0]*in_shape[1],), dtype=v.dtype)
     return lx.FunctionLinearOperator(mv, input_structure=in_structure, tags=[lx.symmetric_tag, lx.positive_semidefinite_tag])

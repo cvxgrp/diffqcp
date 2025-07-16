@@ -2,7 +2,7 @@ from typing import Callable
 
 import numpy as np
 import cvxpy as cvx
-from jax import vmap, jit
+from jax import vmap, jit, eval_shape
 import jax.numpy as jnp
 import jax.random as jr
 
@@ -26,7 +26,7 @@ def _test_dproj_finite_diffs(
     proj_x, dproj_x = _projector(x)
     proj_x_plus_dx, _ = _projector(x + dx)
     
-    dproj_x_fd = proj_x_plus_dx - proj_x
+    dproj_x_fd = proj_x_plus_dx - proj_x    
     dproj_x_dx = dproj_x.mv(dx)
 
     assert tree_allclose(dproj_x_dx, dproj_x_fd)
@@ -110,26 +110,32 @@ def test_soc_private_projector(getkey):
         _test_dproj_finite_diffs(_soc_projector, getkey, dim=n, num_batches=num_batches)
 
 
-# def test_soc_projector(getkey):
-#     dims = [10, 15, 30]
-#     total_dim = sum(dims)
-    
-#     for _ in range(15):
-#         x_jnp = jr.normal(getkey(), total_dim)
-#         x_np = np.array(x_jnp)
-#         z = cvx.Variable(total_dim)
-#         z1, x1 = z[0:dims[0]], x_np[0:dims[0]]
-#         z2, x2 = z[dims[0]:dims[1]], x_np[dims[0]:dims[1]]
-#         z3, x3 = z[dims[1]:], x_np[dims[1]:]
-#         objective = cvx.Minimize(cvx.sum_squares(z1 - x1) + cvx.sum_squares(z2 - x2)
-#                                  + cvx.sum_squares(z3 - x3))
-#         constraints = [cvx.norm(z1[1:], 2) <= z1[0],
-#                        cvx.norm(z2[1:], 2) <= z2[0],
-#                        cvx.norm(z3[1:], 3) <= z3[0]]
-#         prob = cvx.Problem(objective, constraints)
-#         prob.solve(solver=cvx.CLARABEL)
-#         z_star_jnp = jnp.array(z.value)
+def test_soc_projector(getkey):
+    dims = [10, 15, 30]
+    total_dim = sum(dims)
+    num_batches = 10
 
-#         soc_projector = cone_lib.SecondOrderConeProjector(dims=dims)
-#         proj_x, _ = soc_projector(x_jnp)
-#         assert tree_allclose(proj_x, z_star_jnp)
+    _soc_projector = cone_lib.SecondOrderConeProjector(dims=dims)
+    soc_projector = jit(_soc_projector)
+    
+    for _ in range(15):
+        x_jnp = jr.normal(getkey(), total_dim)
+        x_np = np.array(x_jnp)
+        z = cvx.Variable(total_dim)
+        z1, x1 = z[0:dims[0]], x_np[0:dims[0]]
+        z2, x2 = z[dims[0]:dims[1]], x_np[dims[0]:dims[1]]
+        z3, x3 = z[dims[1]:], x_np[dims[1]:]
+        objective = cvx.Minimize(cvx.sum_squares(z1 - x1) + cvx.sum_squares(z2 - x2)
+                                 + cvx.sum_squares(z3 - x3))
+        constraints = [cvx.norm(z1[1:], 2) <= z1[0],
+                       cvx.norm(z2[1:], 2) <= z2[0],
+                       cvx.norm(z3[1:], 2) <= z3[0]]
+        prob = cvx.Problem(objective, constraints)
+        prob.solve(solver=cvx.SCS)
+        z_star_jnp = jnp.array(z.value)
+
+        proj_x, _ = soc_projector(x_jnp)
+        # assert tree_allclose(proj_x, z_star_jnp)
+        _test_dproj_finite_diffs(soc_projector, getkey, dim=total_dim, num_batches=0)
+        print("=== BATCHED ===") # DEBUG
+        _test_dproj_finite_diffs(_soc_projector, getkey, dim=total_dim, num_batches=num_batches)

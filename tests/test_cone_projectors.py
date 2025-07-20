@@ -2,10 +2,9 @@ from typing import Callable
 
 import numpy as np
 import cvxpy as cvx
-from jax import vmap, jit, eval_shape
+from jax import vmap, jit
 import jax.numpy as jnp
 import jax.random as jr
-import jax.numpy.linalg as jla
 
 import diffqcp.cones.canonical as cone_lib
 from .helpers import tree_allclose
@@ -40,7 +39,7 @@ def test_zero_projector(getkey):
 
     for dual in [True, False]:
 
-        _zero_projector = cone_lib.ZeroConeProjector(is_dual=dual)
+        _zero_projector = cone_lib.ZeroConeProjector(onto_dual=dual)
         zero_projector = jit(_zero_projector)
         batched_zero_projector = jit(vmap(_zero_projector))
 
@@ -171,3 +170,62 @@ def test_soc_projector_hard(getkey):
     dims = [5, 5, 5, 3, 3, 4, 5, 2, 2]
     num_batches = 10
     _test_soc_projector(dims, num_batches, getkey)
+
+
+def test_product_projector(getkey):
+    """assumes that the other tests in this file pass."""
+    zero_dim = 15
+    nn_dim = 23
+    soc_dims = [5, 5, 5, 3, 3, 4, 5, 2, 2]
+    soc_total_dim = sum(soc_dims)
+    total_dim = zero_dim + nn_dim + soc_total_dim
+    num_batches = 10
+    cones = {
+        cone_lib.ZERO : zero_dim,
+        cone_lib.NONNEGATIVE: nn_dim,
+        cone_lib.SOC : soc_dims
+    }
+
+    _nn_projector = cone_lib.NonnegativeConeProjector()
+    nn_projector = jit(_nn_projector)
+    batched_nn_projector = jit(vmap(_nn_projector))
+
+    _soc_projector = cone_lib.SecondOrderConeProjector(dims=soc_dims)
+    soc_projector = jit(_soc_projector)
+    batched_soc_projector = jit(vmap(_soc_projector))
+    
+    for dual in [True, False]:
+
+        _zero_projector = cone_lib.ZeroConeProjector(onto_dual=dual)
+        zero_projector = jit(_zero_projector)
+        batched_zero_projector = jit(vmap(_zero_projector))
+
+        _cone_projector = cone_lib.ProductConeProjector(cones, onto_dual=dual)
+        cone_projector = jit(_cone_projector)
+        batched_cone_projector = jit(vmap(_cone_projector))
+    
+        for _ in range(15):
+            x = jr.normal(getkey(), total_dim)
+            proj_x, _ = cone_projector(x)
+            proj_x_zero, _ = zero_projector(x[0:zero_dim])
+            proj_x_nn, _ = nn_projector(x[zero_dim:zero_dim+nn_dim])
+            proj_x_soc, _ = soc_projector(x[zero_dim+nn_dim:zero_dim+nn_dim+soc_total_dim])
+            proj_x_handmade = jnp.concatenate([proj_x_zero,
+                                               proj_x_nn,
+                                               proj_x_soc])
+            assert tree_allclose(proj_x, proj_x_handmade)
+            _test_dproj_finite_diffs(cone_projector, getkey, dim=total_dim, num_batches=0)
+
+            # --- batched ---
+            x = jr.normal(getkey(), (num_batches, total_dim))
+            proj_x, _ = batched_cone_projector(x)
+            proj_x_zero, _ = batched_zero_projector(x[:, 0:zero_dim])
+            proj_x_nn, _ = batched_nn_projector(x[:, zero_dim:zero_dim+nn_dim])
+            proj_x_soc, _ = batched_soc_projector(x[:, zero_dim+nn_dim:zero_dim+nn_dim+soc_total_dim])
+            proj_x_handmade = jnp.concatenate([proj_x_zero,
+                                               proj_x_nn,
+                                               proj_x_soc], axis=-1)
+            assert tree_allclose(proj_x, proj_x_handmade)
+            _test_dproj_finite_diffs(cone_projector, getkey, dim=total_dim, num_batches=num_batches)
+
+

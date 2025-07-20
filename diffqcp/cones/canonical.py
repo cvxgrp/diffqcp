@@ -18,7 +18,7 @@ TODO(quill): add ability to compute `proj` or `dproj` (i.e., don't have to compu
     -> again, unimportant for `diffqcp`, but would be nice if you want to provide a JAX cone
     projection library.
 """
-
+import numpy as np
 import jax
 import jax.numpy as jnp
 import jax.numpy.linalg as jla
@@ -29,46 +29,25 @@ from abc import abstractmethod
 from jaxtyping import Array, Float
 
 from diffqcp._linops import _BlockLinearOperator
+from diffqcp._helpers import _to_int_list
 
-# TODO(quill): determine if we want to make these public--easier to work with the "magic keys"
-#   -> consequential action item: remove the prepended underscore.
-_ZERO = "z"
-_NONNEGATIVE = "l"
-_SOC = "q"
-_PSD = "s"
-_EXP = "ep"
-_EXP_DUAL = "ed"
-_POW = 'p'
+ZERO = "z"
+NONNEGATIVE = "l"
+SOC = "q"
+PSD = "s"
+EXP = "ep"
+EXP_DUAL = "ed"
+POW = 'p'
 # Note we don't define a POW_DUAL cone as we stick with SCS convention
 # and use -alpha to create a dual power cone.
 
-# The ordering of CONES matches SCS.
-CONES = [_ZERO, _NONNEGATIVE, _SOC, _PSD, _EXP, _EXP_DUAL, _POW]
+# The ordering of _CONES matches SCS.
+_CONES = [ZERO, NONNEGATIVE, SOC, PSD, EXP, EXP_DUAL, POW]
 
 if jax.config.jax_enable_x64:
     EPS = 1e-12
 else:
     EPS = 1e-6
-
-def _parse_cone_dict(cone_dict: dict[str, int | list[int]]
-) -> list[tuple[str, int | list[int]]]:
-    """Parses SCS-style cone dictionary.
-
-    Parameters
-    ----------
-    cone_dict : dict[str, int | list[int]]
-        A dictionary with keys corresponding to cones and values
-        corresponding to their dimension (either integers or lists of integers;
-        see the docstring for `compute_derivative` in `qcp.py`).
-
-    Returns
-    -------
-    list[tuple[str, int | list[int]]]
-        A list of two-tuples where the first entry in a tuple is a
-        key from the provided dictionary and the second entry in
-        that tuple is the corresponding dictionary value.
-    """
-    return [(cone, cone_dict[cone]) for cone in CONES if cone in cone_dict]
 
 
 def _group_cones_in_order(dims: list[int] | list[float]) -> list[list[int] | list[float]]:
@@ -154,10 +133,10 @@ def _(op):
 
 class ZeroConeProjector(AbstractConeProjector):
     
-    is_dual: bool
+    onto_dual: bool
 
     def proj_dproj(self, x: Float[Array, " n"]) -> tuple[Float[Array, " n"], AbstractLinearOperator]:
-        if self.is_dual:
+        if self.onto_dual:
             return (x, _ZeroConeProjectorJacobian(x=x, onto_dual=True))
         else:
             return (jnp.zeros_like(x), _ZeroConeProjectorJacobian(x=x, onto_dual=False))
@@ -392,29 +371,50 @@ class SecondOrderConeProjector(AbstractConeProjector):
             
 class ProductConeProjector(AbstractConeProjector):
     projectors: list[AbstractConeProjector]
-    onto_dual: bool = eqx.field(static=True)
+    dims: list[int] = eqx.field(static=True)
+    split_indices: list[int] = eqx.field(static=True)
+    # onto_dual: bool = eqx.field(static=True)
     
     def __init__(self, cones: dict[str, int | list[int] | list[float]], onto_dual: bool=False):
-        cones_list = _parse_cone_dict(cones)
-        # TODO(quill): perform logic here to separate out cones and collect total dimensions
+        projectors = []
+        dims = []
+        for cone_key in _CONES:
+            if cone_key not in cones:
+                continue
+            val = cones[cone_key]
+            if cone_key == ZERO:
+                # Zero cone: val is an int (number of zeros)
+                projectors.append(ZeroConeProjector(onto_dual=onto_dual))
+                dims.append(val)
+            elif cone_key == NONNEGATIVE:
+                # Nonnegative cone: val is an int (number of nonnegatives)
+                projectors.append(NonnegativeConeProjector())
+                dims.append(val)
+            elif cone_key == SOC:
+                # SOC: val is a list of ints (dimensions of each SOC block)
+                projectors.append(SecondOrderConeProjector(val))
+                dims.append(sum(val))
+            else:
+                raise ValueError(f"The cone corresponding to cone key: {cone_key}"
+                                 + " is not yet implemented.")
+        self.projectors = projectors
+        self.dims = dims
+        self.split_indices = _to_int_list(np.cumsum(dims[:-1]))
 
     def proj_dproj(self, x):
+        chunks = jnp.split(x, self.split_indices, axis=-1)
+        
         projs, dproj_ops = [], []
-        start_idx = 0
-        # NOTE(quill): better to use jnp.split approach?
-        for i, dim in enumerate(self.dims):
-            projector = self.projectors[i]
-            xi = x[start_idx:start_idx+dim]
-            proj_xi, dproj_xi = projector(xi)
+        for chunk, projector in zip(chunks, self.projectors):
+            proj_xi, dproj_xi = projector(chunk)
             projs.append(proj_xi)
             dproj_ops.append(dproj_xi)
-            start_idx += dim
-        
+
         # NOTE(quill): when `vmap`ping, the concatenation of `projs` will work
         #   as desired, but the `mv` of `_BlockLinearOperator` now needs to know
         #   how to handle 2D input AND the attributes (leaves) of the operator
         #   now have a batch dimension.
-        return jnp.concatenate(projs), _BlockLinearOperator(dproj_ops)
+        return jnp.concatenate(projs, axis=-1), _BlockLinearOperator(dproj_ops)    
 
 
 SecondOrderConeProjector.__init__.__doc__ = r"""

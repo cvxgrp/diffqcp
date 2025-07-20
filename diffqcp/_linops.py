@@ -41,8 +41,8 @@ class _BlockLinearOperator(lx.AbstractLinearOperator):
 
     blocks: list[lx.AbstractLinearOperator]
     num_blocks: int
-    _in_sizes: list[int]
-    _out_sizes: list[int]
+    # _in_sizes: list[int]
+    # _out_sizes: list[int]
     # NOTE(quill): either use the non-static defined `split_indices` along with `eqx.filter_{...}`,
     #   or use regular JAX function transforms with `split_indices` declared as static.
     #   I'm personally a fan of the explicit declaration, but it seems that this is not the
@@ -64,39 +64,31 @@ class _BlockLinearOperator(lx.AbstractLinearOperator):
         self.blocks = blocks
         self.num_blocks = len(blocks)
 
-        self._in_sizes = [block.in_size() for block in self.blocks]
-        self._out_sizes = [block.out_size() for block in self.blocks]
+        in_sizes = [block.in_size() for block in self.blocks]
         # NOTE(quill): `int(idx)` is needed else `eqx.filter_{...}` doesn't filter out these indices
         #   (Since I've declared `split_indices` as static this isn't necessary, but there's no true cost
         #       to keeping.)
-        self.split_indices = _to_int_list(np.cumsum(self._in_sizes[:-1]))
+        self.split_indices = _to_int_list(np.cumsum(in_sizes[:-1]))
     
     def mv(self, x):
-        # The following short-circuits the graph, but that's fine for `diffqcp` purposes
-        n_dim = jnp.ndim(x)
-        if n_dim == 2:
-            chunks = jnp.split(x, self.split_indices, axis=1)
-        else:    
-            chunks = jnp.split(x, self.split_indices)
+        chunks = jnp.split(x, self.split_indices, axis=-1)
         results = [op.mv(xi) for op, xi in zip(self.blocks, chunks)]
-        if n_dim == 2:
-            return jnp.column_stack(results)
-        else:
-            return jnp.concatenate(results)
+        return jnp.concatenate(results, axis=-1)
     
     def as_matrix(self):
         """uses output dtype
 
         not meant to be efficient.
         """
-        dtype = self.blocks[0].out_structure().dtype
-        zeros_block = jnp.zeros((self._out_size, self._in_size), dtype=dtype)
-        n, m = 0, 0
-        for i in range(self.num_blocks):
-            ni, mi = self._in_sizes[i], self._out_sizes[i]
-            zeros_block.at[m:m+mi, n:n+ni].set(self.blocks[i].as_matrix())
-            n += ni
-            m += mi
+        # dtype = self.blocks[0].out_structure().dtype
+        # zeros_block = jnp.zeros((self._out_size, self._in_size), dtype=dtype)
+        # n, m = 0, 0
+        # for i in range(self.num_blocks):
+        #     ni, mi = self._in_sizes[i], self._out_sizes[i]
+        #     zeros_block.at[m:m+mi, n:n+ni].set(self.blocks[i].as_matrix())
+        #     n += ni
+        #     m += mi
+        raise NotImplementedError("`_BlockLinearOperator`'s `as_matrix` is not implemented.")
 
     def transpose(self):
         return _BlockLinearOperator([block.T for block in self.blocks])

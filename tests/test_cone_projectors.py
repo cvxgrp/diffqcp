@@ -5,6 +5,7 @@ import cvxpy as cvx
 from jax import vmap, jit, eval_shape
 import jax.numpy as jnp
 import jax.random as jr
+import jax.numpy.linalg as jla
 
 import diffqcp.cones.canonical as cone_lib
 from .helpers import tree_allclose
@@ -21,7 +22,7 @@ def _test_dproj_finite_diffs(
         dx = jr.normal(key_func(), dim)
         _projector = projection_func
 
-    dx = 1e-6 * dx
+    dx = 1e-5 * dx
 
     proj_x, dproj_x = _projector(x)
     proj_x_plus_dx, _ = _projector(x + dx)
@@ -52,7 +53,7 @@ def test_zero_projector(getkey):
             assert tree_allclose(truth, proj_x)
             _test_dproj_finite_diffs(zero_projector, getkey, dim=n, num_batches=0)
 
-            # --- vmap ---
+            # --- batched ---
             x = jr.normal(getkey(), (num_batches, n))
             proj_x, _ = batched_zero_projector(x)
             truth = jnp.zeros_like(x) if not dual else x
@@ -83,90 +84,90 @@ def test_nonnegative_projector(getkey):
         _test_dproj_finite_diffs(_nn_projector, getkey, dim=n, num_batches=10)
 
 
+def _proj_soc_via_cvxpy(x: np.ndarray) -> np.ndarray:
+    n = x.size
+    z = cvx.Variable(n)
+    objective = cvx.Minimize(cvx.sum_squares(z - x))
+    constraints = [cvx.norm(z[1:], 2) <= z[0]]
+    prob = cvx.Problem(objective, constraints)
+    prob.solve(solver=cvx.SCS, eps=1e-10)
+    return z.value
+
+
 def test_soc_private_projector(getkey):
     n = 100
     num_batches = 10
 
     _soc_projector = cone_lib._SecondOrderConeProjector(dim=n)
     soc_projector = jit(_soc_projector)
+    batched_soc_projector = jit(vmap(_soc_projector))
 
     for _ in range(15):
         x_jnp = jr.normal(getkey(), n)
         x_np = np.array(x_jnp)
-        z = cvx.Variable(n)
-        objective = cvx.Minimize(cvx.sum_squares(z - x_np))
-        constraints = [cvx.norm(z[1:], 2) <= z[0]]
-        prob = cvx.Problem(objective, constraints)
-        prob.solve(solver=cvx.CLARABEL)
-        z_star_jnp = jnp.array(z.value)
+        proj_x_solver = jnp.array(_proj_soc_via_cvxpy(x_np))
         
         proj_x, _ = soc_projector(x_jnp)
-        assert tree_allclose(proj_x, z_star_jnp)
+        assert tree_allclose(proj_x, proj_x_solver)
         _test_dproj_finite_diffs(soc_projector, getkey, dim=n, num_batches=0)
 
-        # NOTE(quill): to test a `batched_soc_projector`'s projecting functionality,
-        #   will have to loop through the batched `x` and use each to solve the `cvxpy`
-        #   problem. 
+        # --- batched ---
+        x_jnp = jr.normal(getkey(), (num_batches, n))
+        x_np = np.array(x_jnp)
+        proj_x, _ = batched_soc_projector(x_jnp)
+        for i in range(num_batches):
+            proj_x_solver = jnp.array(_proj_soc_via_cvxpy(x_np[i, :]))
+            assert tree_allclose(proj_x[i, :], proj_x_solver)
 
         _test_dproj_finite_diffs(_soc_projector, getkey, dim=n, num_batches=num_batches)
 
 
-def test_soc_projector(getkey):
-    dims = [10, 15, 30]
+def _test_soc_projector(dims, num_batches, keyfunc):
     total_dim = sum(dims)
-    num_batches = 10
 
     _soc_projector = cone_lib.SecondOrderConeProjector(dims=dims)
     soc_projector = jit(_soc_projector)
+    batched_soc_projector = jit(vmap(_soc_projector))
     
     for _ in range(15):
-        x_jnp = jr.normal(getkey(), total_dim)
-        x_np = np.array(x_jnp)
-        z = cvx.Variable(total_dim)
-        z1, x1 = z[0:dims[0]], x_np[0:dims[0]]
-        z2, x2 = z[dims[0]:dims[1]], x_np[dims[0]:dims[1]]
-        z3, x3 = z[dims[1]:], x_np[dims[1]:]
-        objective = cvx.Minimize(cvx.sum_squares(z1 - x1) + cvx.sum_squares(z2 - x2)
-                                 + cvx.sum_squares(z3 - x3))
-        constraints = [cvx.norm(z1[1:], 2) <= z1[0],
-                       cvx.norm(z2[1:], 2) <= z2[0],
-                       cvx.norm(z3[1:], 2) <= z3[0]]
-        prob = cvx.Problem(objective, constraints)
-        prob.solve(solver=cvx.SCS)
-        z_star_jnp = jnp.array(z.value)
 
+        x_jnp = jr.normal(keyfunc(), total_dim)
+        x_np = np.array(x_jnp)
+        start = 0
+        solns = []
+        for dim in dims:
+            end = start + dim
+            solns.append(jnp.array(_proj_soc_via_cvxpy(x_np[start:end])))
+            start = end
+        proj_x_solver = jnp.concatenate(solns)
         proj_x, _ = soc_projector(x_jnp)
-        # assert tree_allclose(proj_x, z_star_jnp)
-        # _test_dproj_finite_diffs(soc_projector, getkey, dim=total_dim, num_batches=0)
-        print("=== BATCHED ===") # DEBUG
-        _test_dproj_finite_diffs(_soc_projector, getkey, dim=total_dim, num_batches=10)
+        assert tree_allclose(proj_x, proj_x_solver)
+        _test_dproj_finite_diffs(soc_projector, keyfunc, dim=total_dim, num_batches=0)
+
+        # --- batched ---
+        x_jnp = jr.normal(keyfunc(), (num_batches, total_dim))
+        x_np = np.array(x_jnp)
+        proj_x, _ = batched_soc_projector(x_jnp)
+        for i in range(num_batches):
+            start = 0
+            solns = []
+            for dim in dims:
+                end = start + dim
+                solns.append(jnp.array(_proj_soc_via_cvxpy(x_np[i, start:end])))
+                start = end
+            proj_x_solver = jnp.concatenate(solns)
+            assert tree_allclose(proj_x[i, :], proj_x_solver)
+
+        _test_dproj_finite_diffs(_soc_projector, keyfunc, dim=total_dim, num_batches=num_batches)
+
+
+def test_soc_projector_simple(getkey):
+    dims = [10, 15, 30]
+    num_batches = 10
+    _test_soc_projector(dims, num_batches, getkey)
+
 
 def test_soc_projector_hard(getkey):
     dims = [5, 5, 5, 3, 3, 4, 5, 2, 2]
-    total_dim = sum(dims)
     num_batches = 10
-
-    _soc_projector = cone_lib.SecondOrderConeProjector(dims=dims)
-    soc_projector = jit(_soc_projector)
-    
-    for _ in range(15):
-        x_jnp = jr.normal(getkey(), total_dim)
-        # x_np = np.array(x_jnp)
-        # z = cvx.Variable(total_dim)
-        # z1, x1 = z[0:dims[0]], x_np[0:dims[0]]
-        # z2, x2 = z[dims[0]:dims[1]], x_np[dims[0]:dims[1]]
-        # z3, x3 = z[dims[1]:], x_np[dims[1]:]
-        # objective = cvx.Minimize(cvx.sum_squares(z1 - x1) + cvx.sum_squares(z2 - x2)
-        #                          + cvx.sum_squares(z3 - x3))
-        # constraints = [cvx.norm(z1[1:], 2) <= z1[0],
-        #                cvx.norm(z2[1:], 2) <= z2[0],
-        #                cvx.norm(z3[1:], 2) <= z3[0]]
-        # prob = cvx.Problem(objective, constraints)
-        # prob.solve(solver=cvx.SCS)
-        # z_star_jnp = jnp.array(z.value)
-
-        # proj_x, _ = soc_projector(x_jnp)
-        # assert tree_allclose(proj_x, z_star_jnp)
-        _test_dproj_finite_diffs(soc_projector, getkey, dim=total_dim, num_batches=0)
-        print("=== BATCHED ===") # DEBUG
-        _test_dproj_finite_diffs(_soc_projector, getkey, dim=total_dim, num_batches=10)
+    _test_soc_projector(dims, num_batches, getkey)

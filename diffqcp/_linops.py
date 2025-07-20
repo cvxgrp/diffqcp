@@ -6,7 +6,7 @@ were true atoms implemented in `lineax`.
 """
 
 import numpy as np
-from jax import ShapeDtypeStruct, eval_shape
+from jax import ShapeDtypeStruct, eval_shape, vmap
 import jax.numpy as jnp
 import lineax as lx
 import equinox as eqx
@@ -32,7 +32,7 @@ def _ScalarOperator(alpha: float) -> lx.AbstractLinearOperator:
     return alpha * lx.IdentityLinearOperator(eval_shape(lambda: jnp.arange(1.0)))
 
 
-class _BlockOperator(lx.AbstractLinearOperator):
+class _BlockLinearOperator(lx.AbstractLinearOperator):
     """Represents a block matrix (without explicitly forming zeros).
 
     TODO(quill): Support operating on PyTrees (clearly the way I handle `input_structure`
@@ -49,8 +49,8 @@ class _BlockOperator(lx.AbstractLinearOperator):
     #   suggested approach: https://github.com/patrick-kidger/equinox/issues/154.
     #   (It is worth noting that `lineax` itself does use explicit static declarations, such as
     #       in `PyTreeLinearOperator`.)
-    # split_indices: Integer[list, "..."]
-    split_indices: Integer[list, "..."] = eqx.field(static=True)
+    # split_indices: list[int]
+    split_indices: list[int] = eqx.field(static=True)
 
     def __init__(
         self,
@@ -63,24 +63,26 @@ class _BlockOperator(lx.AbstractLinearOperator):
         """
         self.blocks = blocks
         self.num_blocks = len(blocks)
+
         self._in_sizes = [block.in_size() for block in self.blocks]
         self._out_sizes = [block.out_size() for block in self.blocks]
         # NOTE(quill): `int(idx)` is needed else `eqx.filter_{...}` doesn't filter out these indices
         #   (Since I've declared `split_indices` as static this isn't necessary, but there's no true cost
         #       to keeping.)
-        print("blocks: ", self.blocks) # DEBUG
-        print("self._in_sizes", self._in_sizes) # DEBUG
         self.split_indices = _to_int_list(np.cumsum(self._in_sizes[:-1]))
-        print("split indices: ", self.split_indices) # DEBUG
     
     def mv(self, x):
-        print("split indices in `mv`: ", self.split_indices)
-        print("x shape: ", jnp.shape(x)) # TODO(quill): failing when `x shape:  (10, 55)`
-        # NOTE(quill): probably need to handle this similarly to how the Jacobian operators are handled?
-        #   -> see note at top of `cones/canonical.py`
-        chunks = jnp.split(x, self.split_indices)
+        # The following short-circuits the graph, but that's fine for `diffqcp` purposes
+        n_dim = jnp.ndim(x)
+        if n_dim == 2:
+            chunks = jnp.split(x, self.split_indices, axis=1)
+        else:    
+            chunks = jnp.split(x, self.split_indices)
         results = [op.mv(xi) for op, xi in zip(self.blocks, chunks)]
-        return jnp.concatenate(results)
+        if n_dim == 2:
+            return jnp.column_stack(results)
+        else:
+            return jnp.concatenate(results)
     
     def as_matrix(self):
         """uses output dtype
@@ -97,39 +99,49 @@ class _BlockOperator(lx.AbstractLinearOperator):
             m += mi
 
     def transpose(self):
-        return _BlockOperator([block.T for block in self.blocks])
+        return _BlockLinearOperator([block.T for block in self.blocks])
     
     def in_structure(self):
-        return ShapeDtypeStruct(shape=(self.in_size(),), dtype=self.blocks[0].in_structure().dtype)
+        if len(self.blocks[0].in_structure().shape) == 2:
+            num_batches = self.blocks[0].in_structure().shape[0]
+            idx = 1
+        else:
+            num_batches = 0
+            idx = 0
+        in_size = 0
+        for block in self.blocks:
+            in_size += block.in_structure().shape[idx]
+        dtype = self.blocks[0].in_structure().dtype
+        in_shape = (num_batches, in_size) if num_batches > 0 else (in_size,)
+        return ShapeDtypeStruct(shape=in_shape, dtype=dtype)
 
     def out_structure(self):
-        return ShapeDtypeStruct(shape=(self.out_size(),), dtype=self.blocks[0].out_structure().dtype)
+        if len(self.blocks[0].out_structure().shape) == 2:
+            num_batches = self.blocks[0].out_structure().shape[0]
+            idx = 1
+        else:
+            num_batches = 0
+            idx = 0
+        out_size = 0
+        for block in self.blocks:
+            out_size += block.out_structure().shape[idx]
+        dtype = self.blocks[0].out_structure().dtype
+        in_shape = (num_batches, out_size) if num_batches > 0 else (out_size,)
+        return ShapeDtypeStruct(shape=in_shape, dtype=dtype)
     
-    def in_size(self) -> int:
-        return sum(self._in_sizes)
-
-    def out_size(self) -> int:
-        return sum(self._out_sizes)
-    
-@lx.is_symmetric.register(_BlockOperator)
+@lx.is_symmetric.register(_BlockLinearOperator)
 def _(op):
     return all(lx.is_symmetric(block) for block in op.blocks)
 
 
+# TODO(quill): delete the following
 def _to_2D_symmetric_psd_func_op(A: lx.AbstractLinearOperator, v: Float[Array, "B n"]) -> lx.FunctionLinearOperator:
     """Collapse a batch of 2D operators.
 
     Helper function that takes a batch of AbstractLinearOperators that map 1D Arrays to 1D Arrays
     and wraps it in a `FunctionLinearOperator` so that
 
-    TODO(quill): finish docstring
-    NOTE / TODO (quill): This function does not currently work when `MatrixLinearOperator`s
-    are stacked on top of one another (see the NOTE in `jax_transform_playground.py`).
-    I'm unsure if this method will also fail on other linops, but I'm assuming it will.
-    For the `MatrixLinearOperator` the problem is that its `mv` definition uses `jnp.matmul`, so
-    when a batch of vectors is supplied to the function, a batch of matrix-matrix multiplications
-    are performed (as opposed to applying each matrix operator to a single vector). I need to consider
-    how I can specify to only apply `mv` to a single vector at a time.
+    Helper function that accepts 
     
     Parameters
     ----------
@@ -139,18 +151,31 @@ def _to_2D_symmetric_psd_func_op(A: lx.AbstractLinearOperator, v: Float[Array, "
     """
     
     in_shape = jnp.shape(v)
-    v_dim = len(in_shape)
+    v_dim = jnp.ndim(v)
 
     if v_dim != 2:
         raise ValueError("`_to_2D_symmetric_psd_func_op` is meant to wrap around"
                          + " linear operators that map from 2D arrays to 2D arrays"
                          + " but the provided vector the operator supposedly operates"
                          + f" on is {v_dim}D.")
-
-    def mv(dx: Float[Array, " Bn"]):
-        dx = jnp.reshape(dx, jnp.shape(v))
-        out = A.mv(dx)
-        return jnp.ravel(out)
     
+    def mv(dx: Float[Array, "*batch Bn"]):
+        dx_dim = jnp.ndim(dx)
+        if dx_dim == 2:
+            # in this case the first dimension is batch dimension
+            #   should reshape to be (batch, B, n)
+            dx_shape = jnp.shape(dx)
+            dx = jnp.reshape(dx, (dx_shape[0], in_shape[0], in_shape[1]))
+            out = A.mv(dx)
+            return jnp.reshape(out, dx_shape)
+        elif dx_dim == 1:
+            dx = jnp.reshape(dx, in_shape)
+            out = A.mv(dx)
+            return jnp.ravel(out)
+        else:
+            raise ValueError("The functional linear operator that wraps around"
+                             + " batched SOC Jacobians espects a 1D or 2D input"
+                             + f" perturbation, but receieved a {dx_dim}D input.")
+            
     in_structure = ShapeDtypeStruct(shape=(in_shape[0]*in_shape[1],), dtype=v.dtype)
     return lx.FunctionLinearOperator(mv, input_structure=in_structure, tags=[lx.symmetric_tag, lx.positive_semidefinite_tag])

@@ -15,7 +15,7 @@ def _test_dproj_finite_diffs(
     if num_batches > 0:
         x = jr.normal(key_func(), (num_batches, dim))
         dx = jr.normal(key_func(), (num_batches, dim))
-        _projector = jit(vmap(projection_func))
+        _projector = jit(vmap(projection_func)) # NOTE(quill): `jit` slows things down; just checking if it works
     else:
         x = jr.normal(key_func(), dim)
         dx = jr.normal(key_func(), dim)
@@ -28,7 +28,8 @@ def _test_dproj_finite_diffs(
     
     dproj_x_fd = proj_x_plus_dx - proj_x    
     dproj_x_dx = dproj_x.mv(dx)
-
+    assert dproj_x_dx is not None
+    assert dproj_x_fd is not None
     assert tree_allclose(dproj_x_dx, dproj_x_fd)
     
 
@@ -136,6 +137,36 @@ def test_soc_projector(getkey):
 
         proj_x, _ = soc_projector(x_jnp)
         # assert tree_allclose(proj_x, z_star_jnp)
+        # _test_dproj_finite_diffs(soc_projector, getkey, dim=total_dim, num_batches=0)
+        print("=== BATCHED ===") # DEBUG
+        _test_dproj_finite_diffs(_soc_projector, getkey, dim=total_dim, num_batches=10)
+
+def test_soc_projector_hard(getkey):
+    dims = [5, 5, 5, 3, 3, 4, 5, 2, 2]
+    total_dim = sum(dims)
+    num_batches = 10
+
+    _soc_projector = cone_lib.SecondOrderConeProjector(dims=dims)
+    soc_projector = jit(_soc_projector)
+    
+    for _ in range(15):
+        x_jnp = jr.normal(getkey(), total_dim)
+        # x_np = np.array(x_jnp)
+        # z = cvx.Variable(total_dim)
+        # z1, x1 = z[0:dims[0]], x_np[0:dims[0]]
+        # z2, x2 = z[dims[0]:dims[1]], x_np[dims[0]:dims[1]]
+        # z3, x3 = z[dims[1]:], x_np[dims[1]:]
+        # objective = cvx.Minimize(cvx.sum_squares(z1 - x1) + cvx.sum_squares(z2 - x2)
+        #                          + cvx.sum_squares(z3 - x3))
+        # constraints = [cvx.norm(z1[1:], 2) <= z1[0],
+        #                cvx.norm(z2[1:], 2) <= z2[0],
+        #                cvx.norm(z3[1:], 2) <= z3[0]]
+        # prob = cvx.Problem(objective, constraints)
+        # prob.solve(solver=cvx.SCS)
+        # z_star_jnp = jnp.array(z.value)
+
+        # proj_x, _ = soc_projector(x_jnp)
+        # assert tree_allclose(proj_x, z_star_jnp)
         _test_dproj_finite_diffs(soc_projector, getkey, dim=total_dim, num_batches=0)
         print("=== BATCHED ===") # DEBUG
-        _test_dproj_finite_diffs(_soc_projector, getkey, dim=total_dim, num_batches=num_batches)
+        _test_dproj_finite_diffs(_soc_projector, getkey, dim=total_dim, num_batches=10)

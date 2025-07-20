@@ -1,8 +1,10 @@
+from jax import vmap
+import jax.numpy as jnp
 import equinox as eqx
 from jaxtyping import Float, Array
 from jax.experimental.sparse import BCOO, BCSR
 
-from diffqcp.cones.canonical import AbstractConeProjector
+from diffqcp.cones.canonical import ProductConeProjector
 # TODO(quill): provide helpers to convert problem data?
 
 class QCP(eqx.Module):
@@ -31,14 +33,11 @@ class QCP(eqx.Module):
     y: Float[Array, "*batch m"]
     s: Float[Array, "*batch m"]
 
-    # cones: dict[str, int | list[int] | list[float]] # NOTE(quill): don't need since just store projector?
-    # TODO(quill): need to pass in dtype or device?
-    # cone_projector: AbstractConeProjector
-    cone_projector: AbstractConeProjector
-    n: int
-    m : int
-    N: int
-    is_batched: bool
+    cone_projector: ProductConeProjector
+    n: int = eqx.field(static=True)
+    m : int = eqx.field(static=True)
+    N: int = eqx.field(static=True)
+    is_batched: bool = eqx.field(static=True)
 
     def __init__(
         self,
@@ -57,14 +56,14 @@ class QCP(eqx.Module):
         # === dimensionality checks ===
 
         P_shape = P.shape
-        P_num_dims = len(P_shape)
+        P_num_dims = jnp.ndim(P)
         if P_num_dims == 2:
             self.is_batched = False
             self.n = P_shape[0]
             # TODO(quill): add check(s) on `P`?
             #   e.g., full (i.e., not upper triangular), symmetric
-            #   Also, this `__init__` will be run each time...so
-            #   consider what's critical. Can always create a helper
+            #   Also, this `__init__` will be run each time in a learning loop
+            #   ...so consider what's critical. Can always create a helper
             #   function to run on the data before creating a `QCP`
             #   the first time.
         elif P_num_dims == 3:
@@ -76,19 +75,19 @@ class QCP(eqx.Module):
                              + f" is a {P_num_dims}D array.")
         
         A_shape = A.shape
-        A_num_dims = len(A_shape)
+        A_num_dims = jnp.ndim(A)
+
         if A_num_dims != P_num_dims:
             raise ValueError("The constraint matrix `A` must have the"
                              + " same dimensionality as the quadratic objective"
                              + f" matrix `P`, however `P` is a {P_num_dims}D"
                              + f" array while `A` is a {A_num_dims}D array.")
         self.A = A
-        self.m = A_shape
+        self.m = A_shape[1] if self.is_batched else A_shape[0]
         self.N = self.n + self.m + 1
         
-        
         q_shape = q.shape
-        q_num_dims = len(q_shape)
+        q_num_dims = jnp.ndim(q_shape)
         if q_num_dims != P_num_dims - 1:
             raise ValueError("Since the quadratic objective matrix `P`"
                              + f" is a {P_num_dims}D array, `q` must"
@@ -99,7 +98,10 @@ class QCP(eqx.Module):
 
         # === dtype checks ===
 
-        # === create cone module ===
+        _cone_projector = ProductConeProjector(cones)
+        self.cone_projector = vmap(_cone_projector) if self.is_batched else _cone_projector
+
+
     
     def _form_atoms(
         self

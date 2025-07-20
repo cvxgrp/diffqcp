@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import jax.random as jr
 import lineax as lx
 
-from diffqcp._linops import _ZeroOperator, _ScalarOperator, _BlockOperator
+from diffqcp._linops import _ZeroOperator, _ScalarOperator, _BlockLinearOperator
 
 from .helpers import tree_allclose
 
@@ -70,7 +70,7 @@ def test_block_operator(getkey):
     op3 = lx.FunctionLinearOperator(_fn, input_structure=jax.eval_shape(in_struc_fn))
     op4 = _ScalarOperator(1.5)
     ops = [op1, op2, op3, op4]
-    block_op = _BlockOperator(ops)
+    block_op = _BlockLinearOperator(ops)
 
     in_dim = out_dim = 2 * n + m + 1
     assert block_op.in_size() == in_dim

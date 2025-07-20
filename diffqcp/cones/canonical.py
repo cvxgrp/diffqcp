@@ -25,11 +25,10 @@ import jax.numpy.linalg as jla
 import lineax as lx
 from lineax import AbstractLinearOperator
 import equinox as eqx
-from equinox import AbstractVar
 from abc import abstractmethod
 from jaxtyping import Array, Float
 
-from diffqcp._linops import _BlockOperator, _to_2D_symmetric_psd_func_op
+from diffqcp._linops import _BlockLinearOperator
 
 # TODO(quill): determine if we want to make these public--easier to work with the "magic keys"
 #   -> consequential action item: remove the prepended underscore.
@@ -137,13 +136,12 @@ class _ZeroConeProjectorJacobian(lx.AbstractLinearOperator):
         raise NotImplementedError("`_ZeroConeProjectorJacobian`'s `as_matrix` method is"
                              + " yet implemented.")
 
-    def transpose(self):
+    def transpose(self) -> lx.AbstractLinearOperator:
         # NOTE(quill): while the projector is not self-dual, the Jacobian of the
         #   projection in either case is symmetric.
         return self
 
     def in_structure(self):
-        # return self.shape_dtype
         return jax.eval_shape(lambda: self.x)
     
     def out_structure(self):
@@ -208,25 +206,22 @@ class _ProjSecondOrderConeJacobian(lx.AbstractLinearOperator):
     z: Float[Array, " *B n-1"]
     unit_z: Float[Array, "*B n-1"]
     norm_z: Float[Array, ""]
-    # NOTE(quill): creating the following to avoid unecessary recomputation.
-    #   However, it does raise the warning: "A JAX array is being set as static!
-    #   This can result in unexpected behavior and is usually a mistake to do.",
-    #   which is rather annoying, so perhaps refactor this.
-    original_point: Float[Array, "n"] = eqx.field(static=True)
+    x: Float[Array, "*B n"]
+    # _shape_dtype: jax.ShapeDtypeStruct = eqx.field(static=True)
+    # _ndim: int = eqx.field(static=True)
 
     def __init__(
-        self, t: Float[Array, "*B 1"], z: Float[Array, " *B n-1"], unit_z: Float[Array, "*B n-1"], norm_z: Float[Array, ""]
+        self, t: Float[Array, "*B 1"], z: Float[Array, " *B n-1"], unit_z: Float[Array, "*B n-1"], norm_z: Float[Array, ""], x: Float[Array, "*B n"]
     ):
         self.t, self.z = t, z
         self.unit_z, self.norm_z = unit_z, norm_z
-        if len(jnp.shape(self.z)) == 1:
-            self.original_point = jnp.concatenate([jnp.array([self.t]), self.z])
-        else:
-            self.original_point = jnp.stack([self.t, self.z])
+        self.x = x
+        # self._shape_dtype = jax.eval_shape(lambda: x)
+        # self._ndim = jnp.ndim(x)
     
     def mv(self, dx: Float[Array, "*B n"]):
-        dx_num_dims = len(jnp.shape(dx))
-        z_num_dims = len(jnp.shape(self.z))
+        dx_num_dims = jnp.ndim(dx)
+        z_num_dims = jnp.ndim(self.z)
 
         if dx_num_dims != z_num_dims:
             raise ValueError("Dimension mismatch between the supplied vector `dx`"
@@ -237,8 +232,11 @@ class _ProjSecondOrderConeJacobian(lx.AbstractLinearOperator):
             return _soc_jacobian_one_dimensional_mv(dx, self.t, self.z, self.unit_z, self.norm_z)
         elif dx_num_dims == 2:
             return jax.vmap(_soc_jacobian_one_dimensional_mv)(dx, self.t, self.z, self.unit_z, self.norm_z)
+        elif dx_num_dims == 3:
+            # third case is needed when we batch projections and have multiple SOCs with the same dimension
+            return jax.vmap(jax.vmap(_soc_jacobian_one_dimensional_mv))(dx, self.t, self.z, self.unit_z, self.norm_z)
         else:
-            raise ValueError(f"The vector `dx` must be 1D or 2D. The supplied vector is {dx}D.")
+            raise ValueError(f"The vector `dx` must be 1D or 2D. The supplied vector is {dx_num_dims}D.")
 
     def as_matrix(self):
         raise NotImplementedError("`_ProjSecondOrderConeJacobian`'s `as_matrix` is not implemented.")
@@ -247,15 +245,78 @@ class _ProjSecondOrderConeJacobian(lx.AbstractLinearOperator):
         return self
     
     def in_structure(self):
-        return jax.eval_shape(lambda: self.original_point)
+        return jax.eval_shape(lambda: self.x)
     
     def out_structure(self):
+        # symmetric
         return self.in_structure()
     
 @lx.is_symmetric.register(_ProjSecondOrderConeJacobian)
 def _(op):
     return True
     
+
+class _BatchedProjSecondOrderJacobian(lx.AbstractLinearOperator):
+    
+    batched_jacobians: _ProjSecondOrderConeJacobian
+    original_point: Float[Array, "*batch Bn"]
+    original_point_two_d_shape: tuple[int, int] = eqx.field(static=True)
+
+    def __init__(
+        self, batched_jacobians: _ProjSecondOrderConeJacobian, original_point: Float[Array, "*batch Bn"]
+    ):
+        self.batched_jacobians = batched_jacobians
+        self.original_point = original_point
+        self.original_point_two_d_shape = jnp.shape(original_point)
+        
+    def mv(self, dx: Float[Array, "*batch Bn"]) -> Float[Array, "*batch Bn"]:
+        dx_dim = jnp.ndim(dx)
+        if dx_dim == 2:
+            # `jnp.ndim(original_point)` should equal 3
+            # in this case the first dimension is batch dimension
+            #   should reshape to be (batch, B, n)
+            dx_shape = jnp.shape(dx)
+            dx = jnp.reshape(dx, (dx_shape[0],
+                                  self.original_point_two_d_shape[0],
+                                  self.original_point_two_d_shape[1]))
+            out = self.batched_jacobians.mv(dx)
+            return jnp.reshape(out, dx_shape)
+        elif dx_dim == 1:
+            dx = jnp.reshape(dx, self.original_point_two_d_shape)
+            out = self.batched_jacobians.mv(dx)
+            return jnp.ravel(out)
+        else:
+            raise ValueError("The functional linear operator that wraps around"
+                             + " batched SOC Jacobians espects a 1D or 2D input"
+                             + f" perturbation, but receieved a {dx_dim}D input.")
+        
+    def as_matrix(self):
+        raise NotImplementedError("`_BatchedProjSecondOrderJacobian`'s `as_matrix` method is"
+                             + " yet implemented.")
+    
+    def transpose(self) -> lx.AbstractLinearOperator:
+        return self
+    
+    def in_structure(self):
+        curr_shape_dtype = jax.eval_shape(lambda: self.original_point)
+        curr_shape = curr_shape_dtype.shape
+        curr_dtype = curr_shape_dtype.dtype
+        if len(curr_shape_dtype.shape) == 3:
+            return jax.ShapeDtypeStruct(shape=(curr_shape[0],
+                                               curr_shape[1]* curr_shape[2]),
+                                        dtype=curr_dtype)
+        else:
+            # Making the assumption no error elsewhere...
+            return jax.ShapeDtypeStruct(shape=(curr_shape[0]*curr_shape[1],),
+                                        dtype=curr_dtype)
+    
+    def out_structure(self):
+        return self.in_structure()
+    
+@lx.is_symmetric.register(_BatchedProjSecondOrderJacobian)
+def _(op):
+    return True
+
 
 class _SecondOrderConeProjector(AbstractConeProjector):
     dim: int # TODO(quill): determine if to use static or not
@@ -273,7 +334,7 @@ class _SecondOrderConeProjector(AbstractConeProjector):
         t, z = x[0], x[1:]
         norm_z = jnp.maximum(jla.norm(z), EPS) # safe norm
         unit_z = z / norm_z
-        dproj_x = _ProjSecondOrderConeJacobian(t, z, unit_z, norm_z)
+        dproj_x = _ProjSecondOrderConeJacobian(t, z, unit_z, norm_z, x)
 
         def identity_case():
             return x
@@ -294,8 +355,8 @@ class _SecondOrderConeProjector(AbstractConeProjector):
 
 
 class SecondOrderConeProjector(AbstractConeProjector):
-    dims: list[int]
-    dims_batches: list[tuple[int, int]]
+    dims: list[int] = eqx.field(static=True)
+    dims_batches: list[tuple[int, int]] = eqx.field(static=True)
     projectors: list[_SecondOrderConeProjector]
 
     def __init__(self, dims: list[int]):
@@ -304,9 +365,10 @@ class SecondOrderConeProjector(AbstractConeProjector):
         self.dims_batches = _collect_cone_batch_info(_group_cones_in_order(dims))
         self.projectors = [_SecondOrderConeProjector(dim=dim_batch[0]) for dim_batch in self.dims_batches]
     
-    def proj_dproj(self, x: Float[Array, "*B _d"]) -> tuple[Float[Array, "*B _d"], AbstractLinearOperator]:
+    def proj_dproj(self, x: Float[Array, "*B n"]) -> tuple[Float[Array, "*B n"], AbstractLinearOperator]:
         projs, dproj_ops = [], []
         start_idx = 0
+        # NOTE(quill): the following should be unrolled when (JIT) compiled
         for i, dim_batch in enumerate(self.dims_batches):
             projector = self.projectors[i]
             dim = dim_batch[0]
@@ -316,26 +378,43 @@ class SecondOrderConeProjector(AbstractConeProjector):
             if num_batches == 1:
                 proj_x, dproj_x = projector(xi)
             else:
+                # TODO(quill): ensure this is ordering xi the correct way
                 xi = jnp.reshape(xi, (num_batches, dim))
                 proj_xi, dproj_xi = jax.vmap(projector)(xi)
                 proj_x = jnp.ravel(proj_xi)
-                dproj_x = _to_2D_symmetric_psd_func_op(dproj_xi, xi)
+                dproj_x = _BatchedProjSecondOrderJacobian(dproj_xi, xi)
             projs.append(proj_x)
             dproj_ops.append(dproj_x)
             start_idx += slice_size
         
-        return jnp.concatenate(projs), _BlockOperator(dproj_ops)
+        return jnp.concatenate(projs), _BlockLinearOperator(dproj_ops)
         
             
 class ProductConeProjector(AbstractConeProjector):
-    pass
+    projectors: list[AbstractConeProjector]
+    onto_dual: bool = eqx.field(static=True)
+    
+    def __init__(self, cones: dict[str, int | list[int] | list[float]], onto_dual: bool=False):
+        cones_list = _parse_cone_dict(cones)
+        # TODO(quill): perform logic here to separate out cones and collect total dimensions
 
-
-def _construct_product_cone(
-    cones: dict[str, int | list[int] | list[float]],
-    dual: bool = False
-) -> AbstractConeProjector:
-    pass
+    def proj_dproj(self, x):
+        projs, dproj_ops = [], []
+        start_idx = 0
+        # NOTE(quill): better to use jnp.split approach?
+        for i, dim in enumerate(self.dims):
+            projector = self.projectors[i]
+            xi = x[start_idx:start_idx+dim]
+            proj_xi, dproj_xi = projector(xi)
+            projs.append(proj_xi)
+            dproj_ops.append(dproj_xi)
+            start_idx += dim
+        
+        # NOTE(quill): when `vmap`ping, the concatenation of `projs` will work
+        #   as desired, but the `mv` of `_BlockLinearOperator` now needs to know
+        #   how to handle 2D input AND the attributes (leaves) of the operator
+        #   now have a batch dimension.
+        return jnp.concatenate(projs), _BlockLinearOperator(dproj_ops)
 
 
 SecondOrderConeProjector.__init__.__doc__ = r"""

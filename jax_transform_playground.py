@@ -6,7 +6,7 @@ import jax.numpy.linalg as la
 import lineax as lx
 import equinox as eqx
 from jaxtyping import Array, Float, PyTree
-from diffqcp._linops import _BlockOperator, _to_2D_symmetric_psd_func_op
+from diffqcp._linops import _BlockLinearOperator, _to_2D_symmetric_psd_func_op
 
 def tree_allclose(x, y, *, rtol=1e-5, atol=1e-8):
     return eqx.tree_equal(x, y, typematch=True, rtol=rtol, atol=atol)
@@ -100,7 +100,7 @@ print("Batched ops: ", Dprojs)
 print("Batched jvp: ", Dprojs.mv(dps))
 
 ops = [lx.MatrixLinearOperator(jnp.eye(3)), lx.MatrixLinearOperator(2 * jnp.eye(2))]
-block_op = _BlockOperator(ops)
+block_op = _BlockLinearOperator(ops)
 
 def _some_op(linop, vec):
     return linop.mv(vec) + la.norm(vec)**2

@@ -1,6 +1,7 @@
 from jax import vmap
 import jax.numpy as jnp
 import equinox as eqx
+from lineax import AbstractLinearSolver, AbstractLinearOperator
 from jaxtyping import Float, Array
 from jax.experimental.sparse import BCOO, BCSR
 
@@ -99,6 +100,7 @@ class QCP(eqx.Module):
         # === dtype checks ===
 
         _cone_projector = ProductConeProjector(cones)
+        # TODO(quill): the following makes the projector a `Callable`
         self.cone_projector = vmap(_cone_projector) if self.is_batched else _cone_projector
 
 

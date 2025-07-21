@@ -15,7 +15,10 @@ def _test_dproj_finite_diffs(
     if num_batches > 0:
         x = jr.normal(key_func(), (num_batches, dim))
         dx = jr.normal(key_func(), (num_batches, dim))
-        _projector = jit(vmap(projection_func)) # NOTE(quill): `jit` slows things down; just checking if it works
+        # NOTE(quill): `jit`ing the following slows the check down
+        #   since this is called in a loop, so we end up `jit`ing multiple times.
+        #   Just doing it here to ensure it works.
+        _projector = jit(vmap(projection_func))
     else:
         x = jr.normal(key_func(), dim)
         dx = jr.normal(key_func(), dim)

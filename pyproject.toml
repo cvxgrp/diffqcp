@@ -1,7 +1,7 @@
 [project]
 name = "diffqcp"
 version = "0.1.0"
-description = "Add your description here"
+description = "Engine to compute Jacobian-vector and vector-Jacobian products for (convex) quadratic cone programs."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -12,6 +12,9 @@ dependencies = [
     "numpy>=2.3.1",
     "scipy>=1.15.3",
 ]
+
+[tool.uv.sources]
+lineax = { git = "https://github.com/patrick-kidger/lineax.git" }
 
 [dependency-groups]
 dev = [

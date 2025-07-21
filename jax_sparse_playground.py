@@ -11,14 +11,15 @@ def tree_allclose(x, y, *, rtol=1e-5, atol=1e-8):
 
 
 # Parameters
-m, n = 25, 25
+m, n = 25, 30
 num_trials = 500
 density = 0.05
 
 # Generate random sparse matrix and vector
 rng = np.random.default_rng(123)
-A = sp.random(m, n, density=density, format="csr", random_state=rng)
-A = A.toarray()
+Asp = sp.random(m, n, density=density, format="csr", random_state=rng)
+print("`A` as a sparse array has sorted indices (T/F): ", Asp.has_sorted_indices)
+A = Asp.toarray()
 B = sp.random(m, n, density=density, format="csr", random_state=rng)
 B = B.toarray()
 C = sp.random(m, n, density=density, format="csr", random_state=rng)
@@ -29,6 +30,7 @@ cpu_device = jax.devices("cpu")[0]
 A = jax.device_put(A, device=cpu_device)
 A_coo = jsparse.BCOO.fromdense(A)
 A_csr = jsparse.BCSR.fromdense(A)
+print("`A_csr` as a JAX BCSR has sorted indices (T/F):", A_csr.unique_indices)
 B = jax.device_put(B, device=cpu_device)
 B_coo = jsparse.BCOO.fromdense(B)
 B_csr = jsparse.BCSR.fromdense(B)
@@ -76,7 +78,9 @@ assert tree_allclose(A_dense_result, batched_csr_result[0])
 assert tree_allclose(B_dense_result, batched_csr_result[1])
 assert tree_allclose(C_dense_result, batched_csr_result[2])
 
-# A_coo.transpose() # this works
+A_coo_T = A_coo.transpose() # this works
+print("COO transpose type: ", A_coo_T)
+breakpoint()
 # A_csr.transpose() # not implemented
 
 # === now test when x has a batch dimension ===

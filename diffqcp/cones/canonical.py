@@ -4,7 +4,7 @@ NOTE(quill): Main tech debt
 - Not implementing `as_matrix` for the Jacobian Operators
 
 NOTE(quill): Design patterns/decisions
-- Trying to follow the abstract/final pattern, as described here: https://docs.kidger.site/equinox/pattern/
+- Trying to follow the abstract/final pattern as described here: https://docs.kidger.site/equinox/pattern/
 - The `mv` methods of the projector Jacobians needed to handle the case where their defining data is
     2D as this occurs when `vmap`ing the `proj_dproj` of instantiations of `AbstractConeProjector`s.
     (Remembering that `eqx.Module`s are PyTrees, and unless otherwise specified by `out_axes` in

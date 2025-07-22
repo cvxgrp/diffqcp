@@ -22,7 +22,7 @@ class _DuQAdjoint(AbstractLinearOperator):
     def mv(self, vector):
         pass
 
-    def transpose(self) -> _Du_Q:
+    def transpose(self) -> _DuQ:
         pass
 
 
@@ -54,7 +54,8 @@ class _DuQ(AbstractLinearOperator):
         pass
 
     def mv(self, du: Float[Array, "*batch n+m+1"]):
-        dx, dy, dtau = du[]
+        # dx, dy, dtau = du[]
+        pass
     
     def transpose(self) -> _DuQAdjoint:
         pass

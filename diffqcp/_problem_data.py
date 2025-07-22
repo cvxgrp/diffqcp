@@ -1,12 +1,14 @@
+from __future__ import annotations
 from abc import abstractmethod
 
 import jax.numpy as jnp
 from jax.experimental.sparse import BCOO, BCSR
 import equinox as eqx
 from lineax import AbstractLinearOperator, AbstractLinearSolver, LSMR
-from jaxtyping import Float, Array
+from jaxtyping import Float, Integer, Array
 
 from diffqcp.cones.canonical import ProductConeProjector
+from diffqcp._helpers import _coo_to_csr_transpose_map, _TransposeCSRInfo
 
 class QCPStructure(eqx.Module):
     cone_projector: ProductConeProjector
@@ -36,9 +38,17 @@ class QCPStructureGPU(eqx.Module):
     """
 
     cone_projector: ProductConeProjector
-    # transpose_info_A
-    P_nonzero_indices
-    A_nonzero_indices
+    
+    P_csr_indices = Integer[Array, "..."]
+    P_csr_indptr = Integer[Array, "..."]
+    P_nonzero_rows = Integer[Array, "..."]
+    P_nonzero_cols = Integer[Array, "..."]
+    
+    A_csr_indices = Integer[Array, "..."]
+    A_csr_indptr = Integer[Array, "..."]
+    A_nonzero_rows = Integer[Array, "..."]
+    A_nonzero_cols = Integer[Array, "..."]
+    A_transpose_info = _TransposeCSRInfo
 
     def __init__(
         self, P: Float[BCSR, "*batch n n"], A: Float[BCSR, "*batch m n"]
@@ -72,25 +82,39 @@ class QCPStructureGPU(eqx.Module):
         P_coo = P.to_bcoo()
         # NOTE(quill): the following assumption is needed for the following
         #   manipulation to result in accurate metadata.
+        #   If this error occurs more frequently than not, then it will probably
+        #   be worth canonicalizing the data matrices by default.
         if P_coo.data != P.data:
             raise ValueError("The ordering of the data in `P_coo` and `P`"
                              + " (a BCSR matrix) does not match."
                              + " Please try to coerce `P` into canonical form.")
-        P_original_nnz = P_coo.data
-        assert P_original_nnz == P_coo.nse # NOTE(quill): just doing for my own experimentation.
-        # --- the following computations are removing explicit zeros ---
-        nonzero_mask = P_coo.data != 0
-        # indices have shape (nse, 2)
-        nonzero_indices = P_coo.indices[nonzero_mask, :]
-        nonzero_values = P_coo.data[nonzero_mask]
-        P_filtered_nnz = jnp.size(nonzero_values)
-        assert P_filtered_nnz <= P_original_nnz
-        rows, cols = nonzero_indices[:, 0], nonzero_indices[:, 1]
-        P_coo_clean = BCOO((nonzero_values, nonzero_indices), shape=P_coo.shape).su
-        P.sum
-        pass
+        
+        self.P_csr_indices = P.indices
+        self.P_csr_indptr = P.indptr
+        
+        self.P_nonzero_rows  = P_coo.indices[:, 0]
+        self.P_nonzero_cols = P_coo.indices[:, 1]
+        
 
+    def constr_matrix_init(self, A: Float[BCSR, "m n"]):
+        
+        num_rows, num_cols = A.shape[0], A.shape[1]
 
+        A_coo = A.to_bcoo()
+        # NOTE(quill): see note in `obj_matrix_init`
+        if A_coo.data != A.data:
+            raise ValueError("The ordering of the data in `A_coo` and `A`"
+                             + " (a BCSR matrix) does not match."
+                             + " Please try to coerce `A` into canonical form.")
+        
+        self.A_csr_indices = A.indices
+        self.A_csr_indptr = A.indptr
+        
+        self.A_nonzero_rows = A_coo.indices[:, 0]
+        self.A_nonzero_cols = A_coo.indices[:, 1]
+
+        # Create metadata for cheap transposes
+        self.A_transpose_info = _coo_to_csr_transpose_map(A_coo)
 
 
 class QCPStructureCPU(eqx.Module):

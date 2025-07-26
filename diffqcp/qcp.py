@@ -1,11 +1,14 @@
-from jax import vmap
+from jax import vmap, eval_shape
 import jax.numpy as jnp
 import equinox as eqx
-from lineax import AbstractLinearSolver, AbstractLinearOperator
+from lineax import AbstractLinearSolver, AbstractLinearOperator, IdentityLinearOperator
 from jaxtyping import Float, Array
 from jax.experimental.sparse import BCOO, BCSR
 
+from diffqcp._problem_data import QCPStructureCPU
 from diffqcp.cones.canonical import ProductConeProjector
+from diffqcp._linops import _BlockLinearOperator
+from diffqcp._qcp_derivs import _DuQ
 # TODO(quill): provide helpers to convert problem data?
 
 class QCP(eqx.Module):
@@ -25,6 +28,9 @@ class QCP(eqx.Module):
     where P, A, q, b are mutable problem data, K and K^* are
     immutable problem data, and (x, y, s) are the optimization
     variables.
+
+    Attributes
+    ----------
     """
     P: Float[Array | BCOO | BCSR, "*batch n n"]
     A: Float[Array | BCOO | BCSR, "*batch m n"]
@@ -103,35 +109,44 @@ class QCP(eqx.Module):
         # TODO(quill): the following makes the projector a `Callable`
         self.cone_projector = vmap(_cone_projector) if self.is_batched else _cone_projector
 
-
     
-    def _form_atoms(
-        self
-    ):
-        pass
-
-    def _form_atoms_batched(
-        self
-    ):
-        # NOTE(quill): return matrix operator?
+    def _compute_atoms(self):
         pass
     
     def jvp(
         self,
-        dP: Float[Array | BCOO | BCSR, "*batch n n"],
-        dA: Float[Array | BCOO | BCSR, "*batch m n"],
-        dq: Float[Array, "*batch n"],
-        db: Float[Array, "*batch m"]
+        dP: Float[Array | BCOO | BCSR, "n n"],
+        dA: Float[Array | BCOO | BCSR, "m n"],
+        dq: Float[Array, " n"],
+        db: Float[Array, " m"]
     ):
-        # TODO(quill): return a `PyTree` or a `tuple`?
-        # TODO(quill): should be a pure function / can be jited, vmaped, autodiffed, etc.
-        pass
+        proj_kstar_v, dproj_kstar_v = self.cone_projector(self.y - self.s) # so this needs to know if batched
+        pi_z = jnp.concatenate([self.x, proj_kstar_v, jnp.array([1.0], dtype=self.x.dtype)]) # what if x is batched
+        dpi_z = _BlockLinearOperator([IdentityLinearOperator(eval_shape(lambda: self.x)),
+                                      dproj_kstar_v,
+                                      IdentityLinearOperator(eval_shape(lambda: jnp.array([1.0])))])
+        Px = self.P @ self.x
+        xTPx = self.x @ Px
+        AT = self.A.T
+        # NOTE(quill): seems hard to avoid the `DzQ` bit of the variable name.
+        # NOTE(quill): Note that we're skipping the step of extracting the first n components of
+        #   `pi_z` and just using `P @ pi_z[:n] = P @ x`. 
+        DzQ_pi_z = _DuQ(P=self.P, Px=Px, xTPx=xTPx, A=self.A, AT=AT, q=self.q,
+                        b=self.b, x=self.x, tau=jnp.array(1.0, dtype=self.x.dtype),
+                        n=self.problem_structure.n, m=self.problem_structure.m)
+        
+        # NOTE(quill): we use that z_N (as defined in paper) is always 1.0, thus don't
+        #   include that division.
+        F = DzQ_pi_z @ dpi_z - dpi_z + IdentityLinearOperator(eval_shape(lambda: pi_z))
+
+        # TODO(quill): we will not convert the perturbation data; add checks
+        
 
     def vjp(
         self,
-        dx: Float[Array, "*batch n"],
-        dy: Float[Array, "*batch m"],
-        ds: Float[Array, "*batch m"]
+        dx: Float[Array, " n"],
+        dy: Float[Array, " m"],
+        ds: Float[Array, " m"]
     ):
         # TODO(quill): return a `PyTree` or a tuple?
         # TODO(quill): should be a pure function / can be jited, vmaped, autodiffed, etc.

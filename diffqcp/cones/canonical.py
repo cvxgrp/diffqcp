@@ -271,7 +271,7 @@ class _BatchedProjSecondOrderJacobian(lx.AbstractLinearOperator):
         
     def as_matrix(self):
         raise NotImplementedError("`_BatchedProjSecondOrderJacobian`'s `as_matrix` method is"
-                             + " yet implemented.")
+                             + " not yet implemented.")
     
     def transpose(self) -> lx.AbstractLinearOperator:
         return self

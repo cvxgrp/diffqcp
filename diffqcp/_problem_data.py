@@ -35,20 +35,25 @@ class QCPStructure(eqx.Module):
 class QCPStructureGPU(eqx.Module):
     """
     P is assumed to be the full matrix
+
+    Whole class will be declared as `static` by `QCP` class
     """
 
     cone_projector: ProductConeProjector
+    # TODO(quill): include the cone projector and linear solver?
+    #   -> probably just continue developing and see if this decision is forced.
+    is_batched: bool
     
-    P_csr_indices = Integer[Array, "..."]
-    P_csr_indptr = Integer[Array, "..."]
-    P_nonzero_rows = Integer[Array, "..."]
-    P_nonzero_cols = Integer[Array, "..."]
+    P_csr_indices: Integer[Array, "..."]
+    P_csr_indptr: Integer[Array, "..."]
+    P_nonzero_rows: Integer[Array, "..."]
+    P_nonzero_cols: Integer[Array, "..."]
     
-    A_csr_indices = Integer[Array, "..."]
-    A_csr_indptr = Integer[Array, "..."]
-    A_nonzero_rows = Integer[Array, "..."]
-    A_nonzero_cols = Integer[Array, "..."]
-    A_transpose_info = _TransposeCSRInfo
+    A_csr_indices: Integer[Array, "..."]
+    A_csr_indptr: Integer[Array, "..."]
+    A_nonzero_rows: Integer[Array, "..."]
+    A_nonzero_cols: Integer[Array, "..."]
+    A_transpose_info: _TransposeCSRInfo
 
     def __init__(
         self, P: Float[BCSR, "*batch n n"], A: Float[BCSR, "*batch m n"]
@@ -58,18 +63,34 @@ class QCPStructureGPU(eqx.Module):
                              + f" but the provided `P` is a {type(P)}.")
         # check if batched
         if P.n_batch == 0:
+            self.is_batched = False
             self.obj_matrix_init(P)
         elif P.n_batch == 1:
+            self.is_batched = True
             # Extract information from first matrix in the batch.
             # Strict requirement is that all matrices in the batch share
             # the same sparsity structure (holds via DPP, also maybe required by JAX?)
             self.obj_matrix_init(P[0])
         else:
-            raise ValueError("The objective matrix `P` must have at most one batch,"
+            raise ValueError("The objective matrix `P` must have at most one batch dimension,"
                              + f" but the provided BCSR matrix has {P.n_batch} dimensions.")
+        
         if not isinstance(A, BCSR):
             raise ValueError("The objective matrix `A` must be a `BCSR` JAX matrix,"
                              + f" but the provided `A` is a {type(A)}.")
+        
+        # NOTE(quill): could theoretically allow mismatch and broadcast
+        #   (Just to keep in mind for the future; not needed now.)
+        if A.n_batch != P.n_batch:
+            raise ValueError(f"The objective matrix `P` has {P.n_batch} dimensions"
+                             + f" while the constraint matrix `A` has {A.n_batch}"
+                             + " dimensions. The batch dimensionality of `P` and `A`"
+                             + " must match.")
+        
+        if self.is_batched:
+            self.constr_matrix_init(A[0])
+        else:
+            self.constr_matrix_init(A)
         
     def obj_matrix_init(self, P: Float[BCSR, "n n"]):
         """
@@ -97,8 +118,6 @@ class QCPStructureGPU(eqx.Module):
         
 
     def constr_matrix_init(self, A: Float[BCSR, "m n"]):
-        
-        num_rows, num_cols = A.shape[0], A.shape[1]
 
         A_coo = A.to_bcoo()
         # NOTE(quill): see note in `obj_matrix_init`
@@ -119,9 +138,58 @@ class QCPStructureGPU(eqx.Module):
 
 class QCPStructureCPU(eqx.Module):
     """
-    P is assumed to be <upper or lower> triangular
+    `P` is assumed to be the upper triangular part of the matrix in the quadratic form.
     """
-    pass
+    
+    cone_projector: ProductConeProjector
+    is_batched: bool
+
+    P_nonzero_rows: Integer[Array, "..."]
+    P_nonzero_cols: Integer[Array, "..."]
+
+    A_nonzero_rows: Integer[Array, "..."]
+    A_nonzero_cols: Integer[Array, "..."]
+
+    def __init__(
+        self, P: Float[BCOO, "*batch n n"], A: Float[BCOO, "*batch n n"]
+    ):
+        if not isinstance(P, BCOO):
+            raise ValueError("The objective matrix `P` must be a `BCOO` JAX matrix,"
+                             + f" but the provided `P` is a {type(P)}.")
+
+        # check if batched
+        if P.n_batch == 0:
+            self.is_batched = False
+            self.P_nonzero_rows = P.indices[:, 0]
+            self.P_nonzero_cols = P.indices[:, 1]
+        elif P.n_batch == 1:
+            self.is_batched = True
+            # Extract information from first matrix in the batch.
+            # Strict requirement is that all matrices in the batch share
+            # the same sparsity structure (holds via DPP, also maybe required by JAX?)
+            self.P_nonzero_rows = P[0].indices[:, 0]
+            self.P_nonzero_cols = P[0].indices[:, 1]
+        else:
+            raise ValueError("The objective matrix `P` must have at most one batch dimension,"
+                             + f" but the provided BCOO matrix has {P.n_batch} dimensions.")
+
+        if not isinstance(A, BCOO):
+            raise ValueError("The objective matrix `A` must be a `BCOO` JAX matrix,"
+                             + f" but the provided `A` is a {type(A)}.")
+        
+        # NOTE(quill): see note in `QCPStructureGPU`
+        if A.n_batch != P.n_batch:
+            raise ValueError(f"The objective matrix `P` has {P.n_batch} dimensions"
+                             + f" while the constraint matrix `A` has {A.n_batch}"
+                             + " dimensions. The batch dimensionality of `P` and `A`"
+                             + " must match.")
+        
+        if self.is_batched:
+            self.A_nonzero_rows = A[0].indices[:, 0]
+            self.A_nonzero_cols = A[0].indices[:, 1]
+        else:
+            self.A_nonzero_rows = A.indices[:, 0]
+            self.A_nonzero_cols = A.indices[:, 1]
 
 
 class ObjMatrix(AbstractLinearOperator):
@@ -136,7 +204,11 @@ class ObjMatrix(AbstractLinearOperator):
 class ObjMatrixCPU(ObjMatrix):
     P: Float[BCOO, "*batch n n"]
 
-    # def __init__(self, P:)
+    # def mv(self, vector):
+    #     if jnp.ndim(vector) == 1:
+    #         return self.P @ 
+
+    
 
 class ObjMatrixGPU(ObjMatrix):
     P: Float[BCSR, "*batch n n"]

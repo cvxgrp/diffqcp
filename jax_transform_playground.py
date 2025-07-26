@@ -6,7 +6,7 @@ import jax.numpy.linalg as la
 import lineax as lx
 import equinox as eqx
 from jaxtyping import Array, Float, PyTree
-from diffqcp._linops import _BlockLinearOperator, _to_2D_symmetric_psd_func_op
+from diffqcp._linops import _BlockLinearOperator
 
 def tree_allclose(x, y, *, rtol=1e-5, atol=1e-8):
     return eqx.tree_equal(x, y, typematch=True, rtol=rtol, atol=atol)
@@ -66,10 +66,6 @@ print("batched matrix ops: ", ops)
 print("batched matrix ops type: ", type(ops))
 print("batched matrix eval shape_dtype ", jax.eval_shape(ops.mv, jnp.arange(9).reshape((3, 3))))
 print("batched matrix eval shape ", jax.eval_shape(ops.mv, jnp.arange(9).reshape((3, 3))).shape)
-# NOTE(quill): error thrown on next line
-new_op = _to_2D_symmetric_psd_func_op(ops, jnp.reshape(jnp.arange(9), (3, 3)))
-# probably have to use `einsum` to make multiplications work.
-# print("new op mv", new_op.mv(jnp.arange(9)))
 print("batched matrix ops shape: ", ops.out_structure())
 
 

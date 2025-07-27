@@ -18,7 +18,9 @@ lineax = { git = "https://github.com/patrick-kidger/lineax.git" }
 
 [dependency-groups]
 dev = [
+    "cupy>=13.5.1",
     "cvxpy>=1.6.6",
+    "juliacall>=0.9.26",
     "patdb>=0.1.0",
     "pytest>=8.4.1",
     "ruff>=0.12.0",

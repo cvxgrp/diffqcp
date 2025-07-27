@@ -4,7 +4,7 @@ from abc import abstractmethod
 import jax.numpy as jnp
 from jax.experimental.sparse import BCOO, BCSR
 import equinox as eqx
-from lineax import AbstractLinearOperator, AbstractLinearSolver, LSMR
+from lineax import AbstractLinearOperator
 from jaxtyping import Float, Integer, Array
 
 from diffqcp.cones.canonical import ProductConeProjector
@@ -135,6 +135,9 @@ class QCPStructureGPU(eqx.Module):
         # Create metadata for cheap transposes
         self.A_transpose_info = _coo_to_csr_transpose_map(A_coo)
 
+    def form_A_transpose(self, A):
+        pass
+
 
 class QCPStructureCPU(eqx.Module):
     """
@@ -194,48 +197,35 @@ class QCPStructureCPU(eqx.Module):
 
 class ObjMatrix(AbstractLinearOperator):
     P: Float[Array | BCOO | BCSR, "*batch n n"] # TODO(quill): follows abstract/final?
-    is_batched: bool = eqx.field(static=True)
-
-    def __init__(self):
-        pass
 
 # NOTE(quill): are tags inherited?
 
 class ObjMatrixCPU(ObjMatrix):
-    P: Float[BCOO, "*batch n n"]
+    P: Float[BCOO, "n n"]
+    PT: Float[BCOO, "n n"]
+    diag: Float[BCOO, " n-1"]
 
-    # def mv(self, vector):
-    #     if jnp.ndim(vector) == 1:
-    #         return self.P @ 
-
+    def mv(self, vector):
+        return self.P @ vector + self.PT @ vector - self.diag*vector
     
+    def transpose(self):
+        return self
+    
+    def as_matrix(self):
+        raise NotImplementedError(f"{self.__class__.__name__}'s `as_matrix` method is"
+                                  + " not yet implemented.")
+    
+    def in_structure(self):
+        pass
+
+    def out_structure(self):
+        pass
+
 
 class ObjMatrixGPU(ObjMatrix):
-    P: Float[BCSR, "*batch n n"]
-
-# NOTE(quill): if dense then how to handle output of `vjp`
-
-class ObjMatrixDense(ObjMatrix):
-    P: Float[Array, "*batch n n"]
-
-    def __init__(self, P):
-        self.P = P
-
-    def mv(self, vec):
-        return self.P @ vec
-
-"""
-Ok, let's not overthink this.
-We can instantiate the object 
+    P: Float[BCSR, "n n"]
 
 
-Ooh, let's use that abstract/final pattern
-"""    
-
-
-class ConstrMatrix(AbstractLinearOperator):
-    A: Float[Array | BCOO | BCSR, "*batch m n"]
-
-    def __init__(self):
-        pass
+    def mv(self, vector):
+        return self.P @ vector
 

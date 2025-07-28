@@ -1,9 +1,11 @@
 from __future__ import annotations
 from abc import abstractmethod
 
+from jax import ShapeDtypeStruct
 import jax.numpy as jnp
 from jax.experimental.sparse import BCOO, BCSR
 import equinox as eqx
+import lineax as lx
 from lineax import AbstractLinearOperator
 from jaxtyping import Float, Integer, Bool, Array
 
@@ -229,17 +231,23 @@ class QCPStructureGPU(QCPStructure):
                      self.A_transpose_info.indptr),
                      shape=(self.n, self.m))
 
-
-class ObjMatrix(AbstractLinearOperator):
-    P: Float[Array | BCOO | BCSR, "*batch n n"] # TODO(quill): follows abstract/final?
-
-# NOTE(quill): are tags inherited?
-
-class ObjMatrixCPU(ObjMatrix):
+class ObjMatrixCPU(AbstractLinearOperator):
     P: Float[BCOO, "n n"]
     PT: Float[BCOO, "n n"]
     diag: Float[BCOO, " n"]
+    in_struc: ShapeDtypeStruct = eqx.field(static=True)
 
+    def __init__(
+        self,
+        P: Float[BCOO, "n n"],
+        PT: Float[BCOO, "n n"],
+        diag: Float[BCOO, " n"]
+    ):
+        self.P, self.PT, self.diag = P, PT, diag
+        n = jnp.shape(P)[0]
+        self.in_struc = ShapeDtypeStruct(shape=(n,),
+                                         device=P.device)
+    
     def mv(self, vector):
         return self.P @ vector + self.PT @ vector - self.diag*vector
     
@@ -254,13 +262,8 @@ class ObjMatrixCPU(ObjMatrix):
         pass
 
     def out_structure(self):
-        pass
+        return self.in_structure()
 
-
-class ObjMatrixGPU(ObjMatrix):
-    P: Float[BCSR, "n n"]
-
-
-    def mv(self, vector):
-        return self.P @ vector
-
+@lx.is_symmetric.register(ObjMatrixCPU)
+def _(op):
+    return True

@@ -3,11 +3,12 @@ from __future__ import annotations
 from jax import ShapeDtypeStruct
 import jax.numpy as jnp
 import equinox as eqx
+import lineax as lx
 from lineax import AbstractLinearOperator
 from jaxtyping import Array, Float, Integer
 from jax.experimental.sparse import BCOO, BCSR
 
-from diffqcp._problem_data import ObjMatrix, ConstrMatrix
+from diffqcp._problem_data import ObjMatrixCPU
 
 # NOTE(quill): the last bit of that would fail since `dtau * self.q` would be 1D array * 2D array
 #   So I guess the somewhat challenging aspect of this is the fact that the first two bits
@@ -15,11 +16,11 @@ from diffqcp._problem_data import ObjMatrix, ConstrMatrix
 # NOTE(quill): UPDATE. This is NOT TRUE. If in the batched case then `dtau` is also a 2D array!
 
 class _DuQAdjoint(AbstractLinearOperator):
-    P: ObjMatrix
+    P: ObjMatrixCPU | Float[BCSR, "n n"]
     Px: Float[Array, " n"]
     xTPx: Float[Array, ""]
-    A: ConstrMatrix
-    AT: ConstrMatrix
+    A: Float[BCOO | BCSR, "m n"]
+    AT: Float[BCOO | BCSR, "n m"]
     q: Float[Array, " n"]
     b: Float[Array, " m"]
     x: Float[Array, " n"]
@@ -56,11 +57,11 @@ class _DuQ(AbstractLinearOperator):
     """
     NOTE(quill): we know at compile time if this is batched or not.
     """
-    P: ObjMatrix
+    P: ObjMatrixCPU | Float[BCSR, "n n"]
     Px: Float[Array, " n"]
     xTPx: Float[Array, ""]
-    A: ConstrMatrix
-    AT: ConstrMatrix
+    A: Float[BCOO | BCSR, "m n"]
+    AT: Float[BCOO | BCSR, "n m"]
     q: Float[Array, " n"]
     b: Float[Array, " m"]
     x: Float[Array, " n"]
@@ -90,6 +91,14 @@ class _DuQ(AbstractLinearOperator):
     
     def out_structure(self):
         return self.in_structure
+
+@lx.is_symmetric.register(_DuQAdjoint)
+def _(op):
+    return False
+
+@lx.is_symmetric.register(_DuQ)
+def _(op):
+    return False
 
 def _d_data_Q(
     x: Float[Array, " n"],

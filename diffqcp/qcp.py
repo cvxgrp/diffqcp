@@ -1,4 +1,5 @@
 from abc import abstractmethod
+from typing import Callable
 import jax
 from jax import eval_shape
 import jax.numpy as jnp
@@ -62,6 +63,39 @@ class AbstractQCP(eqx.Module):
 
         return (pi_z, F, dproj_kstar_v)
     
+    def _jvp_common(
+        self,
+        dP: Float[BCOO | BCSR, "n n"],
+        dA: Float[BCOO | BCSR, "m n"],
+        dAT: Float[BCOO | BCSR, "n m"],
+        dq: Float[Array, " n"],
+        db: Float[Array, " m"]
+    ) -> tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]:
+        pi_z, F, dproj_kstar_v = self._form_atoms()
+        n, m = self.problem_structure.n, self.problem_structure.m
+        pi_z_n, pi_z_m, pi_z_N = pi_z[:n], pi_z[n:n+m], pi_z[-1]
+        d_data_N = _d_data_Q(x=pi_z_n, y=pi_z_m, tau=pi_z_N, dP=dP,
+                             dA=dA, dAT=dAT, dq=dq, db=db)
+        
+        def zero_case():
+            return jnp.zeros_like(d_data_N)
+        
+        def nonzero_case():
+            # TODO(quill): start solver from previous spot?
+            #   => (so would need `dz`)
+            return linear_solve(F, -d_data_N, solver=LSMR(rtol=1e-6, atol=1e-6))
+
+        dz = jax.lax.cond(jnp.allclose(d_data_N, 0),
+                          zero_case,
+                          nonzero_case)
+        
+        dz_n, dz_m, dz_N = dz[:n], dz[n:n+m], dz[-1]
+        dx = dz_n - self.x * dz_N
+        dproj_k_star_v_dz_m = dproj_kstar_v @ dz_m
+        dy = dproj_k_star_v_dz_m - self.y * dz_N
+        ds = dproj_k_star_v_dz_m - dz_m - self.s * dz_N
+        return dx, dy, ds
+    
     @abstractmethod
     def jvp(
         self,
@@ -74,6 +108,51 @@ class AbstractQCP(eqx.Module):
         """
         raise NotImplementedError
     
+    def _vjp_common(
+        self,
+        dx: Float[Array, " n"],
+        dy: Float[Array, " m"],
+        ds: Float[Array, " m"],
+        produce_output: Callable
+    ) -> tuple[
+        Float[BCOO | BCSR, "n n"], Float[BCOO | BCSR, "m n"],
+        Float[Array, " n"], Float[Array, " m"]]:
+        n, m = self.problem_structure.n, self.problem_structure.m
+        pi_z, F, dproj_kstar_v = self._form_atoms()
+        dz = jnp.concatenate([dx,
+                              dproj_kstar_v @ (dy + ds) - ds,
+                              - jnp.array([self.x @ dx + self.y @ dy + self.s @ ds])]
+                              )
+        
+        def zero_case():
+            return jnp.zeros_like(dz)
+        
+        def nonzero_case():
+            # TODO(quill): start solver from previous spot?
+            #   => (so would need previous `d_data_N`)
+            return linear_solve(F.T, -dz, solver=LSMR(rtol=1e-6, atol=1e-6))
+
+        d_data_N = jax.lax.cond(jnp.allclose(dz, 0),
+                                zero_case,
+                                nonzero_case)
+        
+        # TODO(quill): save/output residual?
+
+        pi_z_n = pi_z[:n]
+        pi_z_m = pi_z[n:n+m]
+        pi_z_N = pi_z[-1]
+        d_data_N_n = d_data_N[:n]
+        d_data_N_m = d_data_N[n:n+m]
+        d_data_N_N = d_data_N[-1]
+        
+        return produce_output(x=pi_z_n, y=pi_z_m, tau=pi_z_N,
+                                     w1=d_data_N_n, w2=d_data_N_m, w3=d_data_N_N,
+                                     P_rows=self.problem_structure.P_nonzero_rows,
+                                     P_cols=self.problem_structure.P_nonzero_cols,
+                                     A_rows=self.problem_structure.A_nonzero_rows,
+                                     A_cols=self.problem_structure.A_nonzero_cols,
+                                     n=n, m=m)
+        
     @abstractmethod
     def vjp(
         self,
@@ -112,6 +191,22 @@ class HostQCP(AbstractQCP):
         s: Float[Array, " m"],
         problem_structure: QCPStructureCPU
     ):
+        """**Arguments:**
+        - `P`: BCOO, shape (n, n). The quadratic objective matrix. Must be symmetric and provided in sparse BCOO format.
+            Only the upper triangular part is required and used for efficiency.
+        - `A`: BCOO, shape (m, n). The constraint matrix in sparse BCOO format.
+        - `q`: ndarray, shape (n,). The linear objective vector.
+        - `b`: ndarray, shape (m,). The constraint vector.
+        - `x`: ndarray, shape (n,). The primal solution vector.
+        - `y`: ndarray, shape (m,). The dual solution vector.
+        - `s`: ndarray, shape (m,). The primal slack variable.
+        - `problem_structure`: QCPStructureCPU. Structure object containing metadata about the problem, including sparsity patterns (such as the nonzero row and column indices for P and A), and cone information.
+
+        **Notes:**
+        - The sparsity structure of `P` and `A` must match that described in `problem_structure`.
+        - `P` should only contain the upper triangular part of the matrix.
+        - All arrays should be on the host (CPU) and compatible with JAX operations.
+        """
         self.A, self.q, self.b = A, q, b
         self.x, self.y, self.s = x, y, s
         self.problem_structure = problem_structure
@@ -141,32 +236,10 @@ class HostQCP(AbstractQCP):
         """
         # NOTE(quill): this implementation is identitcal to `DeviceQCP`'s implementation
         #   minus the `dAT = dA.T`.
-        #   Can this be consolidated / does it indicate incorrect design decision/execution? 
-        pi_z, F, dproj_kstar_v = self._form_atoms()
-        n, m = self.problem_structure.n, self.problem_structure.m
+        #   Can this be consolidated / does it indicate incorrect design decision/execution?
+        #   => NOTE(quill): I've attempted to address this annoyance with `_jvp_common`.
         dAT = dA.T
-        pi_z_n, pi_z_m, pi_z_N = pi_z[:n], pi_z[n:n+m], pi_z[-1]
-        d_data_N = _d_data_Q(x=pi_z_n, y=pi_z_m, tau=pi_z_N, dP=dP,
-                             dA=dA, dAT=dAT, dq=dq, db=db)
-        
-        def zero_case():
-            return jnp.zeros_like(d_data_N)
-        
-        def nonzero_case():
-            # TODO(quill): start solver from previous spot?
-            #   => (so would need `dz`)
-            return linear_solve(F, -d_data_N, solver=LSMR)
-
-        dz = jax.lax.cond(jnp.allclose(d_data_N, 0),
-                          zero_case,
-                          nonzero_case)
-        
-        dz_n, dz_m, dz_N = dz[:n], dz[n:n+m], dz[-1]
-        dx = dz_n - self.x * dz_N
-        dproj_k_star_v_dz_m = dproj_kstar_v @ dz_m
-        dy = dproj_k_star_v_dz_m - self.y * dz_N
-        ds = dproj_k_star_v_dz_m - dz_m - self.s * dz_N
-        return dx, dy, ds
+        return self._jvp_common(dP=dP, dA=dA, dAT=dAT, dq=dq, db=db)
 
     def vjp(
         self,
@@ -196,41 +269,8 @@ class HostQCP(AbstractQCP):
         # NOTE(quill): This is a similar note to the one I left in this class's `jvp`. That is, this
         #   implementation is identical to `DeviceQCP`'s `vjp` minus the function call at the very bottom.
         #   Can this be consolidated / does it indicate incorrect design decision/execution?
-        n, m = self.problem_structure.n, self.problem_structure.m
-        pi_z, F, dproj_kstar_v = self._form_atoms()
-        dz = jnp.concatenate([dx,
-                              dproj_kstar_v @ (dy + ds) - ds,
-                              - jnp.array([self.x @ dx + self.y @ dy + self.s @ ds])]
-                              )
-        
-        def zero_case():
-            return jnp.zeros_like(dz)
-        
-        def nonzero_case():
-            # TODO(quill): start solver from previous spot?
-            #   => (so would need previous `d_data_N`)
-            return linear_solve(F.T, -dz, solver=LSMR)
-
-        d_data_N = jax.lax.cond(jnp.allclose(dz, 0),
-                                zero_case,
-                                nonzero_case)
-        
-        # TODO(quill): save/output residual?
-
-        pi_z_n = pi_z[:n]
-        pi_z_m = pi_z[n:n+m]
-        pi_z_N = pi_z[-1]
-        d_data_N_n = d_data_N[:n]
-        d_data_N_m = d_data_N[n:n+m]
-        d_data_N_N = d_data_N[-1]
-        
-        return _d_data_Q_adjoint_cpu(x=pi_z_n, y=pi_z_m, tau=pi_z_N,
-                                     w1=d_data_N_n, w2=d_data_N_m, w3=d_data_N_N,
-                                     P_rows=self.problem_structure.P_nonzero_rows,
-                                     P_cols=self.problem_structure.P_nonzero_cols,
-                                     A_rows=self.problem_structure.A_nonzero_rows,
-                                     A_cols=self.problem_structure.A_nonzero_cols,
-                                     n=n, m=m)
+        return self._vjp_common(dx=dx, dy=dy, ds=ds,
+                                produce_output=_d_data_Q_adjoint_cpu)
 
 
 class DeviceQCP(AbstractQCP):
@@ -249,7 +289,38 @@ class DeviceQCP(AbstractQCP):
 
     problem_structure: QCPStructureGPU = eqx.field(static=True)
 
-    # NOTE(quill): don't need a custom `__init__`` (until we wrap `P`).
+    def __init__(
+        self,
+        P: Float[BCSR, "n n"],
+        A: Float[BCSR, "m n"],
+        q: Float[Array, " n"],
+        b: Float[Array, " m"],
+        x: Float[Array, " n"],
+        y: Float[Array, " m"],
+        s: Float[Array, " m"],
+        problem_structure: QCPStructureCPU
+    ):
+        """**Arguments:**
+        - `P`: BCSR, shape (n, n). The quadratic objective matrix in sparse BCSR format.
+            Must be symmetric. For device execution, the full matrix (not just upper triangular) is required.
+        - `A`: BCSR, shape (m, n). The constraint matrix in sparse BCSR format.
+        - `q`: ndarray, shape (n,). The linear objective vector.
+        - `b`: ndarray, shape (m,). The constraint vector.
+        - `x`: ndarray, shape (n,). The primal solution vector.
+        - `y`: ndarray, shape (m,). The dual solution vector.
+        - `s`: ndarray, shape (m,). The primal slack variable.
+        - `problem_structure`: QCPStructureGPU. Structure object containing metadata about the problem, including sparsity patterns
+            (such as the nonzero row and column indices for P and A), and cone information.
+
+        **Notes:**
+        - The sparsity structure of `P` and `A` must match that described in `problem_structure`.
+        - `P` should contain the full symmetric matrix (not just upper triangular).
+        - All arrays should be on the device (GPU) and compatible with JAX operations.
+        """
+        # NOTE(quill): will need this custom `__init__`` when we wrap `P`
+        self.P, self.A, self.q, self.b = P, A, q, b
+        self.x, self.y, self.s = x, y, s
+        self.problem_structure = problem_structure
     
     def jvp(
         self,
@@ -274,32 +345,8 @@ class DeviceQCP(AbstractQCP):
         
         A 3-tuple containing the perturbations to the solution: `(dx, dy, ds)`.
         """
-        
-        pi_z, F, dproj_kstar_v = self._form_atoms()
-        n, m = self.problem_structure.n, self.problem_structure.m
         dAT = self.problem_structure.form_A_transpose(dA)
-        pi_z_n, pi_z_m, pi_z_N = pi_z[:n], pi_z[n:n+m], pi_z[-1]
-        d_data_N = _d_data_Q(x=pi_z_n, y=pi_z_m, tau=pi_z_N, dP=dP,
-                             dA=dA, dAT=dAT, dq=dq, db=db)
-
-        def zero_case():
-            return jnp.zeros_like(d_data_N)
-        
-        def nonzero_case():
-            # TODO(quill): start solver from previous spot?
-            #   => (so would need `dz`)
-            return linear_solve(F, -d_data_N, solver=LSMR)
-
-        dz = jax.lax.cond(jnp.allclose(d_data_N, 0),
-                          zero_case,
-                          nonzero_case)
-        
-        dz_n, dz_m, dz_N = dz[:n], dz[n:n+m], dz[-1]
-        dx = dz_n - self.x * dz_N
-        dproj_k_star_v_dz_m = dproj_kstar_v @ dz_m
-        dy = dproj_k_star_v_dz_m - self.y * dz_N
-        ds = dproj_k_star_v_dz_m - dz_m - self.s * dz_N
-        return dx, dy, ds
+        return self._jvp_common(dP=dP, dA=dA, dAT=dAT, dq=dq, db=db)
 
     def vjp(
         self,
@@ -324,61 +371,11 @@ class DeviceQCP(AbstractQCP):
         linear cost function vector, and constraint vector. Note that these perturbation matrices
         will have the same sparsity patterns as their corresponding problem matrices.
         """
+        return self._vjp_common(dx=dx, dy=dy, ds=ds,
+                                produce_output=_d_data_Q_adjoint_gpu)
+    
         
-        n, m = self.problem_structure.n, self.problem_structure.m
-        pi_z, F, dproj_kstar_v = self._form_atoms()
-        dz = jnp.concatenate([dx,
-                              dproj_kstar_v @ (dy + ds) - ds,
-                              - jnp.array([self.x @ dx + self.y @ dy + self.s @ ds])]
-                              )
-        
-        def zero_case():
-            return jnp.zeros_like(dz)
-        
-        def nonzero_case():
-            # TODO(quill): start solver from previous spot?
-            #   => (so would need previous `d_data_N`)
-            return linear_solve(F.T, -dz, solver=LSMR)
-
-        d_data_N = jax.lax.cond(jnp.allclose(dz, 0),
-                                zero_case,
-                                nonzero_case)
-        
-        # TODO(quill): save/output residual?
-
-        pi_z_n = pi_z[:n]
-        pi_z_m = pi_z[n:n+m]
-        pi_z_N = pi_z[-1]
-        d_data_N_n = d_data_N[:n]
-        d_data_N_m = d_data_N[n:n+m]
-        d_data_N_N = d_data_N[-1]
-        
-        return _d_data_Q_adjoint_gpu(x=pi_z_n, y=pi_z_m, tau=pi_z_N,
-                                     w1=d_data_N_n, w2=d_data_N_m, w3=d_data_N_N,
-                                     P_rows=self.problem_structure.P_nonzero_rows,
-                                     P_cols=self.problem_structure.P_nonzero_cols,
-                                     A_rows=self.problem_structure.A_nonzero_rows,
-                                     A_cols=self.problem_structure.A_nonzero_cols,
-                                     n=n, m=m)
-
-# QCP.__init__.__doc__ = """**Parameters**
-# - 
-# """
-
-    # def __init__(
-    #     self,
-    #     P: Float[Array | BCOO | BCSR, "*batch n n"],
-    #     A: Float[Array | BCOO | BCSR, "*batch m n"],
-    #     q: Float[Array, "*batch n"],
-    #     b: Float[Array, "*batch m"],
-    #     x: Float[Array, "*batch n"],
-    #     y: Float[Array, "*batch m"],
-    #     s: Float[Array, "*batch m"],
-    #     problem_structure: QCPStructure
-    # ) -> None:
-        # TODO(quill): will need to check type of `P` and `A`
-        #   and create transpose op if they are of type `BCSR`.
-        
+    
         # === dimensionality checks ===
 
         # P_shape = P.shape
@@ -420,6 +417,3 @@ class DeviceQCP(AbstractQCP):
         #                      + f" be a {P_num_dims-1}D array, but it is"
         #                      + f" actually a {q_num_dims}D array.")
         # # TODO(quill): finish checking that `q` size is `n` then check `b`
-
-def _check_qcp_arguments_dimensionality():
-    pass

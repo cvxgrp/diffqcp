@@ -111,7 +111,13 @@ def _d_data_Q(
     Specifically, note that dP should be the true perturbation to the matrix P,
     **not just the upper triangular part.**
     """
-    pass
+    
+    dPx = dP @ x
+    out1 = dPx + dAT @ y + tau * dq
+    out2 = -dA @ x + tau * db
+    out3 = -(1 / tau) * (x @ dPx) - dq @ x - db @ y
+
+    return jnp.concatenate([out1, out2, jnp.array([out3])])
 
 # NOTE(quill): what's going to happen when these get `jit`ted?
 
@@ -135,6 +141,35 @@ def _adjoint_values(
     db = tau * w2 - w3 * y
     
     return (dP_values, dA_values, dq, db)
+
+
+def _d_data_Q_adjoint_cpu(
+    x: Float[Array, " n"],
+    y: Float[Array, " m"],
+    tau: Float[Array, ""],
+    w1: Float[Array, " n"],
+    w2: Float[Array, " m"],
+    w3: Float[Array, ""],
+    P_rows: Integer[Array, "..."],
+    P_cols: Integer[Array, "..."],
+    A_rows: Integer[Array, "..."],
+    A_cols: Integer[Array, "..."],
+    n: int,
+    m: int
+) -> tuple[
+    Float[BCOO, "n n"], Float[BCOO, "m n"], Float[Array, " n"], Float[Array, " m"]
+    ]:
+    """The vector-Jacobian product D_data(u, data)^T[w].
+    """
+    dP_values, dA_values, dq, db = _adjoint_values(x, y, tau, w1, w2, w3,
+                                                   P_rows, P_cols, A_rows, A_cols)
+
+    P_indices = jnp.stack([P_rows, P_cols], axis=1)
+    dP = BCOO((dP_values, P_indices), shape=(n, n))
+    A_indices = jnp.stack([A_rows, A_cols], axis=1)
+    dA = BCOO((dA_values, A_indices), shape=(m, n))
+    
+    return (dP, dA, dq, db)
 
 
 def _d_data_Q_adjoint_gpu(
@@ -164,33 +199,5 @@ def _d_data_Q_adjoint_gpu(
     dP = BCSR((dP_values, P_csr_indices, P_csr_indtpr), shape=(n, n))
     dA = BCSR((dA_values, A_csr_indices, A_csr_indtpr), shape=(m, n))
 
-    return (dP, dA, dq, db)
-
-def _d_data_Q_adjoint_cpu(
-    x: Float[Array, " n"],
-    y: Float[Array, " m"],
-    tau: Float[Array, ""],
-    w1: Float[Array, " n"],
-    w2: Float[Array, " m"],
-    w3: Float[Array, ""],
-    P_rows: Integer[Array, "..."],
-    P_cols: Integer[Array, "..."],
-    A_rows: Integer[Array, "..."],
-    A_cols: Integer[Array, "..."],
-    n: int,
-    m: int
-) -> tuple[
-    Float[BCOO, "n n"], Float[BCOO, "m n"], Float[Array, " n"], Float[Array, " m"]
-    ]:
-    """The vector-Jacobian product D_data(u, data)^T[w].
-    """
-    dP_values, dA_values, dq, db = _adjoint_values(x, y, tau, w1, w2, w3,
-                                                   P_rows, P_cols, A_rows, A_cols)
-
-    P_indices = jnp.stack([P_rows, P_cols], axis=1)
-    dP = BCOO((dP_values, P_indices), shape=(n, n))
-    A_indices = jnp.stack([A_rows, A_cols], axis=1)
-    dA = BCOO((dA_values, A_indices), shape=(m, n))
-    
     return (dP, dA, dq, db)
 

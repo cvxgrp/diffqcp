@@ -5,43 +5,129 @@ import jax.numpy as jnp
 from jax.experimental.sparse import BCOO, BCSR
 import equinox as eqx
 from lineax import AbstractLinearOperator
-from jaxtyping import Float, Integer, Array
+from jaxtyping import Float, Integer, Bool, Array
 
 from diffqcp.cones.canonical import ProductConeProjector
 from diffqcp._helpers import _coo_to_csr_transpose_map, _TransposeCSRInfo
 
 class QCPStructure(eqx.Module):
-    cone_projector: ProductConeProjector
-    # solver: AbstractLinearSolver = lineax. # set to LSMR; allow tolerance setting?
+    """
+    Whole class will be declared as `static` by `QCP` class
+    """
 
-
-    def __init__(
-        self,
-        P: Float[Array | BCOO | BCSR, "*batch n n"],
-        A: Float[Array | BCOO | BCSR, "*batch m n"],
-        q: Float[Array, "*batch n"],
-        b: Float[Array, "*batch m"],
-        cones: dict[str, int | list[int] | list[float]]
-    ):
-        pass
+    # The following are needed for `_form_atoms` in `AbstractQCP`.
+    n: eqx.AbstractVar[int]
+    m: eqx.AbstractVar[int]
+    N: eqx.AbstractVar[int]
+    cone_projector: eqx.AbstractVar[ProductConeProjector]
     
+    @abstractmethod
     def obj_matrix_init(self):
         pass
-
+    
+    @abstractmethod
     def constr_matrix_init(self):
         pass
 
 
-class QCPStructureGPU(eqx.Module):
+class QCPStructureCPU(QCPStructure):
+    """
+    `P` is assumed to be the upper triangular part of the matrix in the quadratic form.
+    """
+    
+    n: int
+    m: int
+    N: int
+    cone_projector: ProductConeProjector
+    is_batched: bool
+
+    P_nonzero_rows: Integer[Array, "..."]
+    P_nonzero_cols: Integer[Array, "..."]
+    P_diag_mask: Bool[Array, "..."]
+    P_diag_indices: Integer[Array, "..."]
+
+    A_nonzero_rows: Integer[Array, "..."]
+    A_nonzero_cols: Integer[Array, "..."]
+
+    def __init__(
+        self,
+        P: Float[BCOO, "*batch n n"],
+        A: Float[BCOO, "*batch n n"],
+        cone_dims: dict[str, int | list[int] | list[float]],
+        onto_dual: bool = True
+    ):
+        
+        # NOTE(quill): checks on `cone_dims` done in `ProductConeProjector.__init__`
+        self.cone_projector = ProductConeProjector(cone_dims, onto_dual=onto_dual)
+
+        if not isinstance(P, BCOO):
+            raise ValueError("The objective matrix `P` must be a `BCOO` JAX matrix,"
+                             + f" but the provided `P` is a {type(P)}.")
+
+        if P.n_batch == 0:
+            self.is_batched = False
+            self.obj_matrix_init(P)
+        elif P.n_batch == 1:
+            self.is_batched = True
+            # Extract information from first matrix in the batch.
+            # Strict requirement is that all matrices in the batch share
+            # the same sparsity structure (holds via DPP, also maybe required by JAX?)
+            self.obj_matrix_init(P[0])
+        else:
+            raise ValueError("The objective matrix `P` must have at most one batch dimension,"
+                             + f" but the provided BCOO matrix has {P.n_batch} dimensions.")
+
+        if not isinstance(A, BCOO):
+            raise ValueError("The objective matrix `A` must be a `BCOO` JAX matrix,"
+                             + f" but the provided `A` is a {type(A)}.")
+        
+        # NOTE(quill): could theoretically allow mismatch and broadcast
+        #   (Just to keep in mind for the future; not needed now.)
+        if A.n_batch != P.n_batch:
+            raise ValueError(f"The objective matrix `P` has {P.n_batch} dimensions"
+                             + f" while the constraint matrix `A` has {A.n_batch}"
+                             + " dimensions. The batch dimensionality of `P` and `A`"
+                             + " must match.")
+        if self.is_batched:
+            self.constr_matrix_init(A[0])
+        else:
+            self.constr_matrix_init(A)
+
+        self.N = self.n + self.m + 1
+        
+    def __post_init__(self):
+        self.N = self.n + self.m + 1
+    
+    def obj_matrix_init(self, P: Float[BCOO, "n n"]):
+        # TODO(quill): checks on P being upper triangular.
+        #   (Might as well do since this structure is formed once.)
+        self.n = jnp.shape(P)[0]
+        self.P_nonzero_rows = P.indices[:, 0]
+        self.P_nonzero_cols = P.indices[:, 1]
+        self.P_diag_mask = P.indices[:, 0] == P.indices[:, 1]
+        self.P_diag_indices = P.indices[:, 0][self.P_diag_mask]
+        
+    def constr_matrix_init(self, A: Float[BCOO, "m n"]):
+        self.m = jnp.shape(A)[0]
+        self.A_nonzero_rows = A.indices[:, 0]
+        self.A_nonzero_cols = A.indices[:, 1]
+            
+    def form_obj(self, P_like: Float[BCOO, "n n"]) -> ObjMatrixCPU:
+        diag_values = P_like.data[self.P_diag_mask]
+        diag = jnp.zeros(self.n)
+        diag[self.P_diag_indices] = diag_values
+        return ObjMatrixCPU(P_like, P_like.T, diag)
+
+
+class QCPStructureGPU(QCPStructure):
     """
     P is assumed to be the full matrix
-
-    Whole class will be declared as `static` by `QCP` class
     """
 
+    n: int
+    m: int
+    N: int
     cone_projector: ProductConeProjector
-    # TODO(quill): include the cone projector and linear solver?
-    #   -> probably just continue developing and see if this decision is forced.
     is_batched: bool
     
     P_csr_indices: Integer[Array, "..."]
@@ -56,8 +142,16 @@ class QCPStructureGPU(eqx.Module):
     A_transpose_info: _TransposeCSRInfo
 
     def __init__(
-        self, P: Float[BCSR, "*batch n n"], A: Float[BCSR, "*batch m n"]
+        self,
+        P: Float[BCSR, "*batch n n"],
+        A: Float[BCSR, "*batch m n"],
+        cones: dict[str, int | list[int] | list[float]],
+        onto_dual: bool = True
     ):
+        
+        # NOTE(quill): checks on `cone_dims` done in `ProductConeProjector.__init__`
+        self.cone_projector = ProductConeProjector(cones, onto_dual=onto_dual)
+        
         if not isinstance(P, BCSR):
             raise ValueError("The objective matrix `P` must be a `BCSR` JAX matrix,"
                              + f" but the provided `P` is a {type(P)}.")
@@ -67,9 +161,7 @@ class QCPStructureGPU(eqx.Module):
             self.obj_matrix_init(P)
         elif P.n_batch == 1:
             self.is_batched = True
-            # Extract information from first matrix in the batch.
-            # Strict requirement is that all matrices in the batch share
-            # the same sparsity structure (holds via DPP, also maybe required by JAX?)
+            # NOTE(quill): see note in `QCPStructureCPU`
             self.obj_matrix_init(P[0])
         else:
             raise ValueError("The objective matrix `P` must have at most one batch dimension,"
@@ -79,8 +171,7 @@ class QCPStructureGPU(eqx.Module):
             raise ValueError("The objective matrix `A` must be a `BCSR` JAX matrix,"
                              + f" but the provided `A` is a {type(A)}.")
         
-        # NOTE(quill): could theoretically allow mismatch and broadcast
-        #   (Just to keep in mind for the future; not needed now.)
+        # NOTE(quill): see note in `QCPStructureCPU`
         if A.n_batch != P.n_batch:
             raise ValueError(f"The objective matrix `P` has {P.n_batch} dimensions"
                              + f" while the constraint matrix `A` has {A.n_batch}"
@@ -92,14 +183,11 @@ class QCPStructureGPU(eqx.Module):
         else:
             self.constr_matrix_init(A)
         
+    def __post_init__(self):
+        self.N = self.n + self.m + 1
+    
     def obj_matrix_init(self, P: Float[BCSR, "n n"]):
-        """
-        Functionality:
-            - Remove any explicit zeros from `P`.
-            - Save these nonzero row and column indices
-                (Needed for `diffqcp` `vjp` computation.)
-        """
-        
+        self.n = jnp.shape(P)[0]
         P_coo = P.to_bcoo()
         # NOTE(quill): the following assumption is needed for the following
         #   manipulation to result in accurate metadata.
@@ -116,9 +204,8 @@ class QCPStructureGPU(eqx.Module):
         self.P_nonzero_rows  = P_coo.indices[:, 0]
         self.P_nonzero_cols = P_coo.indices[:, 1]
         
-
     def constr_matrix_init(self, A: Float[BCSR, "m n"]):
-
+        self.m = jnp.shape(A)[0]
         A_coo = A.to_bcoo()
         # NOTE(quill): see note in `obj_matrix_init`
         if A_coo.data != A.data:
@@ -135,64 +222,12 @@ class QCPStructureGPU(eqx.Module):
         # Create metadata for cheap transposes
         self.A_transpose_info = _coo_to_csr_transpose_map(A_coo)
 
-    def form_A_transpose(self, A):
-        pass
-
-
-class QCPStructureCPU(eqx.Module):
-    """
-    `P` is assumed to be the upper triangular part of the matrix in the quadratic form.
-    """
-    
-    cone_projector: ProductConeProjector
-    is_batched: bool
-
-    P_nonzero_rows: Integer[Array, "..."]
-    P_nonzero_cols: Integer[Array, "..."]
-
-    A_nonzero_rows: Integer[Array, "..."]
-    A_nonzero_cols: Integer[Array, "..."]
-
-    def __init__(
-        self, P: Float[BCOO, "*batch n n"], A: Float[BCOO, "*batch n n"]
-    ):
-        if not isinstance(P, BCOO):
-            raise ValueError("The objective matrix `P` must be a `BCOO` JAX matrix,"
-                             + f" but the provided `P` is a {type(P)}.")
-
-        # check if batched
-        if P.n_batch == 0:
-            self.is_batched = False
-            self.P_nonzero_rows = P.indices[:, 0]
-            self.P_nonzero_cols = P.indices[:, 1]
-        elif P.n_batch == 1:
-            self.is_batched = True
-            # Extract information from first matrix in the batch.
-            # Strict requirement is that all matrices in the batch share
-            # the same sparsity structure (holds via DPP, also maybe required by JAX?)
-            self.P_nonzero_rows = P[0].indices[:, 0]
-            self.P_nonzero_cols = P[0].indices[:, 1]
-        else:
-            raise ValueError("The objective matrix `P` must have at most one batch dimension,"
-                             + f" but the provided BCOO matrix has {P.n_batch} dimensions.")
-
-        if not isinstance(A, BCOO):
-            raise ValueError("The objective matrix `A` must be a `BCOO` JAX matrix,"
-                             + f" but the provided `A` is a {type(A)}.")
-        
-        # NOTE(quill): see note in `QCPStructureGPU`
-        if A.n_batch != P.n_batch:
-            raise ValueError(f"The objective matrix `P` has {P.n_batch} dimensions"
-                             + f" while the constraint matrix `A` has {A.n_batch}"
-                             + " dimensions. The batch dimensionality of `P` and `A`"
-                             + " must match.")
-        
-        if self.is_batched:
-            self.A_nonzero_rows = A[0].indices[:, 0]
-            self.A_nonzero_cols = A[0].indices[:, 1]
-        else:
-            self.A_nonzero_rows = A.indices[:, 0]
-            self.A_nonzero_cols = A.indices[:, 1]
+    def form_A_transpose(self, A_like: Float[BCSR, "m n"]) -> Float[BCSR, "n m"]:
+        transposed_data = A_like.data[self.A_transpose_info.sorting_perm]
+        return BCSR((transposed_data,
+                     self.A_transpose_info.indices,
+                     self.A_transpose_info.indptr),
+                     shape=(self.n, self.m))
 
 
 class ObjMatrix(AbstractLinearOperator):
@@ -203,7 +238,7 @@ class ObjMatrix(AbstractLinearOperator):
 class ObjMatrixCPU(ObjMatrix):
     P: Float[BCOO, "n n"]
     PT: Float[BCOO, "n n"]
-    diag: Float[BCOO, " n-1"]
+    diag: Float[BCOO, " n"]
 
     def mv(self, vector):
         return self.P @ vector + self.PT @ vector - self.diag*vector

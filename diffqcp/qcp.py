@@ -3,15 +3,14 @@ import jax
 from jax import eval_shape
 import jax.numpy as jnp
 import equinox as eqx
+import lineax as lx
 from lineax import AbstractLinearOperator, IdentityLinearOperator, linear_solve, LSMR
 from jaxtyping import Float, Array
 from jax.experimental.sparse import BCOO, BCSR
 
-from diffqcp._problem_data import QCPStructureCPU, QCPStructureGPU, QCPStructure
-from diffqcp.cones.canonical import ProductConeProjector
+from diffqcp._problem_data import (QCPStructureCPU, QCPStructureGPU, QCPStructure, ObjMatrixCPU)
 from diffqcp._linops import _BlockLinearOperator
-from diffqcp._qcp_derivs import _DuQ
-# TODO(quill): provide helpers to convert problem data?
+from diffqcp._qcp_derivs import (_DuQ, _d_data_Q, _d_data_Q_adjoint_cpu, _d_data_Q_adjoint_gpu)
 
 class AbstractQCP(eqx.Module):
     """Quadratic Cone Program.
@@ -41,7 +40,7 @@ class AbstractQCP(eqx.Module):
     s: eqx.AbstractVar[Array]
     problem_structure: eqx.AbstractVar[QCPStructure]
 
-    def _form_atoms(self) -> tuple[AbstractLinearOperator, AbstractLinearOperator]:
+    def _form_atoms(self) -> tuple[Float[Array, " n+m+1"], AbstractLinearOperator, AbstractLinearOperator]:
         proj_kstar_v, dproj_kstar_v = self.problem_structure.cone_projector(self.y - self.s)
         pi_z = jnp.concatenate([self.x, proj_kstar_v, jnp.array([1.0], dtype=self.x.dtype)])
         dpi_z = _BlockLinearOperator([IdentityLinearOperator(eval_shape(lambda: self.x)),
@@ -61,7 +60,7 @@ class AbstractQCP(eqx.Module):
         #   include that division.
         F = DzQ_pi_z @ dpi_z - dpi_z + IdentityLinearOperator(eval_shape(lambda: pi_z))
 
-        return (F, dproj_kstar_v)
+        return (pi_z, F, dproj_kstar_v)
     
     @abstractmethod
     def jvp(
@@ -71,6 +70,8 @@ class AbstractQCP(eqx.Module):
         dq: Float[Array, " n"],
         db: Float[Array, " m"]
     ) -> tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]:
+        """Apply the derivative of the QCP's solution map to an input perturbation.
+        """
         raise NotImplementedError
     
     @abstractmethod
@@ -80,15 +81,17 @@ class AbstractQCP(eqx.Module):
         dy: Float[Array, " m"],
         ds: Float[Array, " m"]
     ) -> tuple[
-        Float[BCSR, "n n"], Float[BCSR, "m n"],
+        Float[BCOO | BCSR, "n n"], Float[BCOO | BCSR, "m n"],
         Float[Array, " n"], Float[Array, " m"]]:
+        """Apply the adjoint of the derivative of the QCP's solution map to a solution perturbation.
+        """
         raise NotImplementedError
 
 
 class HostQCP(AbstractQCP):
-    """QCP whose subroutines are optimized to run on host.
+    """QCP whose subroutines are optimized to run on host (CPU).
     """
-    P: Float[ObjMatrix, "n n"]
+    P: Float[ObjMatrixCPU, "n n"]
     A: Float[BCOO, "m n"]
     q: Float[Array, " n"]
     b: Float[Array, " m"]
@@ -112,50 +115,7 @@ class HostQCP(AbstractQCP):
         self.A, self.q, self.b = A, q, b
         self.x, self.y, self.s = x, y, s
         self.problem_structure = problem_structure
-
-        # Now create some sort of operator for host
-
-    
-    def jvp(
-        self,
-        dP: Float[BCOO, "n n"],
-        dA: Float[BCOO, "m n"],
-        dq: Float[Array, " n"],
-        db: Float[Array, " m"]
-    ):
-        F, dproj_kstar_v = self._form_atoms()
-
-        # so if we are on the cpu, then dP is just the upper triangular bit of the
-        #   matrix P, so we'll need to wrap that
-        # -> make dP a new linop
-        
-
-    def vjp(
-        self,
-        dx: Float[Array, " n"],
-        dy: Float[Array, " m"],
-        ds: Float[Array, " m"]
-    ):
-        F, dproj_kstar_v = self._form_atoms()
-
-
-class DeviceQCP(AbstractQCP):
-    """QCP whose subroutines are optimized to run on device.
-    """
-    # NOTE(quill): when we allow for batched problem data, will need
-    #   to wrap `P` in an `AbstractLinearOperator` to dictate how the `mv`
-    #   operation should behave.
-    P: Float[BCSR, "n n"]
-    A: Float[BCOO, "m n"]
-    q: Float[Array, " n"]
-    b: Float[Array, " m"]
-    x: Float[Array, " n"]
-    y: Float[Array, " m"]
-    s: Float[Array, " m"]
-
-    problem_structure: QCPStructureCPU = eqx.field(static=True)
-
-    # NOTE(quill): don't need a custom `__init__`` (until we wrap `P`).
+        self.P = self.problem_structure.form_obj(P)
     
     def jvp(
         self,
@@ -164,16 +124,49 @@ class DeviceQCP(AbstractQCP):
         dq: Float[Array, " n"],
         db: Float[Array, " m"]
     ) -> tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]:
-        F, dproj_kstar_v = self._form_atoms()
-        # TODO(quill): start solver from previous spot?
-        #   => (so would need `dz`)
-        dAT = ...
-        d_data_N = dD
+        """Apply the derivative of the QCP's solution map to an input perturbation.
 
-        # so if we are on the cpu, then dP is just the upper triangular bit of the
-        #   matrix P, so we'll need to wrap that
-        # -> make dP a new linop
+        Specifically, an implementation of the method given in section 3.1 of the paper.
         
+        **Arguments:**
+        - `dP`: should have the same sparsity structure as `P`. *Note* that
+            this means it should only contain the upper triangular part of `dP`.
+        - `dA`: should have the same sparsity structure as `A`.
+        - `dq`
+        - `db`
+    
+        **Returns:**
+        
+        A 3-tuple containing the perturbations to the solution: `(dx, dy, ds)`.
+        """
+        # NOTE(quill): this implementation is identitcal to `DeviceQCP`'s implementation
+        #   minus the `dAT = dA.T`.
+        #   Can this be consolidated / does it indicate incorrect design decision/execution? 
+        pi_z, F, dproj_kstar_v = self._form_atoms()
+        n, m = self.problem_structure.n, self.problem_structure.m
+        dAT = dA.T
+        pi_z_n, pi_z_m, pi_z_N = pi_z[:n], pi_z[n:n+m], pi_z[-1]
+        d_data_N = _d_data_Q(x=pi_z_n, y=pi_z_m, tau=pi_z_N, dP=dP,
+                             dA=dA, dAT=dAT, dq=dq, db=db)
+        
+        def zero_case():
+            return jnp.zeros_like(d_data_N)
+        
+        def nonzero_case():
+            # TODO(quill): start solver from previous spot?
+            #   => (so would need `dz`)
+            return linear_solve(F, -d_data_N, solver=LSMR)
+
+        dz = jax.lax.cond(jnp.allclose(d_data_N, 0),
+                          zero_case,
+                          nonzero_case)
+        
+        dz_n, dz_m, dz_N = dz[:n], dz[n:n+m], dz[-1]
+        dx = dz_n - self.x * dz_N
+        dproj_k_star_v_dz_m = dproj_kstar_v @ dz_m
+        dy = dproj_k_star_v_dz_m - self.y * dz_N
+        ds = dproj_k_star_v_dz_m - dz_m - self.s * dz_N
+        return dx, dy, ds
 
     def vjp(
         self,
@@ -183,8 +176,28 @@ class DeviceQCP(AbstractQCP):
     ) -> tuple[
         Float[BCSR, "n n"], Float[BCSR, "m n"],
         Float[Array, " n"], Float[Array, " m"]]:
+        """Apply the adjoint of the derivative of the QCP's solution map to a solution perturbation.
         
-        F, dproj_kstar_v = self._form_atoms()
+        Specifically, an implementation of the method given in section 3.2 of the paper.
+        
+        **Arguments:**
+        - `dx`: A perturbation to the primal solution.
+        - `dy`: A perturbation to the dual solution.
+        - `ds`: A perturbation to the primal slack solution.
+
+        **Returns**
+
+        A four-tuple containing the perturbations to the objective matrix, constraint matrix,
+        linear cost function vector, and constraint vector. Note that these perturbation matrices
+        will have the same sparsity patterns as their corresponding problem matrices. (So, importantly,
+        the first matrix will only contain the upper triangular part of the true perturbation to the
+        objective matrix perturbation.)
+        """
+        # NOTE(quill): This is a similar note to the one I left in this class's `jvp`. That is, this
+        #   implementation is identical to `DeviceQCP`'s `vjp` minus the function call at the very bottom.
+        #   Can this be consolidated / does it indicate incorrect design decision/execution?
+        n, m = self.problem_structure.n, self.problem_structure.m
+        pi_z, F, dproj_kstar_v = self._form_atoms()
         dz = jnp.concatenate([dx,
                               dproj_kstar_v @ (dy + ds) - ds,
                               - jnp.array([self.x @ dx + self.y @ dy + self.s @ ds])]
@@ -193,18 +206,160 @@ class DeviceQCP(AbstractQCP):
         def zero_case():
             return jnp.zeros_like(dz)
         
-        def non_zero_case():
+        def nonzero_case():
             # TODO(quill): start solver from previous spot?
             #   => (so would need previous `d_data_N`)
             return linear_solve(F.T, -dz, solver=LSMR)
 
         d_data_N = jax.lax.cond(jnp.allclose(dz, 0),
                                 zero_case,
-                                non_zero_case)
+                                nonzero_case)
         
         # TODO(quill): save/output residual?
 
-        # so create a `dData_Q_adjoint_device`
+        pi_z_n = pi_z[:n]
+        pi_z_m = pi_z[n:n+m]
+        pi_z_N = pi_z[-1]
+        d_data_N_n = d_data_N[:n]
+        d_data_N_m = d_data_N[n:n+m]
+        d_data_N_N = d_data_N[-1]
+        
+        return _d_data_Q_adjoint_cpu(x=pi_z_n, y=pi_z_m, tau=pi_z_N,
+                                     w1=d_data_N_n, w2=d_data_N_m, w3=d_data_N_N,
+                                     P_rows=self.problem_structure.P_nonzero_rows,
+                                     P_cols=self.problem_structure.P_nonzero_cols,
+                                     A_rows=self.problem_structure.A_nonzero_rows,
+                                     A_cols=self.problem_structure.A_nonzero_cols,
+                                     n=n, m=m)
+
+
+class DeviceQCP(AbstractQCP):
+    """QCP whose subroutines are optimized to run on device (GPU).
+    """
+    # NOTE(quill): when we allow for batched problem data, will need
+    #   to wrap `P` in an `AbstractLinearOperator` to dictate how the `mv`
+    #   operation should behave.
+    P: Float[BCSR, "n n"]
+    A: Float[BCSR, "m n"]
+    q: Float[Array, " n"]
+    b: Float[Array, " m"]
+    x: Float[Array, " n"]
+    y: Float[Array, " m"]
+    s: Float[Array, " m"]
+
+    problem_structure: QCPStructureGPU = eqx.field(static=True)
+
+    # NOTE(quill): don't need a custom `__init__`` (until we wrap `P`).
+    
+    def jvp(
+        self,
+        dP: Float[BCSR, "n n"],
+        dA: Float[BCSR, "m n"],
+        dq: Float[Array, " n"],
+        db: Float[Array, " m"]
+    ) -> tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]:
+        """Apply the derivative of the QCP's solution map to an input perturbation.
+        
+        Specifically, an implementation of the method given in section 3.1 of the paper.
+        
+        **Arguments:**
+        - `dP` should have the same sparsity structure as `P`. *Note* that
+            this means it should only contain the entirety of `dP`.
+            (i.e., not just the upper triangular part.)
+        - `dA` should have the same sparsity structure as `A`.
+        - `dq`
+        - `db`
+    
+        **Returns:**
+        
+        A 3-tuple containing the perturbations to the solution: `(dx, dy, ds)`.
+        """
+        
+        pi_z, F, dproj_kstar_v = self._form_atoms()
+        n, m = self.problem_structure.n, self.problem_structure.m
+        dAT = self.problem_structure.form_A_transpose(dA)
+        pi_z_n, pi_z_m, pi_z_N = pi_z[:n], pi_z[n:n+m], pi_z[-1]
+        d_data_N = _d_data_Q(x=pi_z_n, y=pi_z_m, tau=pi_z_N, dP=dP,
+                             dA=dA, dAT=dAT, dq=dq, db=db)
+
+        def zero_case():
+            return jnp.zeros_like(d_data_N)
+        
+        def nonzero_case():
+            # TODO(quill): start solver from previous spot?
+            #   => (so would need `dz`)
+            return linear_solve(F, -d_data_N, solver=LSMR)
+
+        dz = jax.lax.cond(jnp.allclose(d_data_N, 0),
+                          zero_case,
+                          nonzero_case)
+        
+        dz_n, dz_m, dz_N = dz[:n], dz[n:n+m], dz[-1]
+        dx = dz_n - self.x * dz_N
+        dproj_k_star_v_dz_m = dproj_kstar_v @ dz_m
+        dy = dproj_k_star_v_dz_m - self.y * dz_N
+        ds = dproj_k_star_v_dz_m - dz_m - self.s * dz_N
+        return dx, dy, ds
+
+    def vjp(
+        self,
+        dx: Float[Array, " n"],
+        dy: Float[Array, " m"],
+        ds: Float[Array, " m"]
+    ) -> tuple[
+        Float[BCSR, "n n"], Float[BCSR, "m n"],
+        Float[Array, " n"], Float[Array, " m"]]:
+        """Apply the adjoint of the derivative of the QCP's solution map to a solution perturbation.
+        
+        Specifically, an implementation of the method given in section 3.2 of the paper.
+        
+        **Arguments:**
+        - `dx`: A perturbation to the primal solution.
+        - `dy`: A perturbation to the dual solution.
+        - `ds`: A perturbation to the primal slack solution.
+
+        **Returns**
+
+        A four-tuple containing the perturbations to the objective matrix, constraint matrix,
+        linear cost function vector, and constraint vector. Note that these perturbation matrices
+        will have the same sparsity patterns as their corresponding problem matrices.
+        """
+        
+        n, m = self.problem_structure.n, self.problem_structure.m
+        pi_z, F, dproj_kstar_v = self._form_atoms()
+        dz = jnp.concatenate([dx,
+                              dproj_kstar_v @ (dy + ds) - ds,
+                              - jnp.array([self.x @ dx + self.y @ dy + self.s @ ds])]
+                              )
+        
+        def zero_case():
+            return jnp.zeros_like(dz)
+        
+        def nonzero_case():
+            # TODO(quill): start solver from previous spot?
+            #   => (so would need previous `d_data_N`)
+            return linear_solve(F.T, -dz, solver=LSMR)
+
+        d_data_N = jax.lax.cond(jnp.allclose(dz, 0),
+                                zero_case,
+                                nonzero_case)
+        
+        # TODO(quill): save/output residual?
+
+        pi_z_n = pi_z[:n]
+        pi_z_m = pi_z[n:n+m]
+        pi_z_N = pi_z[-1]
+        d_data_N_n = d_data_N[:n]
+        d_data_N_m = d_data_N[n:n+m]
+        d_data_N_N = d_data_N[-1]
+        
+        return _d_data_Q_adjoint_gpu(x=pi_z_n, y=pi_z_m, tau=pi_z_N,
+                                     w1=d_data_N_n, w2=d_data_N_m, w3=d_data_N_N,
+                                     P_rows=self.problem_structure.P_nonzero_rows,
+                                     P_cols=self.problem_structure.P_nonzero_cols,
+                                     A_rows=self.problem_structure.A_nonzero_rows,
+                                     A_cols=self.problem_structure.A_nonzero_cols,
+                                     n=n, m=m)
 
 # QCP.__init__.__doc__ = """**Parameters**
 # - 
@@ -267,7 +422,4 @@ class DeviceQCP(AbstractQCP):
         # # TODO(quill): finish checking that `q` size is `n` then check `b`
 
 def _check_qcp_arguments_dimensionality():
-    pass
-
-def _convert_perturbation(dP: Float[Array | BCOO | BCSR, "n n"]) -> ObjMatrix:
     pass

@@ -392,11 +392,24 @@ class ProductConeProjector(AbstractConeProjector):
                 dims.append(val)
             elif cone_key == SOC:
                 # SOC: val is a list of ints (dimensions of each SOC block)
-                projectors.append(SecondOrderConeProjector(val))
-                dims.append(sum(val))
+                if len(val) > 0:
+                    projectors.append(SecondOrderConeProjector(val))
+                    dims.append(sum(val))
+            elif cone_key == EXP:
+                if val > 0:
+                    raise ValueError(f"The exponential cone is not yet supported.")
+            elif cone_key == EXP_DUAL:
+                if val > 0:
+                    raise ValueError(f"The dual exponential cone is not yet supported.")
+            elif cone_key == POW:
+                if len(val) > 0:
+                    raise ValueError(f"The power cone and its dual are not yet supported.")
+            elif cone_key == PSD:
+                if len(val) > 0:
+                    raise ValueError(f"The PSD cone is not yet supported.")
             else:
                 raise ValueError(f"The cone corresponding to cone key: {cone_key}"
-                                 + " is not yet implemented.")
+                                 + " is not known.")
         self.projectors = projectors
         self.dims = dims
         self.split_indices = _to_int_list(np.cumsum(dims[:-1]))

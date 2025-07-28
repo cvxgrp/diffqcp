@@ -4,7 +4,6 @@ import jax
 from jax import eval_shape
 import jax.numpy as jnp
 import equinox as eqx
-import lineax as lx
 from lineax import AbstractLinearOperator, IdentityLinearOperator, linear_solve, LSMR
 from jaxtyping import Float, Array
 from jax.experimental.sparse import BCOO, BCSR
@@ -12,6 +11,8 @@ from jax.experimental.sparse import BCOO, BCSR
 from diffqcp._problem_data import (QCPStructureCPU, QCPStructureGPU, QCPStructure, ObjMatrixCPU)
 from diffqcp._linops import _BlockLinearOperator
 from diffqcp._qcp_derivs import (_DuQ, _d_data_Q, _d_data_Q_adjoint_cpu, _d_data_Q_adjoint_gpu)
+
+# TODO(quill): make a note that the "CPU" and "GPU" qualifiers are somewhat misleading.
 
 class AbstractQCP(eqx.Module):
     """Quadratic Cone Program.
@@ -146,12 +147,12 @@ class AbstractQCP(eqx.Module):
         d_data_N_N = d_data_N[-1]
         
         return produce_output(x=pi_z_n, y=pi_z_m, tau=pi_z_N,
-                                     w1=d_data_N_n, w2=d_data_N_m, w3=d_data_N_N,
-                                     P_rows=self.problem_structure.P_nonzero_rows,
-                                     P_cols=self.problem_structure.P_nonzero_cols,
-                                     A_rows=self.problem_structure.A_nonzero_rows,
-                                     A_cols=self.problem_structure.A_nonzero_cols,
-                                     n=n, m=m)
+                              w1=d_data_N_n, w2=d_data_N_m, w3=d_data_N_N,
+                              P_rows=self.problem_structure.P_nonzero_rows,
+                              P_cols=self.problem_structure.P_nonzero_cols,
+                              A_rows=self.problem_structure.A_nonzero_rows,
+                              A_cols=self.problem_structure.A_nonzero_cols,
+                              n=n, m=m)
         
     @abstractmethod
     def vjp(

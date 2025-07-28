@@ -96,9 +96,6 @@ class QCPStructureCPU(QCPStructure):
             self.constr_matrix_init(A)
 
         self.N = self.n + self.m + 1
-        
-    def __post_init__(self):
-        self.N = self.n + self.m + 1
     
     def obj_matrix_init(self, P: Float[BCOO, "n n"]):
         # TODO(quill): checks on P being upper triangular.
@@ -117,7 +114,7 @@ class QCPStructureCPU(QCPStructure):
     def form_obj(self, P_like: Float[BCOO, "n n"]) -> ObjMatrixCPU:
         diag_values = P_like.data[self.P_diag_mask]
         diag = jnp.zeros(self.n)
-        diag[self.P_diag_indices] = diag_values
+        diag = diag.at[self.P_diag_indices].set(diag_values)
         return ObjMatrixCPU(P_like, P_like.T, diag)
 
 
@@ -184,8 +181,7 @@ class QCPStructureGPU(QCPStructure):
             self.constr_matrix_init(A[0])
         else:
             self.constr_matrix_init(A)
-        
-    def __post_init__(self):
+
         self.N = self.n + self.m + 1
     
     def obj_matrix_init(self, P: Float[BCSR, "n n"]):
@@ -246,7 +242,7 @@ class ObjMatrixCPU(AbstractLinearOperator):
         self.P, self.PT, self.diag = P, PT, diag
         n = jnp.shape(P)[0]
         self.in_struc = ShapeDtypeStruct(shape=(n,),
-                                         device=P.device)
+                                         dtype=P.data.dtype)
     
     def mv(self, vector):
         return self.P @ vector + self.PT @ vector - self.diag*vector

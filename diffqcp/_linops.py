@@ -51,6 +51,7 @@ class _BlockLinearOperator(lx.AbstractLinearOperator):
     #       in `PyTreeLinearOperator`.)
     # split_indices: list[int]
     split_indices: list[int] = eqx.field(static=True)
+    # TODO(quill): make this a JAX array so goes onto device.
 
     def __init__(
         self,
@@ -124,3 +125,7 @@ class _BlockLinearOperator(lx.AbstractLinearOperator):
 @lx.is_symmetric.register(_BlockLinearOperator)
 def _(op):
     return all(lx.is_symmetric(block) for block in op.blocks)
+
+@lx.conj.register(_BlockLinearOperator)
+def _(op):
+    return op

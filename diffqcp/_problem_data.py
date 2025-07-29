@@ -13,9 +13,6 @@ from diffqcp.cones.canonical import ProductConeProjector
 from diffqcp._helpers import _coo_to_csr_transpose_map, _TransposeCSRInfo
 
 class QCPStructure(eqx.Module):
-    """
-    Whole class will be declared as `static` by `QCP` class
-    """
 
     # The following are needed for `_form_atoms` in `AbstractQCP`.
     n: eqx.AbstractVar[int]
@@ -227,11 +224,15 @@ class QCPStructureGPU(QCPStructure):
                      self.A_transpose_info.indptr),
                      shape=(self.n, self.m))
 
+
+type ObjMatrix = ObjMatrixCPU | ObjMatrixGPU
+
+
 class ObjMatrixCPU(AbstractLinearOperator):
     P: Float[BCOO, "n n"]
     PT: Float[BCOO, "n n"]
     diag: Float[BCOO, " n"]
-    in_struc: ShapeDtypeStruct = eqx.field(static=True)
+    in_struc: ShapeDtypeStruct
 
     def __init__(
         self,
@@ -259,7 +260,40 @@ class ObjMatrixCPU(AbstractLinearOperator):
 
     def out_structure(self):
         return self.in_structure()
+    
+class ObjMatrixGPU(AbstractLinearOperator):
+    P: Float[BCSR, "n n"]
+    in_struc: ShapeDtypeStruct
+
+    def __init__(
+        self,
+        P: Float[BCSR, "n n"],
+    ):
+        self.P, = P
+        n = jnp.shape(P)[0]
+        self.in_struc = ShapeDtypeStruct(shape=(n,),
+                                         dtype=P.data.dtype)
+    
+    def mv(self, vector):
+        return self.P @ vector
+    
+    def transpose(self):
+        return self
+    
+    def as_matrix(self):
+        raise NotImplementedError(f"{self.__class__.__name__}'s `as_matrix` method is"
+                                  + " not yet implemented.")
+    
+    def in_structure(self):
+        pass
+
+    def out_structure(self):
+        return self.in_structure()
 
 @lx.is_symmetric.register(ObjMatrixCPU)
+def _(op):
+    return True
+
+@lx.is_symmetric.register(ObjMatrixGPU)
 def _(op):
     return True

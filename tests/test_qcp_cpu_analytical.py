@@ -9,6 +9,7 @@ import jax.numpy.linalg as jla
 import jax.random as jr
 import cvxpy as cvx
 import patdb
+import equinox as eqx
 
 from diffqcp import  HostQCP, QCPStructureCPU
 from .helpers import (quad_data_and_soln_from_qcp_coo as quad_data_and_soln_from_qcp,
@@ -91,14 +92,41 @@ def test_least_squares_cpu(getkey):
 
         Dx_b = jnp.array(la.solve(A_orig.T @ A_orig, A_orig.T))
 
+        def is_array_and_dtype(dtype):
+            def _predicate(x):
+                return isinstance(x, jax.Array) and jnp.issubdtype(x.dtype, dtype)
+            return _predicate
+
+        # Partition qcp into (traced, static) components
+        qcp_traced, qcp_static = eqx.partition(qcp, is_array_and_dtype(jnp.floating))
+
+        # Partition inputs similarly
+        jvp_inputs = (dP, dA, dq, db)
+        inputs_traced, inputs_static = eqx.partition(jvp_inputs, is_array_and_dtype(jnp.floating))
+
+        # Define a wrapper that takes only the traced inputs
+        def jvp_wrapped(qcp_traced, inputs_traced):
+            # Recombine with the static parts
+            qcp_full = eqx.combine(qcp_traced, qcp_static)
+            inputs_full = eqx.combine(inputs_traced, inputs_static)
+            return qcp_full.jvp(*inputs_full)
+
+        # Compile it
+        jvp_compiled = eqx.filter_jit(jvp_wrapped)
+
+        # Call it
         start = time.perf_counter()
-        dx, dy, ds = qcp.jvp(dP, dA, dq, -db)
+        dx, dy, ds = jvp_compiled(qcp_traced, inputs_traced)
         end = time.perf_counter()
         print(f"eager solve time was {end - start}. Using {dx[0]} to ensure synced.")
 
-        assert jnp.allclose(Dx_b @ db, dx[m:], atol=1e-8)
-
         assert False
+        
+        # dx, dy, ds = jvp(dP, dA, dq, -db)
+
+        # assert jnp.allclose(Dx_b @ db, dx[m:], atol=1e-8)
+
+        # assert False
         
         # with jax.log_compiles():
         

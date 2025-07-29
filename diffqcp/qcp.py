@@ -8,10 +8,10 @@ from lineax import AbstractLinearOperator, IdentityLinearOperator, linear_solve,
 from jaxtyping import Float, Array
 from jax.experimental.sparse import BCOO, BCSR
 
-from diffqcp._problem_data import (QCPStructureCPU, QCPStructureGPU, QCPStructure, ObjMatrixCPU)
+from diffqcp._problem_data import (QCPStructureCPU, QCPStructureGPU,
+                                   QCPStructure, ObjMatrixCPU, ObjMatrixGPU, ObjMatrix)
 from diffqcp._linops import _BlockLinearOperator
 from diffqcp._qcp_derivs import (_DuQ, _d_data_Q, _d_data_Q_adjoint_cpu, _d_data_Q_adjoint_gpu)
-
 # TODO(quill): make a note that the "CPU" and "GPU" qualifiers are somewhat misleading.
 
 class AbstractQCP(eqx.Module):
@@ -33,7 +33,7 @@ class AbstractQCP(eqx.Module):
     variables.
     """
 
-    P: eqx.AbstractVar[BCSR | AbstractLinearOperator]
+    P: eqx.AbstractVar[ObjMatrix]
     A: eqx.AbstractVar[BCSR | BCOO]
     q: eqx.AbstractVar[Array]
     b: eqx.AbstractVar[Array]
@@ -48,7 +48,7 @@ class AbstractQCP(eqx.Module):
         dpi_z = _BlockLinearOperator([IdentityLinearOperator(eval_shape(lambda: self.x)),
                                       dproj_kstar_v,
                                       IdentityLinearOperator(eval_shape(lambda: jnp.array([1.0])))])
-        Px = self.P @ self.x
+        Px = self.P.mv(self.x)
         xTPx = self.x @ Px
         AT = self.A.T
         # NOTE(quill): seems hard to avoid the `DzQ` bit of the variable name.
@@ -57,7 +57,6 @@ class AbstractQCP(eqx.Module):
         DzQ_pi_z = _DuQ(P=self.P, Px=Px, xTPx=xTPx, A=self.A, AT=AT, q=self.q,
                         b=self.b, x=self.x, tau=jnp.array(1.0, dtype=self.x.dtype),
                         n=self.problem_structure.n, m=self.problem_structure.m)
-        
         # NOTE(quill): we use that z_N (as defined in paper) is always 1.0, thus don't
         #   include that division.
         F = DzQ_pi_z @ dpi_z - dpi_z + IdentityLinearOperator(eval_shape(lambda: pi_z))
@@ -66,7 +65,7 @@ class AbstractQCP(eqx.Module):
     
     def _jvp_common(
         self,
-        dP: Float[BCOO | BCSR, "n n"],
+        dP: ObjMatrix,
         dA: Float[BCOO | BCSR, "m n"],
         dAT: Float[BCOO | BCSR, "n m"],
         dq: Float[Array, " n"],
@@ -84,15 +83,17 @@ class AbstractQCP(eqx.Module):
         def nonzero_case():
             # TODO(quill): start solver from previous spot?
             #   => (so would need `dz`)
-            return linear_solve(F, -d_data_N, solver=LSMR(rtol=1e-6, atol=1e-6))
+            soln = linear_solve(F, -d_data_N, solver=LSMR(rtol=1e-6, atol=1e-6))
+            return soln.value
 
+        # patdb.debug()
         dz = jax.lax.cond(jnp.allclose(d_data_N, 0),
                           zero_case,
                           nonzero_case)
         
         dz_n, dz_m, dz_N = dz[:n], dz[n:n+m], dz[-1]
         dx = dz_n - self.x * dz_N
-        dproj_k_star_v_dz_m = dproj_kstar_v @ dz_m
+        dproj_k_star_v_dz_m = dproj_kstar_v.mv(dz_m)
         dy = dproj_k_star_v_dz_m - self.y * dz_N
         ds = dproj_k_star_v_dz_m - dz_m - self.s * dz_N
         return dx, dy, ds
@@ -131,7 +132,8 @@ class AbstractQCP(eqx.Module):
         def nonzero_case():
             # TODO(quill): start solver from previous spot?
             #   => (so would need previous `d_data_N`)
-            return linear_solve(F.T, -dz, solver=LSMR(rtol=1e-6, atol=1e-6))
+            soln = linear_solve(F.T, -dz, solver=LSMR(rtol=1e-6, atol=1e-6))
+            return soln.value
 
         d_data_N = jax.lax.cond(jnp.allclose(dz, 0),
                                 zero_case,
@@ -171,7 +173,7 @@ class AbstractQCP(eqx.Module):
 class HostQCP(AbstractQCP):
     """QCP whose subroutines are optimized to run on host (CPU).
     """
-    P: Float[ObjMatrixCPU, "n n"]
+    P: ObjMatrixCPU
     A: Float[BCOO, "m n"]
     q: Float[Array, " n"]
     b: Float[Array, " m"]
@@ -179,7 +181,7 @@ class HostQCP(AbstractQCP):
     y: Float[Array, " m"]
     s: Float[Array, " m"]
 
-    problem_structure: QCPStructureCPU = eqx.field(static=True)
+    problem_structure: QCPStructureCPU
 
     def __init__(
         self,
@@ -240,6 +242,8 @@ class HostQCP(AbstractQCP):
         #   Can this be consolidated / does it indicate incorrect design decision/execution?
         #   => NOTE(quill): I've attempted to address this annoyance with `_jvp_common`.
         dAT = dA.T
+        dP = self.problem_structure.form_obj(dP)
+        # need to wrap dP.
         return self._jvp_common(dP=dP, dA=dA, dAT=dAT, dq=dq, db=db)
 
     def vjp(
@@ -280,7 +284,7 @@ class DeviceQCP(AbstractQCP):
     # NOTE(quill): when we allow for batched problem data, will need
     #   to wrap `P` in an `AbstractLinearOperator` to dictate how the `mv`
     #   operation should behave.
-    P: Float[BCSR, "n n"]
+    P: ObjMatrixGPU
     A: Float[BCSR, "m n"]
     q: Float[Array, " n"]
     b: Float[Array, " m"]
@@ -288,7 +292,7 @@ class DeviceQCP(AbstractQCP):
     y: Float[Array, " m"]
     s: Float[Array, " m"]
 
-    problem_structure: QCPStructureGPU = eqx.field(static=True)
+    problem_structure: QCPStructureGPU
 
     def __init__(
         self,
@@ -318,8 +322,8 @@ class DeviceQCP(AbstractQCP):
         - `P` should contain the full symmetric matrix (not just upper triangular).
         - All arrays should be on the device (GPU) and compatible with JAX operations.
         """
-        # NOTE(quill): will need this custom `__init__`` when we wrap `P`
-        self.P, self.A, self.q, self.b = P, A, q, b
+        self.P = ObjMatrixGPU(P)
+        self.A, self.q, self.b = P, A, q, b
         self.x, self.y, self.s = x, y, s
         self.problem_structure = problem_structure
     
@@ -346,6 +350,7 @@ class DeviceQCP(AbstractQCP):
         
         A 3-tuple containing the perturbations to the solution: `(dx, dy, ds)`.
         """
+        dP = ObjMatrixGPU(dP)
         dAT = self.problem_structure.form_A_transpose(dA)
         return self._jvp_common(dP=dP, dA=dA, dAT=dAT, dq=dq, db=db)
 

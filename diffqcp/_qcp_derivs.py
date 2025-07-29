@@ -8,7 +8,7 @@ from lineax import AbstractLinearOperator
 from jaxtyping import Array, Float, Integer
 from jax.experimental.sparse import BCOO, BCSR
 
-from diffqcp._problem_data import ObjMatrixCPU
+from diffqcp._problem_data import ObjMatrixCPU, ObjMatrix
 
 # NOTE(quill): the last bit of that would fail since `dtau * self.q` would be 1D array * 2D array
 #   So I guess the somewhat challenging aspect of this is the fact that the first two bits
@@ -16,7 +16,7 @@ from diffqcp._problem_data import ObjMatrixCPU
 # NOTE(quill): UPDATE. This is NOT TRUE. If in the batched case then `dtau` is also a 2D array!
 
 class _DuQAdjoint(AbstractLinearOperator):
-    P: ObjMatrixCPU | Float[BCSR, "n n"]
+    P: ObjMatrix
     Px: Float[Array, " n"]
     xTPx: Float[Array, ""]
     A: Float[BCOO | BCSR, "m n"]
@@ -32,10 +32,10 @@ class _DuQAdjoint(AbstractLinearOperator):
         dv1: Float[Array, " n"] = dv[:self.n]
         dv2: Float[Array, " m"] = dv[self.n:-1]
         dv3: Float[Array, ""] = dv[-1]
-        out1 = self.P @ dv1 - self.AT @ dv2 + ( -(2/self.tau) * self.Px - self.q) * dv3
+        out1 = self.P.mv(dv1) - self.AT @ dv2 + ( -(2/self.tau) * self.Px - self.q) * dv3
         out2 = self.A @ dv1 - dv3 * self.b
         out3 = self.q @ dv1 + self.b @ dv2 + (1/self.tau**2) * dv3 * self.xTPx
-        return jnp.concatenate([out1, out2, out3])
+        return jnp.concatenate([out1, out2, jnp.array([out3])])
 
     def as_matrix(self):
         raise NotImplementedError(f"{self.__class__.__name__}'s `as_matrix` method is"
@@ -47,17 +47,17 @@ class _DuQAdjoint(AbstractLinearOperator):
 
     def in_structure(self):
         return ShapeDtypeStruct(shape=(self.n + self.m + 1,),
-                                dtype=self.P.dtype)
+                                dtype=self.A.dtype)
     
     def out_structure(self):
-        return self.in_structure
+        return self.in_structure()
 
 
 class _DuQ(AbstractLinearOperator):
     """
     NOTE(quill): we know at compile time if this is batched or not.
     """
-    P: ObjMatrixCPU | Float[BCSR, "n n"]
+    P: ObjMatrix
     Px: Float[Array, " n"]
     xTPx: Float[Array, ""]
     A: Float[BCOO | BCSR, "m n"]
@@ -71,11 +71,12 @@ class _DuQ(AbstractLinearOperator):
 
     def mv(self, du: Float[Array, " n+m+1"]):
         dx, dy, dtau = du[:self.n], du[self.n:-1], du[-1]
-        out1 = self.P @ dx + self.AT @ dy + dtau * self.q
+        Pdx = self.P.mv(dx)
+        out1 = Pdx + self.AT @ dy + dtau * self.q
         out2 = -self.A @ dx + dtau * self.b
-        out3 = ((-2/self.tau) * self.x @ (self.P @ dx) - self.q @ dx - self.b @ dy
+        out3 = ((-2/self.tau) * self.x @ Pdx - self.q @ dx - self.b @ dy
                 + (1/self.tau**2) * dtau + self.xTPx)
-        return jnp.concatenate([out1, out2, out3])
+        return jnp.concatenate([out1, out2, jnp.array([out3])])
     
     def as_matrix(self):
         raise NotImplementedError(f"{self.__class__.__name__}'s `as_matrix` method is"
@@ -87,26 +88,34 @@ class _DuQ(AbstractLinearOperator):
     
     def in_structure(self):
         return ShapeDtypeStruct(shape=(self.n + self.m + 1,),
-                                dtype=self.P.dtype)
+                                dtype=self.A.dtype)
     
     def out_structure(self):
-        return self.in_structure
+        return self.in_structure()
 
 @lx.is_symmetric.register(_DuQAdjoint)
 def _(op):
     return False
 
+@lx.conj.register(_DuQAdjoint)
+def _(op):
+    return op
+
 @lx.is_symmetric.register(_DuQ)
 def _(op):
     return False
+
+@lx.conj.register(_DuQ)
+def _(op):
+    return op
 
 def _d_data_Q(
     x: Float[Array, " n"],
     y: Float[Array, " m"],
     tau: Float[Array, ""],
-    dP: Float[Array | BCOO | BCSR, "n n"],
-    dA: Float[Array | BCOO | BCSR, "m n"],
-    dAT: Float[Array | BCOO, BCSR, "n m"],
+    dP: ObjMatrix,
+    dA: Float[BCOO | BCSR, "m n"],
+    dAT: Float[BCOO, BCSR, "n m"],
     dq: Float[Array, " n"],
     db: Float[Array, " m"]
 ) -> Float[Array, " n+m+1"]:
@@ -121,7 +130,7 @@ def _d_data_Q(
     **not just the upper triangular part.**
     """
     
-    dPx = dP @ x
+    dPx = dP.mv(x)
     out1 = dPx + dAT @ y + tau * dq
     out2 = -dA @ x + tau * db
     out3 = -(1 / tau) * (x @ dPx) - dq @ x - db @ y

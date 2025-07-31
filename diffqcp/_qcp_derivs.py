@@ -75,7 +75,7 @@ class _DuQ(AbstractLinearOperator):
         out1 = Pdx + self.AT @ dy + dtau * self.q
         out2 = -self.A @ dx + dtau * self.b
         out3 = ((-2/self.tau) * self.x @ Pdx - self.q @ dx - self.b @ dy
-                + (1/self.tau**2) * dtau + self.xTPx)
+                + (1/self.tau**2) * dtau * self.xTPx)
         return jnp.concatenate([out1, out2, jnp.array([out3])])
     
     def as_matrix(self):

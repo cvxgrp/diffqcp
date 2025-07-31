@@ -3,6 +3,7 @@ from typing import Callable
 import jax
 from jax import eval_shape
 import jax.numpy as jnp
+import jax.random as jr
 import equinox as eqx
 from lineax import AbstractLinearOperator, IdentityLinearOperator, linear_solve, LSMR
 from jaxtyping import Float, Array
@@ -59,7 +60,7 @@ class AbstractQCP(eqx.Module):
                         n=self.problem_structure.n, m=self.problem_structure.m)
         # NOTE(quill): we use that z_N (as defined in paper) is always 1.0, thus don't
         #   include that division.
-        F = DzQ_pi_z @ dpi_z - dpi_z + IdentityLinearOperator(eval_shape(lambda: pi_z))
+        F = (DzQ_pi_z @ dpi_z) - dpi_z + IdentityLinearOperator(eval_shape(lambda: pi_z))
 
         return (pi_z, F, dproj_kstar_v)
     
@@ -72,6 +73,7 @@ class AbstractQCP(eqx.Module):
         db: Float[Array, " m"]
     ) -> tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]:
         pi_z, F, dproj_kstar_v = self._form_atoms()
+
         n, m = self.problem_structure.n, self.problem_structure.m
         pi_z_n, pi_z_m, pi_z_N = pi_z[:n], pi_z[n:n+m], pi_z[-1]
         d_data_N = _d_data_Q(x=pi_z_n, y=pi_z_m, tau=pi_z_N, dP=dP,
@@ -83,10 +85,9 @@ class AbstractQCP(eqx.Module):
         def nonzero_case():
             # TODO(quill): start solver from previous spot?
             #   => (so would need `dz`)
-            soln = linear_solve(F, -d_data_N, solver=LSMR(rtol=1e-6, atol=1e-6))
+            soln = linear_solve(F, -d_data_N, solver=LSMR(rtol=1e-8, atol=1e-8))
             return soln.value
 
-        # patdb.debug()
         dz = jax.lax.cond(jnp.allclose(d_data_N, 0),
                           zero_case,
                           nonzero_case)

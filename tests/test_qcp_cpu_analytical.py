@@ -52,6 +52,7 @@ def test_least_squares_cpu(getkey):
     np.random.seed(0)
 
     for _ in range(10):
+        np.random.seed(0)
         n = np.random.randint(low=10, high=15)
         m = n + np.random.randint(low=5, high=15)
         # n = np.random.randint(low=1_000, high=1_500)
@@ -81,6 +82,8 @@ def test_least_squares_cpu(getkey):
         qcp_struc = QCPStructureCPU(Pupper, A, data.scs_cones)
         qcp = HostQCP(P, A, q, b, x, y, s, qcp_struc)
 
+        print("N = ", qcp_struc.N)
+
         dP = get_zeros_like_coo(data.Pupper_coo)
         dP = scoo_to_bcoo(dP)
         dA = get_zeros_like_coo(data.Acoo)
@@ -92,6 +95,20 @@ def test_least_squares_cpu(getkey):
 
         Dx_b = jnp.array(la.solve(A_orig.T @ A_orig, A_orig.T))
 
+        start = time.perf_counter()
+        dx, dy, ds = qcp.jvp(dP, dA, dq, -db)
+        tol = jnp.abs(dx)
+        end = time.perf_counter()
+        print(f"compile + solve time = {end - start}..")
+        
+        true_result = Dx_b @ db
+
+        patdb.debug()
+
+        assert jnp.allclose(true_result, dx[m:], atol=1e-8)
+
+        assert False # DEBUG
+
         def is_array_and_dtype(dtype):
             def _predicate(x):
                 return isinstance(x, jax.Array) and jnp.issubdtype(x.dtype, dtype)
@@ -101,7 +118,7 @@ def test_least_squares_cpu(getkey):
         qcp_traced, qcp_static = eqx.partition(qcp, is_array_and_dtype(jnp.floating))
 
         # Partition inputs similarly
-        jvp_inputs = (dP, dA, dq, db)
+        jvp_inputs = (dP, dA, dq, -db)
         inputs_traced, inputs_static = eqx.partition(jvp_inputs, is_array_and_dtype(jnp.floating))
 
         # Define a wrapper that takes only the traced inputs
@@ -114,17 +131,33 @@ def test_least_squares_cpu(getkey):
         # Compile it
         jvp_compiled = eqx.filter_jit(jvp_wrapped)
 
+        # print out static vs traced inputs
+        
         # Call it
         start = time.perf_counter()
         dx, dy, ds = jvp_compiled(qcp_traced, inputs_traced)
+        tol = jnp.abs(dx)
         end = time.perf_counter()
-        print(f"eager solve time was {end - start}. Using {dx[0]} to ensure synced.")
+        print(f"compile + solve time = {end - start}..")
 
-        assert False
+        start = time.perf_counter()
+        dx, dy, ds = jvp_compiled(qcp_traced, inputs_traced)
+        tol = jnp.abs(dx)
+        end = time.perf_counter()
+        print(f"solve only time = {end - start}..")
         
         # dx, dy, ds = jvp(dP, dA, dq, -db)
 
-        # assert jnp.allclose(Dx_b @ db, dx[m:], atol=1e-8)
+        true_result = Dx_b @ db
+
+        print("true result shape: ", jnp.shape(true_result))
+        print("dx shape: ", jnp.shape(dx[m:]))
+
+        patdb.debug()
+        
+        assert jnp.allclose(true_result, dx[m:], atol=1e-8)
+
+        assert False
 
         # assert False
         

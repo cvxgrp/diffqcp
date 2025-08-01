@@ -36,6 +36,7 @@ class AbstractQCP(eqx.Module):
 
     P: eqx.AbstractVar[ObjMatrix]
     A: eqx.AbstractVar[BCSR | BCOO]
+    AT: eqx.AbstractVar[BCSR | BCOO]
     q: eqx.AbstractVar[Array]
     b: eqx.AbstractVar[Array]
     x: eqx.AbstractVar[Array]
@@ -51,7 +52,7 @@ class AbstractQCP(eqx.Module):
                                       IdentityLinearOperator(eval_shape(lambda: jnp.array([1.0])))])
         Px = self.P.mv(self.x)
         xTPx = self.x @ Px
-        AT = self.A.T
+        AT = self.AT
         # NOTE(quill): seems hard to avoid the `DzQ` bit of the variable name.
         # NOTE(quill): Note that we're skipping the step of extracting the first n components of
         #   `pi_z` and just using `P @ pi_z[:n] = P @ x`. 
@@ -133,7 +134,7 @@ class AbstractQCP(eqx.Module):
         def nonzero_case():
             # TODO(quill): start solver from previous spot?
             #   => (so would need previous `d_data_N`)
-            soln = linear_solve(F.T, -dz, solver=LSMR(rtol=1e-6, atol=1e-6))
+            soln = linear_solve(F.T, -dz, solver=LSMR(rtol=1e-8, atol=1e-8))
             return soln.value
 
         d_data_N = jax.lax.cond(jnp.allclose(dz, 0),
@@ -176,6 +177,7 @@ class HostQCP(AbstractQCP):
     """
     P: ObjMatrixCPU
     A: Float[BCOO, "m n"]
+    AT: Float[BCOO, "n m"]
     q: Float[Array, " n"]
     b: Float[Array, " m"]
     x: Float[Array, " n"]
@@ -212,6 +214,7 @@ class HostQCP(AbstractQCP):
         - All arrays should be on the host (CPU) and compatible with JAX operations.
         """
         self.A, self.q, self.b = A, q, b
+        self.AT = A.T
         self.x, self.y, self.s = x, y, s
         self.problem_structure = problem_structure
         self.P = self.problem_structure.form_obj(P)
@@ -287,6 +290,7 @@ class DeviceQCP(AbstractQCP):
     #   operation should behave.
     P: ObjMatrixGPU
     A: Float[BCSR, "m n"]
+    AT: Float[BCSR, "n m"]
     q: Float[Array, " n"]
     b: Float[Array, " m"]
     x: Float[Array, " n"]
@@ -323,10 +327,11 @@ class DeviceQCP(AbstractQCP):
         - `P` should contain the full symmetric matrix (not just upper triangular).
         - All arrays should be on the device (GPU) and compatible with JAX operations.
         """
-        self.P = ObjMatrixGPU(P)
-        self.A, self.q, self.b = P, A, q, b
-        self.x, self.y, self.s = x, y, s
         self.problem_structure = problem_structure
+        self.P = ObjMatrixGPU(P)
+        self.A, self.q, self.b = A, q, b
+        self.AT = self.problem_structure.form_A_transpose(self.A)
+        self.x, self.y, self.s = x, y, s
     
     def jvp(
         self,

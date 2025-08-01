@@ -37,7 +37,7 @@ def scoo_to_bcoo(coo_mat: SCOO) -> BCOO:
 
 
 def scsr_to_bcsr(csr_mat: SCSR) -> BCSR:
-    return BCSR((csr_mat.data, csr_mat.indices, csr_mat.data),
+    return BCSR((csr_mat.data, csr_mat.indices, csr_mat.indptr),
                 shape=csr_mat.shape)
     
 
@@ -172,3 +172,6 @@ class QCPProbData:
 
 def get_zeros_like_coo(A: SCOO):
     return coo_array((np.zeros(A.size), A.nonzero()), shape=A.shape)
+
+def get_zeros_like_csr(A: SCSR):
+    return csr_array((np.zeros(np.size(A.data)), A.indices, A.indptr), shape=A.shape, dtype=A.dtype)

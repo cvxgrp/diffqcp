@@ -73,7 +73,7 @@ class _DuQ(AbstractLinearOperator):
         dx, dy, dtau = du[:self.n], du[self.n:-1], du[-1]
         Pdx = self.P.mv(dx)
         out1 = Pdx + self.AT @ dy + dtau * self.q
-        out2 = -self.A @ dx + dtau * self.b
+        out2 = self.A @ (-dx) + dtau * self.b
         out3 = ((-2/self.tau) * self.x @ Pdx - self.q @ dx - self.b @ dy
                 + (1/self.tau**2) * dtau * self.xTPx)
         return jnp.concatenate([out1, out2, jnp.array([out3])])
@@ -132,7 +132,7 @@ def _d_data_Q(
     
     dPx = dP.mv(x)
     out1 = dPx + dAT @ y + tau * dq
-    out2 = -dA @ x + tau * db
+    out2 = dA @ -x + tau * db
     out3 = -(1 / tau) * (x @ dPx) - dq @ x - db @ y
 
     return jnp.concatenate([out1, out2, jnp.array([out3])])

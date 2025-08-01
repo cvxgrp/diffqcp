@@ -83,6 +83,8 @@ def test_least_squares_cpu(getkey):
         qcp = HostQCP(P, A, q, b, x, y, s, qcp_struc)
 
         print("N = ", qcp_struc.N)
+        print("n = ", qcp_struc.n)
+        print("m = ", qcp_struc.m)
 
         dP = get_zeros_like_coo(data.Pupper_coo)
         dP = scoo_to_bcoo(dP)
@@ -95,19 +97,19 @@ def test_least_squares_cpu(getkey):
 
         Dx_b = jnp.array(la.solve(A_orig.T @ A_orig, A_orig.T))
 
-        start = time.perf_counter()
-        dx, dy, ds = qcp.jvp(dP, dA, dq, -db)
-        tol = jnp.abs(dx)
-        end = time.perf_counter()
-        print(f"compile + solve time = {end - start}..")
+        # start = time.perf_counter()
+        # dx, dy, ds = qcp.jvp(dP, dA, dq, -db)
+        # tol = jnp.abs(dx)
+        # end = time.perf_counter()
+        # print(f"compile + solve time = {end - start}..")
         
         true_result = Dx_b @ db
 
-        patdb.debug()
+        # patdb.debug()
 
-        assert jnp.allclose(true_result, dx[m:], atol=1e-8)
+        # assert jnp.allclose(true_result, dx[m:], atol=1e-8)
 
-        assert False # DEBUG
+        # assert False # DEBUG
 
         def is_array_and_dtype(dtype):
             def _predicate(x):
@@ -136,13 +138,13 @@ def test_least_squares_cpu(getkey):
         # Call it
         start = time.perf_counter()
         dx, dy, ds = jvp_compiled(qcp_traced, inputs_traced)
-        tol = jnp.abs(dx)
+        tol = np.asarray(dx)
         end = time.perf_counter()
         print(f"compile + solve time = {end - start}..")
 
         start = time.perf_counter()
         dx, dy, ds = jvp_compiled(qcp_traced, inputs_traced)
-        tol = jnp.abs(dx)
+        tol = np.asarray(dx)
         end = time.perf_counter()
         print(f"solve only time = {end - start}..")
         

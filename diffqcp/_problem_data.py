@@ -9,6 +9,8 @@ import lineax as lx
 from lineax import AbstractLinearOperator
 from jaxtyping import Float, Integer, Bool, Array
 
+import patdb # DEBUG
+
 from diffqcp.cones.canonical import ProductConeProjector
 from diffqcp._helpers import _coo_to_csr_transpose_map, _TransposeCSRInfo
 
@@ -188,7 +190,8 @@ class QCPStructureGPU(QCPStructure):
         #   manipulation to result in accurate metadata.
         #   If this error occurs more frequently than not, then it will probably
         #   be worth canonicalizing the data matrices by default.
-        if P_coo.data != P.data:
+        # NOTE(quill): must use `allclose` since `!=` compares if same data in memory.
+        if not jnp.allclose(P_coo.data, P.data): 
             raise ValueError("The ordering of the data in `P_coo` and `P`"
                              + " (a BCSR matrix) does not match."
                              + " Please try to coerce `P` into canonical form.")
@@ -203,7 +206,7 @@ class QCPStructureGPU(QCPStructure):
         self.m = jnp.shape(A)[0]
         A_coo = A.to_bcoo()
         # NOTE(quill): see note in `obj_matrix_init`
-        if A_coo.data != A.data:
+        if not jnp.allclose(A_coo.data, A.data):
             raise ValueError("The ordering of the data in `A_coo` and `A`"
                              + " (a BCSR matrix) does not match."
                              + " Please try to coerce `A` into canonical form.")
@@ -269,7 +272,7 @@ class ObjMatrixGPU(AbstractLinearOperator):
         self,
         P: Float[BCSR, "n n"],
     ):
-        self.P, = P
+        self.P = P
         n = jnp.shape(P)[0]
         self.in_struc = ShapeDtypeStruct(shape=(n,),
                                          dtype=P.data.dtype)

@@ -7,6 +7,8 @@ from diffqcp._linops import _ZeroOperator, _ScalarOperator, _BlockLinearOperator
 
 from .helpers import tree_allclose
 
+# TODO(quill): remove the Zero and Scalar operators.
+
 def test_zero_operator(getkey):
     dim_in = 5
     dim_out = 3

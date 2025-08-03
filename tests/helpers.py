@@ -83,16 +83,21 @@ class QCPProbData:
     Pcsc: SCSC = field(init=False)
     Pcsr: SCSR = field(init=False)
     Pcoo: SCOO = field(init=False)
+    
     Pupper_csc: SCSC = field(init=False)
     Pupper_csr: SCSR = field(init=False)
     Pupper_coo: SCOO = field(init=False)
+    
     Acsc: SCSC = field(init=False)
     Acsr: SCSR = field(init=False)
     Acoo: SCOO = field(init=False)
+    
     q: np.ndarray = field(init=False)
     b: np.ndarray = field(init=False)
+    
     n: np.ndarray = field(init=False)
     m: np.ndarray = field(init=False)
+    
     x: np.ndarray = field(init=False)
     y: np.ndarray = field(init=False)
     s: np.ndarray = field(init=False)

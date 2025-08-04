@@ -139,7 +139,7 @@ class QCPProbData:
             prob = cvx.Problem(objective, constraints)
             ```
         """
-        clarabel_probdata, _, _ = self.problem.get_problem_data(cvx.CLARABEL, solver_opts={'use_quad_obj': True})
+        clarabel_probdata, _, _ = self.problem.get_problem_data(cvx.CLARABEL, ignore_dpp=True, solver_opts={'use_quad_obj': True})
 
         self.Pcsr = clarabel_probdata["P"].tocsr()
         self.Pcsc = self.Pcsr.tocsc()

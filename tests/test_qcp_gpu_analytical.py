@@ -18,7 +18,7 @@ from .helpers import (quad_data_and_soln_from_qcp_coo as quad_data_and_soln_from
 #   => does require utilizing BCOO vs. BCSR matrices, so probably
 #   have to create different tests.
 
-def test_least_squares_gpu(getkey):
+def test_least_squares(getkey):
     """
     The least squares (approximation) problem
 
@@ -136,7 +136,7 @@ def test_least_squares_gpu(getkey):
         # Call it
         start = time.perf_counter()
         dx, dy, ds = jvp_compiled(qcp_traced, inputs_traced)
-        tol = jnp.abs(dx)
+        dx.block_until_ready()
         end = time.perf_counter()
         print(f"compile + solve time = {end - start}..")
 
@@ -146,45 +146,10 @@ def test_least_squares_gpu(getkey):
         dx.block_until_ready()
         end = time.perf_counter()
         print(f"solve only time = {end - start}..")
-        
-        # dx, dy, ds = jvp(dP, dA, dq, -db)
 
         true_result = Dx_b @ db
 
         print("true result shape: ", jnp.shape(true_result))
         print("dx shape: ", jnp.shape(dx[m:]))
-
-        patdb.debug()
         
         assert jnp.allclose(true_result, dx[m:], atol=1e-8)
-
-        assert False
-
-        # assert False
-        
-        # with jax.log_compiles():
-        
-        #     start = time.perf_counter()
-        #     jvp = jax.jit(qcp.jvp)
-        #     end = time.perf_counter()
-        #     print("compilation_time was: ", end - start)
-
-        #     # patdb.debug()
-
-        #     start = time.perf_counter()
-        #     dx, dy, ds = jvp(dP, dA, dq, -db)
-        #     end = time.perf_counter()
-        #     print("solve + jit time was: ", end - start)
-
-        #     start = time.perf_counter()
-        #     dx, dy, ds = jvp(dP, dA, dq, -db)
-        #     end = time.perf_counter()
-        #     print("solve time was: ", end - start)
-
-        # assert jnp.allclose(Dx_b @ db, dx[m:], atol=1e-8)
-
-        # assert False
-
-        # time here (remember to `block_until_ready`)
-
-        # for loop perturbations; make sure jvp is only compiled once.

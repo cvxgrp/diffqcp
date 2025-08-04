@@ -131,21 +131,13 @@ class SolverData:
         self.bjl = jl.Clarabel.cupy_to_cuvector(jl.Float64, int(self.bcp.data.ptr), self.bcp.size)
 
 
-@dataclass
-class LoopData:
-
-    Pk: Float[BCSR, "n n "]
-    Ak: Float[BCSR, "m n "]
-    qk: Float[Array, " n"]
-    bk: Float[Array, " m"]
-
-
 def compute_loss(target_x, target_y, target_s, x, y, s):
     return (0.5 * la.norm(x - target_x)**2 + 0.5 * la.norm(y - target_y)**2
             + 0.5 * la.norm(s - target_s)**2)
 
 
 @eqx.filter_jit
+@eqx.debug.assert_max_traces(max_traces=1)
 def make_step(
     qcp,
     target_x,
@@ -197,14 +189,14 @@ def grad_desc(
         sk = jax.dlpack.from_dlpack(JuliaCuVector2CuPyArray(jl.solver.solution.s))
 
         qcp = DeviceQCP(Pk, Ak, qk, bk, xk, yk, sk, qcp_problem_structure)
-        loss, *dtheta = make_step(qcp, target_x, target_y, target_s, step_size)
+        loss, *dtheta_steps = make_step(qcp, target_x, target_y, target_s, step_size)
         losses.append(loss)
 
-        dP, dA, dq, db = dtheta
-        solver_data.Pcp.data += cp_from_dlpack(dP.data)
-        solver_data.Acp.data += cp_from_dlpack(dA.data)
-        solver_data.qcp += cp_from_dlpack(dq)
-        solver_data.bcp += cp_from_dlpack(db)
+        dP_step, dA_step, dq_step, db_step = dtheta_steps
+        solver_data.Pcp.data += cp_from_dlpack(dP_step.data)
+        solver_data.Acp.data += cp_from_dlpack(dA_step.data)
+        solver_data.qcp += cp_from_dlpack(dq_step)
+        solver_data.bcp += cp_from_dlpack(db_step)
 
         # Also update solver
         jl.Clarabel.update_P_b(cuclarabel_solver, solver_data.Pjl)
@@ -221,12 +213,14 @@ if __name__ == "__main__":
 
     np.random.seed(13)
 
-    m = 2_000
-    n = 1_000
+    m = 20
+    n = 10
+    # m = 2_000
+    # n = 1_000
     # problem = prob_generator.generate_group_lasso(n=n, m=m) #TODO(quill): CuClarabel failing for this problem
     start_time = time.perf_counter()
-    # target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
-    target_problem = prob_generator.generate_LS_problem(m=m, n=n)
+    target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    # target_problem = prob_generator.generate_LS_problem(m=m, n=n)
     prob_data_cpu = QCPProbData(target_problem)
     end_time = time.perf_counter()
     print("Time to generate the target problem and"
@@ -271,6 +265,14 @@ if __name__ == "__main__":
     y_target = jax.dlpack.from_dlpack(cp.array(ycp, copy=True))
     s_target = jax.dlpack.from_dlpack(cp.array(scp, copy=True))
 
+    # --- Time compiled speedup ---
+    start_solve = time.perf_counter()
+    jl.Clarabel.solve_b(jl.solver) # solve new problem w/o creating memory
+    cp.cuda.Device().synchronize()
+    end_solve = time.perf_counter()
+    print(f"Compiled CuClarabel solve took: {end_solve - start_solve} seconds")
+    # --- ---
+
     # NOTE(quill): go from host data since the indices of `Pcp` and `Acp` have been corrupted
     P = scsr_to_bcsr(prob_data_cpu.Pcsr)
     A = scsr_to_bcsr(prob_data_cpu.Acsr)
@@ -313,12 +315,14 @@ if __name__ == "__main__":
     # === Now get problem we'll actually use for LL ===
 
     start_time = time.perf_counter()
-    # initial_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
-    initial_problem = prob_generator.generate_LS_problem(m=m, n=n)
-    prob_data_cpu = QCPProbData(target_problem)
+    initial_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    # initial_problem = prob_generator.generate_LS_problem(m=m, n=n)
+    prob_data_cpu = QCPProbData(initial_problem)
     end_time = time.perf_counter()
     print("Time to generate the initial (starting point) problem and"
           + f" canonicalize it: {end_time - start_time} seconds")
+    print(f"Canonicalized n is: {prob_data_cpu.n}")
+    print(f"Canonicalized m is: {prob_data_cpu.m}")
 
     # Put new data on GPU and create CuPy <-> Julia linking
     
@@ -332,12 +336,6 @@ if __name__ == "__main__":
     jl.Clarabel.update_A_b(jl.solver, solver_data.Ajl)
     jl.Clarabel.update_q_b(jl.solver, solver_data.qjl)
     jl.Clarabel.update_b_b(jl.solver, solver_data.bjl)
-
-    start_solve = time.perf_counter()
-    jl.Clarabel.solve_b(jl.solver) # solve new problem w/o creating memory
-    cp.cuda.Device().synchronize()
-    end_solve = time.perf_counter()
-    print(f"Compiled CuClarabel solve took: {end_solve - start_solve} seconds")
 
     # Now let's create data for JAX to use (that are 0-based, :eyeroll)
     Pk = BCSR((jax.dlpack.from_dlpack(solver_data.Pcp.data),
@@ -366,7 +364,7 @@ if __name__ == "__main__":
     plt.legend()
     plt.title(label="diffqcp")
     results_dir = os.path.join(os.path.dirname(__file__), "results")
-    output_path = os.path.join(results_dir, "LS_large.svg")
+    output_path = os.path.join(results_dir, "probability_large.svg")
     plt.savefig(output_path, format="svg")
     plt.close()
 

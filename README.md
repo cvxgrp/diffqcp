@@ -2,7 +2,7 @@
 
 `diffqcp` is a [JAX](https://docs.jax.dev/en/latest/) library that enables forming the derivative of the solution map to a quadratic cone program (QCP) with respect to the QCP problem data as an abstract linear operator and computing Jacobian-vector products (JVPs) and vector-Jacobian products (VJPs) with this operator.
 
-Discuss
+TODO(quill): (briefly) Discuss
 - implicit differentiation approach to argmin differentiation (exploiting mathematical structure)
 - DPP (relevant for batched problems)
 - Automatic differentiation.
@@ -13,11 +13,7 @@ Discuss
     - linear programs (LPs),
     - quadratic programs (QPs),
     - second-order cone programs (SOCPs),
-    - and semidefinite programs (SDPs).
-- Heuristic JVP and VJP computations when the solution map of a QCP is non-differentiable. (TODO(quil): ensure this is still the case with JAX and lineax)
-- Batched JVP and VJP computations(i.e. ...)
-- Batched problem computions (so yes, this means that )
-- Distributed
+    - and semidefinite programs (SDPs). TODO(quill): implement before release...should be easy
 
 ## Quadratic cone programs
 
@@ -40,48 +36,48 @@ A quadratic cone program is given by the primal and dual problems
 ```
 where $`x \in \mathbf{R}^n`$ is the *primal* variable, $`y \in \mathbf{R}^m`$ is the *dual* variable, and $`s \in \mathbf{R}^m`$ is the primal *slack* variable. The problem data are $`P\in \mathbf{S}_+^{n}`$, $`A \in \mathbf{R}^{m \times n}`$, $`q \in \mathbf{R}^n`$, and $`b \in \mathbf{R}^m`$. We assume that $`\mathcal K \subseteq \mathbf{R}^m`$ is a nonempty, closed, convex cone with dual cone $`\mathcal{K}^*`$.
 
-`diffqcp` currently supports QCPs whose cone is the Cartesian product of the zero cone, positive orthant, second-order cones, and positive semidefinite cones. Support for exponential and power cones (and their dual cones) is in development (see the Todos below).
+`diffqcp` currently supports QCPs whose cone is the Cartesian product of the zero cone, the positive orthant, second-order cones, and positive semidefinite cones. Support for exponential and power cones (and their dual cones) is in development (see the TODOs below).
 For more information about these cones, see the appendix of our paper.
 
 ## Citation
 
-## See also: 
+## See also
 
-**Enabling libraries:**
-- [Equinox](https://github.com/patrick-kidger/equinox): Neural networks and everything not already in core JAX. (Callable PyTrees.)
+**Core dependencies** (`diffqcp` makes essential use of the following libraries)
+- [Equinox](https://github.com/patrick-kidger/equinox): Neural networks and everything not already in core JAX (via callable `PyTree`s).
 - [Lineax](https://github.com/patrick-kidger/lineax): Linear solvers.
 
-**Related** TODO(quill): finish this
-- [CVXPYlayers](https://github.com/cvxpy/cvxpylayers) make note about CVXPY
-- [CuClarabel](https://github.com/oxfordcontrol/Clarabel.jl/tree/CuClarabel)
-- [SCS](https://github.com/cvxgrp/scs) now supports GPU computations
-- [diffcp](https://github.com/cvxgrp/diffcp)
+**Related** 
+- [CVXPYlayers](https://github.com/cvxpy/cvxpylayers): Construct differentiable convex optimization layers using [CVXPY](https://github.com/cvxpy/cvxpy/). (WIP: `diffqcp` is being added as a backend for CVXPYlayers.)
+- [CuClarabel](https://github.com/oxfordcontrol/Clarabel.jl/tree/CuClarabel): The GPU implemenation of the second-order QCP solver, Clarabel.
+- [SCS](https://github.com/cvxgrp/scs): A first-order QCP solver that has an optional GPU-accelerated backend.
+- [diffcp](https://github.com/cvxgrp/diffcp): A (Python with C-bindings) library for differentiating through (linear) cone programs.
 
 
 ## TODOs:
 
-Note that after failing to achieve desired performance with a torch-backed implementation (branch [here](https://github.com/cvxgrp/diffqcp))
-
-Furthermore
+After failing to achieve desired performance with a torch-backed implementation (branch [here](https://github.com/cvxgrp/diffqcp)), this JAX implementation of `diffqcp` was rapidly developed. Consequently, there is some tech debt:
 
 **Functionality**
+- **TODO(quill)--important**: Heuristic JVP and VJP computations when the solution map of a QCP is non-differentiable (`lineax` just fails if LSMR doesn't converge, whereas our torch version and `diffcp` just return the last iterate).
 - Support for the exponential (and dual exponential) cone. (Just requires re-implementing the PyTorch version in JAX following best practices as found in `lineax` or `optimistix`.)
 - Support for the power (and dual power) cone. (Same approach as for exponential cone.)
+- Batched JVP and VJP computations (via `vmap`--should just work since we can already `jit`)
+- Batched problem computions--*i.e.*, constructing *derivatives* of solution *maps* to a batch of DPP-compliant problems. (so yes, `diffqcp` is aiming to support multi-level batching: you can batch compute JVPs and VJPs over a batch of problems.)
+    - The cone `proj_dproj` methods already support this functionality
 - Can `HostQCP` and `DeviceQCP` be combined?
     - Only difference is the use of `BCOO` arrays for the CPU "optimized" verion vs. `BCSR` arrays for the GPU "optimized" version
-    - Overall the architecture of the library can be improved.
-- Finish batched problem functionality
-    - The cone `proj_dproj` methods already support this functionality
-- ensure `vmap` works over `jvp` and `vjp`
-- Allow factoring-based solves
+    - Other architecture improvements? (Be sure to add performance regression tests before making large changes.)
+- Allow factor-solve based JVPs and VJPs
     - requires `as_matrix` to be implemented for all custom `lineax.AbstractLinearOperator`s.
     - Would need to have non-sparse returning atom functions.
-- more explicit host and device array placement (right now have to use flag.)
-- differentiable?
-- Upgrade the cone library so that it can stand alone (i.e.)
-
-**Integration**
-- CVXPYlayers
+- more explicit host and device array placement (right now have to use flag to specify whether to use single or double precision.)
+- Differentiable? (*i.e.*, what happns if we use `jax`'s auto-diff functionality--would this computation correspond to anything meaningful?)
+- Clean up the cone library so it can stand alone (*i.e.*, it can be a JAX library for projecting onto convex cones and computing derivatives of these projections)
+    - so will require separate `proj` and `dproj` methods,
+    - plus just cleaner abstractions,
+    - and removal of tech debt
+- See if `diffqcp` just works for distributed computations out of the box
 
 **Testing**
-- most of the testing exists in the torch branch, so need to port over key tests (i.e., not tests that just validate functionality that I know exists, but tests that ensure future change don't break anything)
+- Most of the testing exists in the torch branch, so need to port over key tests--*i.e.*, not tests that were just initial (research) validation tests, but tests that ensure future change don't break anything.

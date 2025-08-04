@@ -397,16 +397,16 @@ class ProductConeProjector(AbstractConeProjector):
                     dims.append(sum(val))
             elif cone_key == EXP:
                 if val > 0:
-                    raise ValueError(f"The exponential cone is not yet supported.")
+                    raise ValueError("The exponential cone is not yet supported.")
             elif cone_key == EXP_DUAL:
                 if val > 0:
-                    raise ValueError(f"The dual exponential cone is not yet supported.")
+                    raise ValueError("The dual exponential cone is not yet supported.")
             elif cone_key == POW:
                 if len(val) > 0:
-                    raise ValueError(f"The power cone and its dual are not yet supported.")
+                    raise ValueError("The power cone and its dual are not yet supported.")
             elif cone_key == PSD:
                 if len(val) > 0:
-                    raise ValueError(f"The PSD cone is not yet supported.")
+                    raise ValueError("The PSD cone is not yet supported.")
             else:
                 raise ValueError(f"The cone corresponding to cone key: {cone_key}"
                                  + " is not known.")

@@ -364,7 +364,7 @@ if __name__ == "__main__":
     plt.legend()
     plt.title(label="diffqcp")
     results_dir = os.path.join(os.path.dirname(__file__), "results")
-    output_path = os.path.join(results_dir, "probability_large.svg")
+    output_path = os.path.join(results_dir, "diffqcp_probability_large.svg")
     plt.savefig(output_path, format="svg")
     plt.close()
 

@@ -9,7 +9,6 @@ import lineax as lx
 from lineax import AbstractLinearOperator
 from jaxtyping import Float, Integer, Bool, Array
 
-import patdb # DEBUG
 
 from diffqcp.cones.canonical import ProductConeProjector
 from diffqcp._helpers import _coo_to_csr_transpose_map, _TransposeCSRInfo

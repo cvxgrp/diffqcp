@@ -4,7 +4,6 @@ import functools as ft
 import jax
 from jax import eval_shape
 import jax.numpy as jnp
-import jax.random as jr
 import equinox as eqx
 from lineax import AbstractLinearOperator, IdentityLinearOperator, linear_solve, LSMR
 from jaxtyping import Float, Array
@@ -15,7 +14,6 @@ from diffqcp._problem_data import (QCPStructureCPU, QCPStructureGPU,
 from diffqcp._linops import _BlockLinearOperator
 from diffqcp._qcp_derivs import (_DuQ, _d_data_Q, _d_data_Q_adjoint_cpu, _d_data_Q_adjoint_gpu)
 # TODO(quill): make a note that the "CPU" and "GPU" qualifiers are somewhat misleading.
-import patdb
 
 class AbstractQCP(eqx.Module):
     """Quadratic Cone Program.
@@ -404,47 +402,3 @@ class DeviceQCP(AbstractQCP):
 
         return self._vjp_common(dx=dx, dy=dy, ds=ds,
                                 produce_output=partial_d_data_Q_adjoint_gpu)
-    
-        
-    
-        # === dimensionality checks ===
-
-        # P_shape = P.shape
-        # P_num_dims = jnp.ndim(P)
-        # if P_num_dims == 2:
-        #     self.is_batched = False
-        #     self.n = P_shape[0]
-        #     # TODO(quill): add check(s) on `P`?
-        #     #   e.g., full (i.e., not upper triangular), symmetric
-        #     #   Also, this `__init__` will be run each time in a learning loop
-        #     #   ...so consider what's critical. Can always create a helper
-        #     #   function to run on the data before creating a `QCP`
-        #     #   the first time.
-        # elif P_num_dims == 3:
-        #     self.is_batched = True
-        #     self.n = P_shape[1]
-        # else:
-        #     raise ValueError("The quadratic objective matrix `P` must be"
-        #                      + " a 2D or 3D array. The provided `P`"
-        #                      + f" is a {P_num_dims}D array.")
-        
-        # A_shape = A.shape
-        # A_num_dims = jnp.ndim(A)
-
-        # if A_num_dims != P_num_dims:
-        #     raise ValueError("The constraint matrix `A` must have the"
-        #                      + " same dimensionality as the quadratic objective"
-        #                      + f" matrix `P`, however `P` is a {P_num_dims}D"
-        #                      + f" array while `A` is a {A_num_dims}D array.")
-        # self.A = A
-        # self.m = A_shape[1] if self.is_batched else A_shape[0]
-        # self.N = self.n + self.m + 1
-        
-        # q_shape = q.shape
-        # q_num_dims = jnp.ndim(q_shape)
-        # if q_num_dims != P_num_dims - 1:
-        #     raise ValueError("Since the quadratic objective matrix `P`"
-        #                      + f" is a {P_num_dims}D array, `q` must"
-        #                      + f" be a {P_num_dims-1}D array, but it is"
-        #                      + f" actually a {q_num_dims}D array.")
-        # # TODO(quill): finish checking that `q` size is `n` then check `b`

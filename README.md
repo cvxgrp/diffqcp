@@ -71,6 +71,7 @@ After failing to achieve desired performance with a torch-backed implementation 
 - Allow factor-solve based JVPs and VJPs
     - requires `as_matrix` to be implemented for all custom `lineax.AbstractLinearOperator`s.
     - Would need to have non-sparse returning atom functions.
+- Similarly, allow for changing the tolerance of the LSMR solve.
 - more explicit host and device array placement (right now have to use flag to specify whether to use single or double precision.)
 - Differentiable? (*i.e.*, what happns if we use `jax`'s auto-diff functionality--would this computation correspond to anything meaningful?)
 - Clean up the cone library so it can stand alone (*i.e.*, it can be a JAX library for projecting onto convex cones and computing derivatives of these projections)

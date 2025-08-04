@@ -6,11 +6,11 @@ were true atoms implemented in `lineax`.
 """
 
 import numpy as np
-from jax import ShapeDtypeStruct, eval_shape, vmap
+from jax import ShapeDtypeStruct, eval_shape
 import jax.numpy as jnp
 import lineax as lx
 import equinox as eqx
-from jaxtyping import Array, Integer, Float
+from jaxtyping import Array, Float
 
 from diffqcp._helpers import _to_int_list
 
@@ -25,11 +25,6 @@ def _ZeroOperator(
         out_struc = eval_shape(lambda: y)
     # NOTE(quill): safe to multiply by 0.0 (so a float), since we're assuming the linops are arrays of floats.
     return 0.0 * lx.IdentityLinearOperator(in_struc, out_struc)
-
-
-def _ScalarOperator(alpha: float) -> lx.AbstractLinearOperator:
-    # `_ScalarOperator.in_structure.shape == (1,)`
-    return alpha * lx.IdentityLinearOperator(eval_shape(lambda: jnp.arange(1.0)))
 
 
 class _BlockLinearOperator(lx.AbstractLinearOperator):

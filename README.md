@@ -56,7 +56,7 @@ For more information about these cones, see the appendix of our paper.
 
 ## TODOs:
 
-After failing to achieve desired performance with a torch-backed implementation (branch [here](https://github.com/cvxgrp/diffqcp)), this JAX implementation of `diffqcp` was rapidly developed. Consequently, there is some tech debt:
+After failing to achieve desired performance with a torch-backed implementation (branch [here](https://github.com/cvxgrp/diffqcp/tree/torch-implementation)), this JAX implementation of `diffqcp` was rapidly developed. Consequently, there is some tech debt:
 
 **Functionality**
 - **TODO(quill)--important**: Heuristic JVP and VJP computations when the solution map of a QCP is non-differentiable (`lineax` just fails if LSMR doesn't converge, whereas our torch version and `diffcp` just return the last iterate).

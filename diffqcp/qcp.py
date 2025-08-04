@@ -1,5 +1,6 @@
 from abc import abstractmethod
 from typing import Callable
+import functools as ft
 import jax
 from jax import eval_shape
 import jax.numpy as jnp
@@ -14,6 +15,7 @@ from diffqcp._problem_data import (QCPStructureCPU, QCPStructureGPU,
 from diffqcp._linops import _BlockLinearOperator
 from diffqcp._qcp_derivs import (_DuQ, _d_data_Q, _d_data_Q_adjoint_cpu, _d_data_Q_adjoint_gpu)
 # TODO(quill): make a note that the "CPU" and "GPU" qualifiers are somewhat misleading.
+import patdb
 
 class AbstractQCP(eqx.Module):
     """Quadratic Cone Program.
@@ -124,7 +126,7 @@ class AbstractQCP(eqx.Module):
         n, m = self.problem_structure.n, self.problem_structure.m
         pi_z, F, dproj_kstar_v = self._form_atoms()
         dz = jnp.concatenate([dx,
-                              dproj_kstar_v @ (dy + ds) - ds,
+                              dproj_kstar_v.mv(dy + ds) - ds,
                               - jnp.array([self.x @ dx + self.y @ dy + self.s @ ds])]
                               )
         
@@ -151,12 +153,7 @@ class AbstractQCP(eqx.Module):
         d_data_N_N = d_data_N[-1]
         
         return produce_output(x=pi_z_n, y=pi_z_m, tau=pi_z_N,
-                              w1=d_data_N_n, w2=d_data_N_m, w3=d_data_N_N,
-                              P_rows=self.problem_structure.P_nonzero_rows,
-                              P_cols=self.problem_structure.P_nonzero_cols,
-                              A_rows=self.problem_structure.A_nonzero_rows,
-                              A_cols=self.problem_structure.A_nonzero_cols,
-                              n=n, m=m)
+                              w1=d_data_N_n, w2=d_data_N_m, w3=d_data_N_N)
         
     @abstractmethod
     def vjp(
@@ -278,8 +275,17 @@ class HostQCP(AbstractQCP):
         # NOTE(quill): This is a similar note to the one I left in this class's `jvp`. That is, this
         #   implementation is identical to `DeviceQCP`'s `vjp` minus the function call at the very bottom.
         #   Can this be consolidated / does it indicate incorrect design decision/execution?
+        
+        partial_d_data_Q_adjoint_cpu = ft.partial(_d_data_Q_adjoint_cpu,
+                                                  P_rows=self.problem_structure.P_nonzero_rows,
+                                                  P_cols=self.problem_structure.P_nonzero_cols,
+                                                  A_rows=self.problem_structure.A_nonzero_rows,
+                                                  A_cols=self.problem_structure.A_nonzero_cols,
+                                                  n=self.problem_structure.n,
+                                                  m=self.problem_structure.m)
+        
         return self._vjp_common(dx=dx, dy=dy, ds=ds,
-                                produce_output=_d_data_Q_adjoint_cpu)
+                                produce_output=partial_d_data_Q_adjoint_cpu)
 
 
 class DeviceQCP(AbstractQCP):
@@ -383,8 +389,21 @@ class DeviceQCP(AbstractQCP):
         linear cost function vector, and constraint vector. Note that these perturbation matrices
         will have the same sparsity patterns as their corresponding problem matrices.
         """
+
+        partial_d_data_Q_adjoint_gpu = ft.partial(_d_data_Q_adjoint_gpu,
+                                                  P_rows=self.problem_structure.P_nonzero_rows,
+                                                  P_cols=self.problem_structure.P_nonzero_cols,
+                                                  P_csr_indices=self.problem_structure.P_csr_indices,
+                                                  P_csr_indtpr=self.problem_structure.P_csr_indptr,
+                                                  A_rows=self.problem_structure.A_nonzero_rows,
+                                                  A_cols=self.problem_structure.A_nonzero_cols,
+                                                  A_csr_indices=self.problem_structure.A_csr_indices,
+                                                  A_csr_indtpr=self.problem_structure.A_csr_indptr,
+                                                  n=self.problem_structure.n,
+                                                  m=self.problem_structure.m)
+
         return self._vjp_common(dx=dx, dy=dy, ds=ds,
-                                produce_output=_d_data_Q_adjoint_gpu)
+                                produce_output=partial_d_data_Q_adjoint_gpu)
     
         
     

@@ -91,12 +91,14 @@ def grad_desc(
 
 if __name__ == "__main__":
     
-    np.random.seed(13)
+    np.random.seed(28)
 
-    # m = 20
-    # n = 10
-    m = 2_000
-    n = 1_000
+    m = 20
+    n = 10
+    # m = 200
+    # n = 100
+    # m = 2_000
+    # n = 1_000
     start_time = time.perf_counter()
     target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
     # NOTE(quill): despite "QCP" prefix, this is using a linear canonicalization.
@@ -137,11 +139,15 @@ if __name__ == "__main__":
     print(f"Canonicalized n is: {prob_data.n}")
     print(f"Canonicalized m is: {prob_data.m}")
 
-    num_iter = 100
+    # num_iter = 5
+    # num_iter=100
+    num_iter= 100
+    print("starting loop:")
     start_time = time.perf_counter()
     losses = grad_desc(prob_data, target_x, target_y, target_s, num_iter)
     end_time = time.perf_counter()
     print("Learning loop time: ", end_time - start_time)
+    print(f"Avg. iteration (solve + VJP) time: {(end_time - start_time) / num_iter}")
 
     plt.figure(figsize=(8, 6))
     plt.plot(range(num_iter), losses, label="Objective Trajectory")
@@ -150,7 +156,11 @@ if __name__ == "__main__":
     plt.legend()
     plt.title(label="diffcp")
     results_dir = os.path.join(os.path.dirname(__file__), "results")
-    output_path = os.path.join(results_dir, "diffcp_probability_small.svg")
+    if n > 1000:
+        output_path = os.path.join(results_dir, "diffcp_probability_large.svg")
+    else:
+        output_path = os.path.join(results_dir, "diffcp_probability_small.svg")
+
     plt.savefig(output_path, format="svg")
     plt.close()
 

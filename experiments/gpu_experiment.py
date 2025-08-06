@@ -168,7 +168,7 @@ def grad_desc(
     target_s: Float[Array, " m"],
     cuclarabel_solver,
     qcp_problem_structure: QCPStructureGPU,
-    num_iter: int = 1000,
+    num_iter: int = 100,
     step_size: float = 1e-5,
 ) -> list[Float[Array, ""]]:
     
@@ -211,20 +211,21 @@ def grad_desc(
         
 if __name__ == "__main__":
 
-    np.random.seed(13)
+    np.random.seed(28)
 
-    m = 20
-    n = 10
-    # m = 2_000
-    # n = 1_000
+    # m = 20
+    # n = 10
+    m = 2_000
+    n = 1_000
     # problem = prob_generator.generate_group_lasso(n=n, m=m) #TODO(quill): CuClarabel failing for this problem
     start_time = time.perf_counter()
     target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
     # target_problem = prob_generator.generate_LS_problem(m=m, n=n)
     prob_data_cpu = QCPProbData(target_problem)
     end_time = time.perf_counter()
-    print("Time to generate the target problem and"
-          + f" canonicalize it: {end_time - start_time} seconds")
+    print("Time to generate the target problem,"
+          + " canonicalize it, and solve it on the CPU:"
+          + f" {end_time - start_time} seconds")
     
     # === Obtain target vectors + warm up GPU and JIT compile CuClarabel and diffqcp ===
     
@@ -319,8 +320,8 @@ if __name__ == "__main__":
     # initial_problem = prob_generator.generate_LS_problem(m=m, n=n)
     prob_data_cpu = QCPProbData(initial_problem)
     end_time = time.perf_counter()
-    print("Time to generate the initial (starting point) problem and"
-          + f" canonicalize it: {end_time - start_time} seconds")
+    print("Time to generate the initial (starting point) problem,"
+          + f" canonicalize it, and solve it on the cpu is: {end_time - start_time} seconds")
     print(f"Canonicalized n is: {prob_data_cpu.n}")
     print(f"Canonicalized m is: {prob_data_cpu.m}")
 
@@ -345,7 +346,8 @@ if __name__ == "__main__":
                prob_data_cpu.Acsr.indices,
                prob_data_cpu.Acsr.indptr), shape=solver_data.Acp.shape)
     
-    num_iter = 100
+    num_iter = 200
+    cp.cuda.Device().synchronize()
     start_time = time.perf_counter()
     losses = grad_desc(Pk=Pk, Ak=Ak, solver_data=solver_data,
                        target_x=x_target, target_y=y_target, target_s=s_target,
@@ -354,6 +356,7 @@ if __name__ == "__main__":
     losses[0].block_until_ready()
     end_time = time.perf_counter()
     print(f"The learning loop time was {end_time - start_time} seconds")
+    print(f"Avg. iteration (solve + VJP) time: {(end_time - start_time) / num_iter}")
     losses = jnp.stack(losses)
     losses = np.asarray(losses)
 
@@ -364,7 +367,10 @@ if __name__ == "__main__":
     plt.legend()
     plt.title(label="diffqcp")
     results_dir = os.path.join(os.path.dirname(__file__), "results")
-    output_path = os.path.join(results_dir, "diffqcp_probability_large.svg")
+    if prob_data_cpu.n > 999:
+        output_path = os.path.join(results_dir, "diffqcp_probability_large.svg")
+    else:
+        output_path = os.path.join(results_dir, "diffqcp_probability_small.svg")
     plt.savefig(output_path, format="svg")
     plt.close()
 

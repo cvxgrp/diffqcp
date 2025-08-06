@@ -134,7 +134,7 @@ class AbstractQCP(eqx.Module):
         def nonzero_case():
             # TODO(quill): start solver from previous spot?
             #   => (so would need previous `d_data_N`)
-            soln = linear_solve(F.T, -dz, solver=LSMR(rtol=1e-6, atol=1e-6))
+            soln = linear_solve(F.T, -dz, solver=LSMR(rtol=1e-8, atol=1e-8))
             return soln.value
 
         d_data_N = jax.lax.cond(jnp.allclose(dz, 0),

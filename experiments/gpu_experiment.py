@@ -217,10 +217,8 @@ if __name__ == "__main__":
     # n = 10
     m = 2_000
     n = 1_000
-    # problem = prob_generator.generate_group_lasso(n=n, m=m) #TODO(quill): CuClarabel failing for this problem
     start_time = time.perf_counter()
     target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
-    # target_problem = prob_generator.generate_LS_problem(m=m, n=n)
     prob_data_cpu = QCPProbData(target_problem)
     end_time = time.perf_counter()
     print("Time to generate the target problem,"
@@ -346,7 +344,8 @@ if __name__ == "__main__":
                prob_data_cpu.Acsr.indices,
                prob_data_cpu.Acsr.indptr), shape=solver_data.Acp.shape)
     
-    num_iter = 200
+    # num_iter = 100
+    num_iter = 25
     cp.cuda.Device().synchronize()
     start_time = time.perf_counter()
     losses = grad_desc(Pk=Pk, Ak=Ak, solver_data=solver_data,

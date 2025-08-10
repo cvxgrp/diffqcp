@@ -38,24 +38,26 @@ def compute_loss(target_x, target_y, target_s, x, y, s):
 @eqx.filter_jit
 @eqx.debug.assert_max_traces(max_traces=1)
 def make_step(
-    qcp,
-    target_x,
-    target_y,
-    target_s,
-    step_size
-) -> tuple[Float[Array, ""], Float[BCOO, "n n"], Float[BCOO, "m n"],
+    qcp: HostQCP,
+    target_x: Float[Array, " n"],
+    target_y: Float[Array, " m"],
+    target_s: Float[Array, " m"],
+    Pdata: Float[Array, "..."],
+    Adata: Float[Array, "..."],
+    q: Float[Array, " n"],
+    b: Float[Array, " m"],
+    step_size: float
+) -> tuple[Float[Array, ""], Float[Array, "..."], Float[Array, "..."],
            Float[Array, " n"], Float[Array, " m"]]:
     loss = compute_loss(target_x, target_y, target_s, qcp.x, qcp.y, qcp.s)
     dP, dA, dq, db = qcp.vjp(qcp.x - target_x,
                              qcp.y - target_y,
                              qcp.s - target_s)
-    # NOTE(quill): `__rmul__` is not implemented for BCSR; update only data vectors
-    dP.data *= -step_size
-    dA.data *= -step_size
-    dq *= -step_size
-    db *= -step_size
-
-    return (loss, dP, dA, dq, db)
+    new_Pdata = Pdata - step_size * dP.data
+    new_Adata = Adata - step_size * dA.data
+    new_q = q - step_size * dq
+    new_b = b - step_size * db
+    return (loss, new_Pdata, new_Adata, new_q, new_b)
 
 def grad_desc(
     Pk: Float[BCOO, "n n"],
@@ -83,22 +85,19 @@ def grad_desc(
         xk = jnp.array(solution.x)
         yk = jnp.array(solution.z)
         sk = jnp.array(solution.s)
-
+        
         qcp = HostQCP(Pk, Ak, qk, bk, xk, yk, sk, qcp_problem_structure)
-        loss, *dtheta_steps = make_step(qcp, target_x, target_y, target_s, step_size)
+        
+        loss, *new_data = make_step(qcp, target_x, target_y, target_s,
+                                    Pk.data, Ak.data, qk, bk, step_size)
         losses.append(loss)
 
-        dP_step, dA_step, dq_step, db_step = dtheta_steps
-        dP_step_np = np.asarray(dP_step.data)
-        dA_step_np = np.asarray(dA_step.data)
-        Pk.data += dP_step.data
-        data.Pupper_csc.data += dP_step_np[Pcoo_csc_perm]
-        Ak.data += dA_step.data
-        data.Acsc.data += dA_step_np[Acoo_csc_perm]
-        qk += dq_step
-        data.q += np.asarray(dq_step)
-        bk += db_step
-        data.b += np.asarray(db_step)
+        Pk_data, Ak_data, qk, bk = new_data
+        Pk.data, Ak.data = Pk_data, Ak_data
+        data.Pupper_csc.data = np.asarray(Pk.data, copy=True)[Pcoo_csc_perm]
+        data.Acsc.data = np.asarray(Ak.data, copy=True)[Acoo_csc_perm]
+        data.q = np.asarray(qk, copy=True)
+        data.b = np.asarray(bk, copy=True)
         
         solver.update(P=data.Pupper_csc, q=data.q, A=data.Acsc, b=data.b)
 
@@ -109,8 +108,15 @@ def grad_desc(
 if __name__ == "__main__":
     np.random.seed(28)
     
-    m = 20
-    n = 10
+    # SMALL
+    # m = 20
+    # n = 10
+    # MEDIUM-ish
+    m = 200
+    n = 100
+    # LARGE-ish
+    # m = 2_000
+    # n = 1_000
     target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
     prob_data_cpu = QCPProbData(target_problem)
 
@@ -158,7 +164,7 @@ if __name__ == "__main__":
 
     start_time = time.perf_counter()
     result = make_step(qcp_initial, fake_target_x, fake_target_y,
-                       fake_target_s, step_size=1e-5)
+                       fake_target_s, P.data, A.data, q, b, step_size=1e-5)
     result[0].block_until_ready()
     end_time = time.perf_counter()
     # NOTE(quill): well, technically VJP + loss + step computations
@@ -168,7 +174,7 @@ if __name__ == "__main__":
 
     start_time = time.perf_counter()
     result = make_step(qcp_initial, fake_target_x, fake_target_y,
-                       fake_target_s, step_size=1e-5)
+                       fake_target_s, P.data, A.data, q, b, step_size=1e-5)
     result[0].block_until_ready()
     end_time = time.perf_counter()
     print("Compiled diffqcp VJP compute took: ", end_time - start_time)

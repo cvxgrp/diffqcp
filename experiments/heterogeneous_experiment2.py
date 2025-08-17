@@ -1,44 +1,40 @@
+"""
+Experiment solving problems on the CPU and computing VJPs on the GPU.
+"""
 import time
 import os
 from dataclasses import dataclass
 import numpy as np
 import jax
 jax.config.update("jax_enable_x64", True)
-jax.config.update("jax_platform_name", "cpu")
 import jax.numpy as jnp
 import jax.numpy.linalg as la
 from jaxtyping import Float, Array
 import equinox as eqx
-from jax.experimental.sparse import BCOO
+from jax.experimental.sparse import BCSR
 import clarabel
 from scipy.sparse import (spmatrix, sparray,
-                          csc_matrix, csc_array)
+                          csc_matrix, csc_array, triu)
 import patdb
 import matplotlib.pyplot as plt
 
-from diffqcp import HostQCP, QCPStructureCPU
+from diffqcp import DeviceQCP, QCPStructureGPU
 import experiments.cvx_problem_generator as prob_generator
-from tests.helpers import QCPProbData, scoo_to_bcoo
+from tests.helpers import QCPProbData, scsr_to_bcsr
 
 type SP = spmatrix | sparray
 type SCSC = csc_matrix | csc_array
 
-@dataclass
-class SolverData:
-
-    Pupper_csc: SCSC
-    A: SCSC
-    q: np.ndarray
-    b: np.ndarray
 
 def compute_loss(target_x, target_y, target_s, x, y, s):
     return (0.5 * la.norm(x - target_x)**2 + 0.5 * la.norm(y - target_y)**2
             + 0.5 * la.norm(s - target_s)**2)
 
+
 @eqx.filter_jit
 @eqx.debug.assert_max_traces(max_traces=1)
 def make_step(
-    qcp: HostQCP,
+    qcp: DeviceQCP,
     target_x: Float[Array, " n"],
     target_y: Float[Array, " m"],
     target_s: Float[Array, " m"],
@@ -59,15 +55,16 @@ def make_step(
     new_b = b - step_size * db
     return (loss, new_Pdata, new_Adata, new_q, new_b)
 
+
 def grad_desc(
-    Pk: Float[BCOO, "n n"],
-    Ak: Float[BCOO, "m n"],
+    Pk: Float[BCSR, "n n"],
+    Ak: Float[BCSR, "m n"],
     qk: Float[Array, " n"],
     bk: Float[Array, " m"],
     target_x: Float[Array, " n"],
     target_y: Float[Array, " m"],
     target_s: Float[Array, " m"],
-    qcp_problem_structure: QCPStructureCPU,
+    qcp_problem_structure: QCPStructureGPU,
     data: QCPProbData,
     Pcoo_csc_perm: Float[np.ndarray, "..."],
     Acoo_csc_perm: Float[np.ndarray, "..."],
@@ -86,7 +83,7 @@ def grad_desc(
         yk = jnp.array(solution.z)
         sk = jnp.array(solution.s)
         
-        qcp = HostQCP(Pk, Ak, qk, bk, xk, yk, sk, qcp_problem_structure)
+        qcp = DeviceQCP(Pk, Ak, qk, bk, xk, yk, sk, qcp_problem_structure)
         
         loss, *new_data = make_step(qcp, target_x, target_y, target_s,
                                     Pk.data, Ak.data, qk, bk, step_size)
@@ -94,10 +91,12 @@ def grad_desc(
 
         Pk_data, Ak_data, qk, bk = new_data
         Pk.data, Ak.data = Pk_data, Ak_data
-        data.Pupper_csc.data = np.asarray(Pk.data, copy=True)[Pcoo_csc_perm]
-        data.Acsc.data = np.asarray(Ak.data, copy=True)[Acoo_csc_perm]
-        data.q = np.asarray(qk, copy=True)
-        data.b = np.asarray(bk, copy=True)
+        # need to grap uppper part of P only
+        data.Pcsc.data = np.asarray(Pk.data)[Pcoo_csc_perm]
+        data.Pupper_csc = triu(data.Pcsr, format="csc")
+        data.Acsc.data = np.asarray(Ak.data)[Acoo_csc_perm]
+        data.q = np.asarray(qk)
+        data.b = np.asarray(bk)
         
         solver.update(P=data.Pupper_csc, q=data.q, A=data.Acsc, b=data.b)
 
@@ -112,16 +111,23 @@ if __name__ == "__main__":
     # m = 20
     # n = 10
     # MEDIUM-ish
-    m = 200
-    n = 100
+    # m = 200
+    # n = 100
     # LARGE-ish
-    # m = 2_000
-    # n = 1_000
+    m = 2_000
+    n = 1_000
     target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
     prob_data_cpu = QCPProbData(target_problem)
 
-    Pupper_coo_to_csc_order = np.lexsort((prob_data_cpu.Pupper_coo.row,
-                                          prob_data_cpu.Pupper_coo.col))
+    # ensure validity of the following ordering permutations.
+    np.testing.assert_allclose(prob_data_cpu.Pcoo.data,
+                               prob_data_cpu.Pcsr.data)
+    
+    np.testing.assert_allclose(prob_data_cpu.Acoo.data,
+                               prob_data_cpu.Acsr.data)
+
+    P_coo_to_csc_order = np.lexsort((prob_data_cpu.Pcoo.row,
+                                     prob_data_cpu.Pupper_coo.col))
     A_coo_to_csc_order = np.lexsort((prob_data_cpu.Acoo.row,
                                      prob_data_cpu.Acoo.col))
     
@@ -146,13 +152,13 @@ if __name__ == "__main__":
     target_y = jnp.array(solution.z)
     target_s = jnp.array(solution.s)
 
-    P = scoo_to_bcoo(prob_data_cpu.Pupper_coo)
-    A = scoo_to_bcoo(prob_data_cpu.Acoo)
+    P = scsr_to_bcsr(prob_data_cpu.Pcsr)
+    A = scsr_to_bcsr(prob_data_cpu.Acsr)
     q = prob_data_cpu.q
     b = prob_data_cpu.b
     scs_cones = prob_data_cpu.scs_cones
-    problem_structure = QCPStructureCPU(P, A, scs_cones)
-    qcp_initial = HostQCP(P, A, q, b,
+    problem_structure = QCPStructureGPU(P, A, scs_cones)
+    qcp_initial = DeviceQCP(P, A, q, b,
                           target_x, target_y, target_s,
                           problem_structure)
     fake_target_x = 1e-3 * jnp.arange(jnp.size(q), dtype=q.dtype)
@@ -196,8 +202,8 @@ if __name__ == "__main__":
     num_iter = 100
 
     start_time = time.perf_counter()
-    losses = grad_desc(Pk=scoo_to_bcoo(prob_data_cpu.Pupper_coo),
-                       Ak=scoo_to_bcoo(prob_data_cpu.Acoo),
+    losses = grad_desc(Pk=scsr_to_bcsr(prob_data_cpu.Pcsr),
+                       Ak=scsr_to_bcsr(prob_data_cpu.Acsr),
                        qk = jnp.array(prob_data_cpu.q),
                        bk = jnp.array(prob_data_cpu.b),
                        target_x=target_x,
@@ -205,7 +211,7 @@ if __name__ == "__main__":
                        target_s=target_s,
                        qcp_problem_structure=problem_structure,
                        data=prob_data_cpu,
-                       Pcoo_csc_perm=Pupper_coo_to_csc_order,
+                       Pcoo_csc_perm=P_coo_to_csc_order,
                        Acoo_csc_perm=A_coo_to_csc_order,
                        clarabel_solver=solver, num_iter=num_iter)
     losses[0].block_until_ready()
@@ -223,8 +229,8 @@ if __name__ == "__main__":
     plt.title(label="diffqcp")
     results_dir = os.path.join(os.path.dirname(__file__), "results")
     if prob_data_cpu.n > 99:
-        output_path = os.path.join(results_dir, "diffqcp_cpu_probability_large.svg")
+        output_path = os.path.join(results_dir, "hetero2_probability_large.svg")
     else:
-        output_path = os.path.join(results_dir, "diffqcp_cpu_probability_small.svg")
+        output_path = os.path.join(results_dir, "hetero2_probability_small.svg")
     plt.savefig(output_path, format="svg")
     plt.close()

@@ -104,7 +104,6 @@ if __name__ == "__main__":
     # n = 1_000
     start_time = time.perf_counter()
     target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
-    # NOTE(quill): despite "QCP" prefix, this is using a linear canonicalization.
     prob_data = CPProbData(target_problem)
     end_time = time.perf_counter()
     print("Time to generate the target problem and"
@@ -134,7 +133,6 @@ if __name__ == "__main__":
     
     start_time = time.perf_counter()
     initial_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
-    # initial_problem = prob_generator.generate_LS_problem(m=m, n=n)
     prob_data = CPProbData(initial_problem)
     end_time = time.perf_counter()
     print("Time to generate the initial (starting point) problem and"

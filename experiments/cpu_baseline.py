@@ -93,15 +93,17 @@ if __name__ == "__main__":
     
     np.random.seed(28)
 
-    m = 20
-    n = 10
-    # m = 200
-    # n = 100
+    # SMALL
+    # m = 20
+    # n = 10
+    # MEDIUM-ish
+    m = 200
+    n = 100
+    # LARGE-ish
     # m = 2_000
     # n = 1_000
     start_time = time.perf_counter()
     target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
-    # NOTE(quill): despite "QCP" prefix, this is using a linear canonicalization.
     prob_data = CPProbData(target_problem)
     end_time = time.perf_counter()
     print("Time to generate the target problem and"
@@ -131,7 +133,6 @@ if __name__ == "__main__":
     
     start_time = time.perf_counter()
     initial_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
-    # initial_problem = prob_generator.generate_LS_problem(m=m, n=n)
     prob_data = CPProbData(initial_problem)
     end_time = time.perf_counter()
     print("Time to generate the initial (starting point) problem and"
@@ -156,7 +157,7 @@ if __name__ == "__main__":
     plt.legend()
     plt.title(label="diffcp")
     results_dir = os.path.join(os.path.dirname(__file__), "results")
-    if n > 1000:
+    if n > 999:
         output_path = os.path.join(results_dir, "diffcp_probability_large.svg")
     else:
         output_path = os.path.join(results_dir, "diffcp_probability_small.svg")

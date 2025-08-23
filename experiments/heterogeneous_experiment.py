@@ -1,14 +1,6 @@
 """
-I'd like it to be known that this experiment was NOT fun to create.
-
-Some sharp bits:
-- Julia 1-based indexing (https://www.reddit.com/r/Julia/comments/o90ejj/some_may_hate_it_some_may_love_it/),
-    which makes it hard to point everyone at same data
-- for jax and cupy arrays to be equivalent (if not forcing cupy to be float32), you better
-    bet setting the "jax_enable_x64" flag.
-
+Experiment solving problems on the GPU and computing VJPs on the CPU.
 """
-
 from juliacall import Main as jl
 # jl.seval('import Pkg; Pkg.develop(url="https://github.com/oxfordcontrol/Clarabel.jl.git")')
 jl.seval('using Clarabel, LinearAlgebra, SparseArrays')
@@ -25,28 +17,23 @@ import numpy as np
 import jax
 # TODO(quill): set JAX flags
 jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_platform_name", "cpu")
 import jax.numpy as jnp
 import jax.numpy.linalg as la
 from jaxtyping import Float, Array
 import cupy as cp
-from cupy import from_dlpack as cp_from_dlpack
 from cupy.sparse import csr_matrix
 import equinox as eqx
 import scipy.sparse as sparse
 import patdb
-from jax.experimental.sparse import BCSR
+from jax.experimental.sparse import BCOO
 
-from diffqcp.qcp import DeviceQCP, QCPStructureGPU
+from diffqcp.qcp import HostQCP, QCPStructureCPU
 import experiments.cvx_problem_generator as prob_generator
-from tests.helpers import QCPProbData, scsr_to_bcsr
+from tests.helpers import QCPProbData, scoo_to_bcoo
 import matplotlib.pyplot as plt
 
-# what auxillary objects can I create to store the CuPy <-> Julia objects?
-
-# will need helpers to do CuPy CSR <-> JAX BCSR
-#   put in this function how to handle a 0 matrix
-
-def JuliaCuVector2CuPyArray(jl_arr):
+def JuliaCuVector2CuPyArray(jl_arr) -> cp.ndarray:
     """Taken from https://github.com/cvxgrp/CuClarabel/blob/main/src/python/jl2py.py.
     """
     # Get the device pointer from Julia
@@ -96,19 +83,6 @@ def cupy_csr_to_julia_csr(mat: csr_matrix) -> CuSparseMatrixCSR:
     return mat_jl
 
 
-def cupy_csr_to_jax_bcsr(mat: csr_matrix) -> BCSR:
-    shape = mat.shape
-    m, n = shape[0], shape[1]
-    nnz = mat.nnz
-    if nnz == 0:
-        mat_jax = BCSR.fromdense(jnp.zeros(shape=shape, dtype=mat.dtype))
-    else:
-        data = jax.dlpack.from_dlpack(mat.data)
-        indices = jax.dlpack.from_dlpack(mat.indices)
-        indptr = jax.dlpack.from_dlpack(mat.indptr)
-        mat_jax = BCSR((data, indices, indptr), shape=mat.shape)
-    return mat_jax
-
 @dataclass
 class SolverData:
     """
@@ -144,7 +118,7 @@ def make_step(
     target_y,
     target_s,
     step_size
-) -> tuple[Float[Array, ""], Float[BCSR, "n n"], Float[BCSR, "m n"],
+) -> tuple[Float[Array, ""], Float[BCOO, "n n"], Float[BCOO, "m n"],
            Float[Array, " n"], Float[Array, " m"]]:
     loss = compute_loss(target_x, target_y, target_s, qcp.x, qcp.y, qcp.s)
     dP, dA, dq, db = qcp.vjp(qcp.x - target_x,
@@ -157,46 +131,49 @@ def make_step(
 
     return (loss, dP, dA, dq, db)
 
-
 def grad_desc(
-    Pk: Float[BCSR, "n n"],
-    Ak: Float[BCSR, "m n"], 
-    solver_data: SolverData,
+    Pk: Float[BCOO, "n n"],
+    Ak: Float[BCOO, "m n"],
+    qk: Float[Array, " n"],
+    bk: Float[Array, " m"],
     target_x: Float[Array, " n"],
     target_y: Float[Array, " m"],
     target_s: Float[Array, " m"],
+    qcp_problem_structure: QCPStructureCPU,
+    solver_data: SolverData,
     cuclarabel_solver,
-    qcp_problem_structure: QCPStructureGPU,
     num_iter: int = 100,
-    step_size: float = 1e-5,
-) -> list[Float[Array, ""]]:
-    
+    step_size = 1e-5
+):
     curr_iter = 0
     losses = []
-    
+
     while curr_iter < num_iter:
 
         jl.Clarabel.solve_b(cuclarabel_solver)
+        
+        xkcp = JuliaCuVector2CuPyArray(jl.solver.solution.x)
+        xk = cp.asnumpy(xkcp)
+        ykcp = JuliaCuVector2CuPyArray(jl.solver.solution.z)
+        yk = cp.asnumpy(ykcp)
+        skcp = JuliaCuVector2CuPyArray(jl.solver.solution.s)
+        sk = cp.asnumpy(skcp)
 
-        Pk.data = jax.dlpack.from_dlpack(solver_data.Pcp.data)
-        Ak.data = jax.dlpack.from_dlpack(solver_data.Acp.data)
-        qk = jax.dlpack.from_dlpack(solver_data.qcp)
-        bk = jax.dlpack.from_dlpack(solver_data.bcp)
-
-        xk = jax.dlpack.from_dlpack(JuliaCuVector2CuPyArray(jl.solver.solution.x))
-        yk = jax.dlpack.from_dlpack(JuliaCuVector2CuPyArray(jl.solver.solution.z))
-        sk = jax.dlpack.from_dlpack(JuliaCuVector2CuPyArray(jl.solver.solution.s))
-
-        qcp = DeviceQCP(Pk, Ak, qk, bk, xk, yk, sk, qcp_problem_structure)
+        qcp = HostQCP(Pk, Ak, qk, bk, xk, yk, sk, qcp_problem_structure)
         loss, *dtheta_steps = make_step(qcp, target_x, target_y, target_s, step_size)
         losses.append(loss)
 
         dP_step, dA_step, dq_step, db_step = dtheta_steps
-        solver_data.Pcp.data += cp_from_dlpack(dP_step.data)
-        solver_data.Acp.data += cp_from_dlpack(dA_step.data)
-        solver_data.qcp += cp_from_dlpack(dq_step)
-        solver_data.bcp += cp_from_dlpack(db_step)
-
+        Pk.data += dP_step.data
+        Ak.data += dA_step.data
+        qk += dq_step
+        bk += db_step
+        # update solver data
+        solver_data.Pcp.data += cp.asarray(dP_step.data)
+        solver_data.Acp.data += cp.asarray(dA_step.data)
+        solver_data.qcp += cp.asarray(dq_step)
+        solver_data.bcp += cp.asarray(db_step)
+        
         # Also update solver
         jl.Clarabel.update_P_b(cuclarabel_solver, solver_data.Pjl)
         jl.Clarabel.update_A_b(cuclarabel_solver, solver_data.Ajl)
@@ -206,18 +183,19 @@ def grad_desc(
         curr_iter += 1
 
     return losses
-        
-        
+
 if __name__ == "__main__":
 
     np.random.seed(28)
 
-    m = 20
-    n = 10
-    # m = 2_000
-    # n = 1_000
+    # m = 20
+    # n = 10
+    m = 2_000
+    n = 1_000
+    # problem = prob_generator.generate_group_lasso(n=n, m=m) #TODO(quill): CuClarabel failing for this problem
     start_time = time.perf_counter()
     target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    # target_problem = prob_generator.generate_LS_problem(m=m, n=n)
     prob_data_cpu = QCPProbData(target_problem)
     end_time = time.perf_counter()
     print("Time to generate the target problem,"
@@ -230,7 +208,7 @@ if __name__ == "__main__":
                              cpu_csr_to_cupy_csr(prob_data_cpu.Acsr),
                              cp.array(prob_data_cpu.q),
                              cp.array(prob_data_cpu.b))
-
+    
     # Create Julia cone variables
     jl.zero_cone = prob_data_cpu.scs_cones["z"]
     jl.nonneg_cone = prob_data_cpu.scs_cones["l"]
@@ -259,10 +237,10 @@ if __name__ == "__main__":
     ycp = JuliaCuVector2CuPyArray(jl.solver.solution.z)
     scp = JuliaCuVector2CuPyArray(jl.solver.solution.s)
 
-    x_target = jax.dlpack.from_dlpack(cp.array(xcp, copy=True))
-    y_target = jax.dlpack.from_dlpack(cp.array(ycp, copy=True))
-    s_target = jax.dlpack.from_dlpack(cp.array(scp, copy=True))
-
+    x_target = jnp.array(cp.asnumpy(xcp))
+    y_target = jnp.array(cp.asnumpy(ycp))
+    s_target = jnp.array(cp.asnumpy(scp))
+    
     # --- Time compiled speedup ---
     start_solve = time.perf_counter()
     jl.Clarabel.solve_b(jl.solver) # solve new problem w/o creating memory
@@ -271,24 +249,19 @@ if __name__ == "__main__":
     print(f"Compiled CuClarabel solve took: {end_solve - start_solve} seconds")
     # --- ---
 
-    # NOTE(quill): go from host data since the indices of `Pcp` and `Acp` have been corrupted
-    P = scsr_to_bcsr(prob_data_cpu.Pcsr)
-    A = scsr_to_bcsr(prob_data_cpu.Acsr)
-    q = jax.dlpack.from_dlpack(solver_data.qcp)
-    b = jax.dlpack.from_dlpack(solver_data.bcp)
-
-    # --- JIT compile `make_step` (so compile what's needed for `diffqcp`) ---
-    
-    problem_structure = QCPStructureGPU(P=P, A=A, cones=prob_data_cpu.scs_cones)
-
-    qcp_initial = DeviceQCP(P=P, A=A, q=q, b=b,
-                            x=x_target, y=y_target, s=s_target,
-                            problem_structure=problem_structure)
-
+    P = scoo_to_bcoo(prob_data_cpu.Pupper_coo)
+    A = scoo_to_bcoo(prob_data_cpu.Acoo)
+    q = prob_data_cpu.q
+    b = prob_data_cpu.b
+    scs_cones = prob_data_cpu.scs_cones
+    problem_structure = QCPStructureCPU(P, A, scs_cones)
+    qcp_initial = HostQCP(P, A, q, b,
+                          x_target, y_target, s_target,
+                          problem_structure)
     fake_target_x = 1e-3 * jnp.arange(jnp.size(q), dtype=q.dtype)
     fake_target_y = 1e-3 * jnp.arange(jnp.size(b), dtype=b.dtype)
     fake_target_s = 1e-3 * jnp.arange(jnp.size(b), dtype=b.dtype)
-    
+
     start_time = time.perf_counter()
     result = make_step(qcp_initial, fake_target_x, fake_target_y,
                        fake_target_s, step_size=1e-5)
@@ -305,6 +278,7 @@ if __name__ == "__main__":
     result[0].block_until_ready()
     end_time = time.perf_counter()
     print("Compiled diffqcp VJP compute took: ", end_time - start_time)
+    print("The result is on the: ", result[0].device)
 
     # --- ---
 
@@ -335,22 +309,21 @@ if __name__ == "__main__":
     jl.Clarabel.update_q_b(jl.solver, solver_data.qjl)
     jl.Clarabel.update_b_b(jl.solver, solver_data.bjl)
 
-    # Now let's create data for JAX to use (that are 0-based, :eyeroll)
-    Pk = BCSR((jax.dlpack.from_dlpack(solver_data.Pcp.data),
-               prob_data_cpu.Pcsr.indices,
-               prob_data_cpu.Pcsr.indptr), shape=solver_data.Pcp.shape)
-    Ak = BCSR((jax.dlpack.from_dlpack(solver_data.Acp.data),
-               prob_data_cpu.Acsr.indices,
-               prob_data_cpu.Acsr.indptr), shape=solver_data.Acp.shape)
-    
-    # num_iter = 100
-    num_iter = 25
-    cp.cuda.Device().synchronize()
+    num_iter = 100
+
     start_time = time.perf_counter()
-    losses = grad_desc(Pk=Pk, Ak=Ak, solver_data=solver_data,
-                       target_x=x_target, target_y=y_target, target_s=s_target,
-                       cuclarabel_solver=jl.solver, qcp_problem_structure=problem_structure,
+    losses = grad_desc(Pk=scoo_to_bcoo(prob_data_cpu.Pupper_coo),
+                       Ak=scoo_to_bcoo(prob_data_cpu.Acoo),
+                       qk = jnp.array(prob_data_cpu.q),
+                       bk = jnp.array(prob_data_cpu.b),
+                       target_x=x_target,
+                       target_y=y_target,
+                       target_s=s_target,
+                       qcp_problem_structure=problem_structure,
+                       solver_data=solver_data,
+                       cuclarabel_solver=jl.solver,
                        num_iter=num_iter)
+    cp.cuda.Device().synchronize()
     losses[0].block_until_ready()
     end_time = time.perf_counter()
     print(f"The learning loop time was {end_time - start_time} seconds")
@@ -366,10 +339,8 @@ if __name__ == "__main__":
     plt.title(label="diffqcp")
     results_dir = os.path.join(os.path.dirname(__file__), "results")
     if prob_data_cpu.n > 999:
-        output_path = os.path.join(results_dir, "diffqcp_probability_large.svg")
+        output_path = os.path.join(results_dir, "hetero_probability_large.svg")
     else:
-        output_path = os.path.join(results_dir, "diffqcp_probability_small.svg")
+        output_path = os.path.join(results_dir, "hetero_probability_small.svg")
     plt.savefig(output_path, format="svg")
     plt.close()
-
-    

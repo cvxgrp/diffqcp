@@ -1,5 +1,14 @@
 name: Example
 
+on:
+    pull_request:
+    push:
+        branches:
+            - main
+            - 'release/**'
+        tags:
+          - '*'
+
 jobs:
   uv-example:
     name: python

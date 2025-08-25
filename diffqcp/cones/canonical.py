@@ -52,9 +52,6 @@ else:
 
 def _group_cones_in_order(dims: list[int] | list[float]) -> list[list[int] | list[float]]:
     """Group consecutive same-sized cones while preserving order.
-    
-    For a list of cone dimensions (so for a specific cone), returns a 
-    
     """
     if not isinstance(dims, list):
         raise ValueError(f"`dims` must be a `list`, but a {type(dims)} was provided.")

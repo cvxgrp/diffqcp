@@ -117,7 +117,7 @@ dq: Array = ...
 dx, dy, ds = qcp.jvp(dP, dA, dq, db)
 
 # Compute VJPs
-# `dP`, `dA` will be BCOO arrays, `dq`, `db` just Arrays
+# `dP`, `dA` will be BCSR arrays, `dq`, `db` just Arrays
 dP, dA, dq, db = qcp.vjp(f1(x), f2(y), f3(s)) 
 ```
 

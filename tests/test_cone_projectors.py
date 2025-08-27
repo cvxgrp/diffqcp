@@ -3,6 +3,7 @@ from typing import Callable
 import numpy as np
 import cvxpy as cvx
 from jax import vmap, jit
+import equinox as eqx
 import jax.numpy as jnp
 import jax.random as jr
 
@@ -101,7 +102,7 @@ def test_soc_private_projector(getkey):
     num_batches = 10
 
     _soc_projector = cone_lib._SecondOrderConeProjector(dim=n)
-    soc_projector = jit(_soc_projector)
+    soc_projector = eqx.filter_jit(_soc_projector)
     batched_soc_projector = jit(vmap(_soc_projector))
 
     for _ in range(15):
@@ -128,8 +129,8 @@ def _test_soc_projector(dims, num_batches, keyfunc):
     total_dim = sum(dims)
 
     _soc_projector = cone_lib.SecondOrderConeProjector(dims=dims)
-    soc_projector = jit(_soc_projector)
-    batched_soc_projector = jit(vmap(_soc_projector))
+    soc_projector = eqx.filter_jit(_soc_projector)
+    batched_soc_projector = eqx.filter_jit(eqx.filter_vmap(_soc_projector))
     
     for _ in range(15):
 
@@ -175,6 +176,74 @@ def test_soc_projector_hard(getkey):
     _test_soc_projector(dims, num_batches, getkey)
 
 
+def _proj_psd_via_cvxpy(x: np.ndarray) -> np.ndarray:
+    """Project vectorized symmetric matrix x onto the PSD cone using CVXPY."""
+    size = cone_lib.symm_dim_to_size(x.size)
+    X = np.zeros((size, size), dtype=x.dtype)
+    idxs = np.triu_indices(size)
+    sqrt2 = np.sqrt(2.0)
+    X[idxs] = x / sqrt2
+    X = X + X.T
+    diag = np.arange(size)
+    X[diag, diag] /= sqrt2
+
+    z = cvx.Variable((size, size), PSD=True)
+    objective = cvx.Minimize(cvx.sum_squares(z - X))
+    prob = cvx.Problem(objective)
+    prob.solve(solver="SCS", eps=1e-10)
+    Z_val = z.value
+    vec = Z_val[idxs]
+    off_diag = idxs[0] != idxs[1]
+    vec[off_diag] *= sqrt2
+    return vec
+
+
+def _test_psd_projector(sizes, num_batches, keyfunc):
+    total_size = sum([cone_lib.symm_size_to_dim(s) for s in sizes])
+
+    _psd_projector = cone_lib.PSDConeProjector(sizes=sizes)
+    psd_projector = eqx.filter_jit(_psd_projector)
+    batched_psd_projector = eqx.filter_jit(eqx.filter_vmap(_psd_projector))
+    
+    for _ in range(10):
+        x_jnp = jr.normal(keyfunc(), total_size)
+        x_np = np.array(x_jnp)
+        start = 0
+        solns = []
+        for size in sizes:
+            end = start + cone_lib.symm_size_to_dim(size)
+            solns.append(jnp.array(_proj_psd_via_cvxpy(x_np[start:end])))
+            start = end
+        proj_x_solver = jnp.concatenate(solns)
+        proj_x, _ = psd_projector(x_jnp)
+        assert tree_allclose(proj_x, proj_x_solver)
+
+        # --- batched ---
+        x_jnp = jr.normal(keyfunc(), (num_batches, total_size))
+        x_np = np.array(x_jnp)
+        proj_x, _ = batched_psd_projector(x_jnp)
+        for i in range(num_batches):
+            start = 0
+            solns = []
+            for size in sizes:
+                end = start + cone_lib.symm_size_to_dim(size)
+                solns.append(jnp.array(_proj_psd_via_cvxpy(x_np[i, start:end])))
+                start = end
+            proj_x_solver = jnp.concatenate(solns)
+            assert tree_allclose(proj_x[i, :], proj_x_solver)
+
+
+def test_psd_projector_simple(getkey):
+    sizes = [3, 4, 10]
+    num_batches = 5
+    _test_psd_projector(sizes, num_batches, getkey)
+
+def test_psd_projector_hard(getkey):
+    sizes = [2, 3, 3, 4, 4, 2]
+    num_batches = 5
+    _test_psd_projector(sizes, num_batches, getkey)
+
+
 def test_product_projector(getkey):
     """assumes that the other tests in this file pass."""
     zero_dim = 15
@@ -190,22 +259,22 @@ def test_product_projector(getkey):
     }
 
     _nn_projector = cone_lib.NonnegativeConeProjector()
-    nn_projector = jit(_nn_projector)
-    batched_nn_projector = jit(vmap(_nn_projector))
+    nn_projector = eqx.filter_jit(_nn_projector)
+    batched_nn_projector = eqx.filter_jit(eqx.filter_vmap(_nn_projector))
 
     _soc_projector = cone_lib.SecondOrderConeProjector(dims=soc_dims)
-    soc_projector = jit(_soc_projector)
-    batched_soc_projector = jit(vmap(_soc_projector))
+    soc_projector = eqx.filter_jit(_soc_projector)
+    batched_soc_projector = eqx.filter_jit(eqx.filter_vmap(_soc_projector))
     
     for dual in [True, False]:
 
         _zero_projector = cone_lib.ZeroConeProjector(onto_dual=dual)
-        zero_projector = jit(_zero_projector)
-        batched_zero_projector = jit(vmap(_zero_projector))
+        zero_projector = eqx.filter_jit(_zero_projector)
+        batched_zero_projector = eqx.filter_jit(eqx.filter_vmap(_zero_projector))
 
         _cone_projector = cone_lib.ProductConeProjector(cones, onto_dual=dual)
-        cone_projector = jit(_cone_projector)
-        batched_cone_projector = jit(vmap(_cone_projector))
+        cone_projector = eqx.filter_jit(_cone_projector)
+        batched_cone_projector = eqx.filter_jit(eqx.filter_vmap(_cone_projector))
     
         for _ in range(15):
             x = jr.normal(getkey(), total_dim)

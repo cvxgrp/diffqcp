@@ -12,6 +12,7 @@ import jax.numpy as jnp
 import equinox as eqx
 from jaxtyping import Float, Array
 from jax.experimental.sparse import BCSR, BCOO
+import patdb
 
 CPU = jax.devices("cpu")[0]
 
@@ -33,12 +34,18 @@ def scoo_to_bcoo(coo_mat: SCOO) -> BCOO:
     row_indices = coo_mat.row
     col_indices = coo_mat.col
     indices = list(zip(row_indices, col_indices))
-    return BCOO((coo_mat.data, indices), shape=coo_mat.shape)
+    if len(indices) == 0:
+        return BCOO.fromdense(jnp.zeros(coo_mat.shape))
+    else:
+        return BCOO((coo_mat.data, indices), shape=coo_mat.shape)
 
 
 def scsr_to_bcsr(csr_mat: SCSR) -> BCSR:
-    return BCSR((csr_mat.data, csr_mat.indices, csr_mat.indptr),
-                shape=csr_mat.shape)
+    if len(csr_mat.data) > 0:
+        return BCSR((csr_mat.data, csr_mat.indices, csr_mat.indptr),
+                    shape=csr_mat.shape)
+    else:
+        return BCSR.fromdense(jnp.zeros(csr_mat.shape))
     
 
 def quad_data_and_soln_from_qcp(problem: cvx.Problem, return_csr: bool = True):
@@ -141,21 +148,33 @@ class QCPProbData:
         """
         clarabel_probdata, _, _ = self.problem.get_problem_data(cvx.CLARABEL, ignore_dpp=True, solver_opts={'use_quad_obj': True})
 
-        self.Pcsr = clarabel_probdata["P"].tocsr()
-        self.Pcsc = self.Pcsr.tocsc()
-        self.Pcoo = self.Pcsr.tocoo()
-        self.Pupper_csr = sparse.triu(self.Pcsr).tocsr()
-        self.Pupper_csc = self.Pupper_csr.tocsc()
-        self.Pupper_coo = self.Pupper_csr.tocoo()
-
-        self.Acsr = clarabel_probdata["A"].tocsr()
-        self.Acsc = self.Acsr.tocsc()
-        self.Acoo = self.Acsr.tocoo()
-
+        # Always get q and n first, since we need n for shape
         self.q = clarabel_probdata["c"]
         self.n = np.size(self.q)
         self.b = clarabel_probdata["b"]
         self.m = np.size(self.b)
+
+        # Handle P (quadratic term) possibly missing
+        if "P" in clarabel_probdata:
+            self.Pcsr = clarabel_probdata["P"].tocsr()
+            self.Pcsc = self.Pcsr.tocsc()
+            self.Pcoo = self.Pcsr.tocoo()
+            self.Pupper_csr = sparse.triu(self.Pcsr).tocsr()
+            self.Pupper_csc = self.Pupper_csr.tocsc()
+            self.Pupper_coo = self.Pupper_csr.tocoo()
+        else:
+            # Create zero matrices of shape (n, n)
+            P = np.zeros((self.n, self.n)) # NOTE(quill): hack for now
+            self.Pcsr = sparse.csr_matrix(P)
+            self.Pcsc = self.Pcsr.tocsc()
+            self.Pcoo = self.Pcsr.tocoo()
+            self.Pupper_csr = self.Pcsr.copy()
+            self.Pupper_csc = self.Pcsc.copy()
+            self.Pupper_coo = self.Pcoo.copy()
+
+        self.Acsr = clarabel_probdata["A"].tocsr()
+        self.Acsc = self.Acsr.tocsc()
+        self.Acoo = self.Acsr.tocoo()
 
         # NOTE(quill): that both reductions use the clarabel problem data
         #   (So we are getting clarabel canonical form cones, but in scs dict on second line down.)

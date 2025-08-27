@@ -8,6 +8,30 @@ def randn_symm(n, random_array):
     return (A + A.T) / 2
 
 
+def generate_sdp(n, p) -> cvx.Problem:
+    """
+    Taken from https://www.cvxpy.org/examples/basic/sdp.html.
+    """
+    C = np.random.randn(n, n)
+    A = []
+    b = []
+    for i in range(p):
+        A.append(np.random.randn(n, n))
+        b.append(np.random.randn())
+
+    # Define and solve the CVXPY problem.
+    # Create a symmetric matrix variable.
+    X = cvx.Variable((n,n), symmetric=True)
+    # The operator >> denotes matrix inequality.
+    constraints = [X >> 0]
+    constraints += [
+        cvx.trace(A[i] @ X) == b[i] for i in range(p)
+    ]
+    prob = cvx.Problem(cvx.Minimize(cvx.trace(C @ X)),
+                    constraints)
+    return prob
+
+
 def generate_portfolio_problem(n) -> cvx.Problem:
     mu = cvx.Parameter(n)
     mu.value = np.random.randn(n)

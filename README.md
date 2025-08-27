@@ -1,15 +1,14 @@
 <h1 align='center'>diffqcp: Differentiating through quadratic cone programs</h1>
 
-`diffqcp` is a [JAX](https://docs.jax.dev/en/latest/) library that enables forming the derivative of the solution map to a quadratic cone program (QCP) with respect to the QCP problem data as an abstract linear operator and computing Jacobian-vector products (JVPs) and vector-Jacobian products (VJPs) with this operator.
+`diffqcp` is a [JAX](https://docs.jax.dev/en/latest/) library to form the derivative of the solution map to a quadratic cone program (QCP) with respect to the QCP problem data as an abstract linear operator and to compute Jacobian-vector products (JVPs) and vector-Jacobian products (VJPs) with this operator.
 The implementation is based on the derivations in our paper (see below) and computes
 these products implicitly via projections onto cones and sparse linear system solves.
-Our approach therefore differs from other libraries that compute JVPs and VJPs via
-automatic differentiation of unrolled solution algorithm iterates as we exploit
-the underlying structure of QCPs.
+Our approach therefore differs from libraries that compute JVPs and VJPs by unrolling algorithm iterates.
+We directly exploit the underlying structure of QCPs.
 
 **Features include**:
 - Hardware acclerated: JVPs and VJPs can be computed on CPUs, GPUs, and (theoretically) TPUs.
-- Support for all canonical classes of convex optimization problems including
+- Support for many canonical classes of convex optimization problems including
     - linear programs (LPs),
     - quadratic programs (QPs),
     - second-order cone programs (SOCPs),
@@ -41,10 +40,11 @@ For more information about these cones, see the appendix of our paper.
 
 ## Usage
 
-**We view `diffqcp` as an enabling library.** Specifically, `diffqcp` is
-being integrated as a backend to CVXPYlayers--it is not designed to be a stand-alone
-library. Nonetheless, here is how it can be most optimally used. (Note that while we'll specify
-a CPU and a GPU approach, all modules are CPU and GPU compatible--we just recommend the following
+`diffqcp` is meant to be used as a CVXPYlayers backend --- it is not designed to be a stand-alone
+library.
+Nonetheless, here is how it use it.
+(Note that while we'll specify different CPU and a GPU configurations,
+all modules are CPU and GPU compatible--we just recommend the following
 as JAX's `BCSR` arrays do have CUDA backends for their `mv` operations while the `BCOO` arrays do not.)
 
 For both of the following problems, we'll use the following objects:
@@ -122,6 +122,20 @@ dP, dA, dq, db = qcp.vjp(f1(x), f2(y), f3(s))
 ```
 
 ## Citation
+
+
+[arXiv:2508.17522 [math.OC]](https://arxiv.org/abs/2508.17522)
+```
+@misc{healey2025differentiatingquadraticconeprogram,
+      title={Differentiating Through a Quadratic Cone Program}, 
+      author={Quill Healey and Parth Nobel and Stephen Boyd},
+      year={2025},
+      eprint={2508.17522},
+      archivePrefix={arXiv},
+      primaryClass={math.OC},
+      url={https://arxiv.org/abs/2508.17522}, 
+}
+```
 
 ## Next steps
 

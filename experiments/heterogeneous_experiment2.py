@@ -108,15 +108,18 @@ if __name__ == "__main__":
     np.random.seed(28)
     
     # SMALL
+    m = 3
+    n = 15
     # m = 20
     # n = 10
     # MEDIUM-ish
     # m = 200
     # n = 100
     # LARGE-ish
-    m = 2_000
-    n = 1_000
-    target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    # m = 2_000
+    # n = 1_000
+    # target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    target_problem = prob_generator.generate_sdp(n=n, p=m)
     prob_data_cpu = QCPProbData(target_problem)
 
     # ensure validity of the following ordering permutations.
@@ -184,7 +187,8 @@ if __name__ == "__main__":
 
     # --- ---
 
-    initial_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    # initial_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    initial_problem = prob_generator.generate_sdp(n=n, p=m)
     prob_data_cpu = QCPProbData(initial_problem)
 
     cones = prob_data_cpu.clarabel_cones
@@ -229,8 +233,10 @@ if __name__ == "__main__":
     plt.title(label="diffqcp")
     results_dir = os.path.join(os.path.dirname(__file__), "results")
     if prob_data_cpu.n > 99:
-        output_path = os.path.join(results_dir, "hetero2_probability_large.svg")
+        # output_path = os.path.join(results_dir, "hetero2_probability_large.svg")
+        output_path = os.path.join(results_dir, "diffqcp_sdp_large.svg")
     else:
-        output_path = os.path.join(results_dir, "hetero2_probability_small.svg")
+        # output_path = os.path.join(results_dir, "hetero2_probability_small.svg")
+        output_path = os.path.join(results_dir, "diffqcp_sdp_small.svg")
     plt.savefig(output_path, format="svg")
     plt.close()

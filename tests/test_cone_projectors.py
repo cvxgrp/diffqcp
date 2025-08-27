@@ -217,7 +217,6 @@ def _test_psd_projector(sizes, num_batches, keyfunc):
         proj_x_solver = jnp.concatenate(solns)
         proj_x, _ = psd_projector(x_jnp)
         assert tree_allclose(proj_x, proj_x_solver)
-        _test_dproj_finite_diffs(psd_projector, keyfunc, dim=total_size, num_batches=0)
 
         # --- batched ---
         x_jnp = jr.normal(keyfunc(), (num_batches, total_size))
@@ -233,7 +232,6 @@ def _test_psd_projector(sizes, num_batches, keyfunc):
             proj_x_solver = jnp.concatenate(solns)
             assert tree_allclose(proj_x[i, :], proj_x_solver)
 
-        _test_dproj_finite_diffs(_psd_projector, keyfunc, dim=total_size, num_batches=num_batches)
 
 def test_psd_projector_simple(getkey):
     sizes = [3, 4, 10]

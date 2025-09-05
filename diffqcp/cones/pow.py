@@ -16,6 +16,8 @@ if jax.config.jax_enable_x64:
 else:
     TOL = 1e-6
 
+MAX_ITER = 20
+
 def _pow_calc_xi(
     ri: Float[Array, ""],
     x: Float[Array, ""],
@@ -29,12 +31,12 @@ def _pow_calc_xi(
 
 def _gi(
     ri: Float[Array, ""],
-    x: Float[Array, ""],
+    xi: Float[Array, ""],
     abs_z: Float[Array, ""],
     alpha: Float[Array, ""]
 ) -> Float[Array, ""]:
     """gi from diffqcp paper."""
-    return 2. * _pow_calc_xi(ri, x, abs_z, alpha) - x
+    return 2. * _pow_calc_xi(ri, xi, abs_z, alpha) - xi
 
 
 def _pow_calc_f(
@@ -149,25 +151,86 @@ class PowerConeProjector(AbstractConeProjector):
             proj_v = jnp.array([jnp.maximum(x, 0), jnp.maximum(y, 0), 0.0], dtype=v.dtype)
             return proj_v, lx.MatrixLinearOperator(J)
             
-
-        def _solve_while_body(xj, yj, rj):
-            # NOTE(quill): we're purposefully using both `i` and `j`.
-            #   The former (which is in the function names) is denoting
-            #   an element in a vector while the latter is being used to denote
-            #   an interation count.
-            xj = _pow_calc_xi(rj, x, abs_z, self.alpha)
-            yj = _pow_calc_xi(rj, y, abs_z, 1.0 - self.alpha)
-            fj = _pow_calc_f(xj, yj, rj, self.alpha)
-            
-            dxdr = _pow_calc_dxi_dr(rj, xj, x, abs_z, self.alpha)
-            dydr = _pow_calc_dxi_dr(rj, yj, y, abs_z)
         
         def solve_case():
-            xj = 0
-            yj = 0
-            rj = abs_z / 2
+            
+            def _solve_while_body(loop_state):
+                # NOTE(quill): we're purposefully using both `i` and `j`.
+                #   The former (which is in the function names) is denoting
+                #   an element in a vector while the latter is being used to denote
+                #   an interation count.
+                loop_state["xj"] = _pow_calc_xi(loop_state["rj"], x, abs_z, self.alpha)
+                loop_state["yj"] = _pow_calc_xi(loop_state["rj"], y, abs_z, 1.0 - self.alpha)
+                fj = _pow_calc_f(loop_state["xj"], loop_state["yj"], loop_state["rj"], self.alpha)
+                
+                dxdr = _pow_calc_dxi_dr(loop_state["rj"], loop_state["xj"], x, abs_z, self.alpha)
+                dydr = _pow_calc_dxi_dr(loop_state["rj"], loop_state["yj"], y, abs_z)
+                fp = _pow_calc_fp(loop_state["xj"], loop_state["yj"], dxdr, dydr)
+
+                loop_state["rj"] = jnp.maximum(loop_state["rj"] - fj / fp, 0)
+                loop_state["rj"] = jnp.minimum(loop_state["rj"], abs_z)
+
+                loop_state["itn"] += 1
+                loop_state["istop"] = jax.lax.select(loop_state["itn"] > MAX_ITER, 2, loop_state["istop"])
+                loop_state["istop"] = jax.lax.select(jnp.abs(fj) <= TOL, 1, loop_state["istop"])
+
+                return loop_state
+
+            def condfun(loop_state):
+                return loop_state["istop"] == 0
+
+            loop_state = {
+                "xj": 0,
+                "yj": 0,
+                "rj": abs_z / 2,
+                "istop": 0,
+                "itn": 0
+            }
+
+            loop_state = jax.lax.while_loop(condfun, _solve_while_body, loop_state)
+
+            r_star = loop_state["rj"]
+            x_star = loop_state["xj"]
+            y_star = loop_state["yj"]
+            z_star = jax.lax.cond(z < 0, -r_star, r_star)
+            proj_v = jnp.array([x_star, y_star, z_star])
+            a = self.alpha
+            aa = a * a
+            ac = 1 - self.alpha
+            acac = ac * ac
+
+            two_r = 2 * r_star
+            sign_z = jnp.sign(z)
+            gx = _gi(r_star, x, abs_z, a)
+            gy = _gi(r_star, y, abs_z, a)
+            frac_x = (a * x) / gx
+            frac_y = (ac * y) / gy
+            T = - (frac_x + frac_y)
+            L = 2 * abs_z - two_r
+
+            gxgy = gx * gy
+            rL = r_star * L
+            J = J.at[0, 0].set(0.5 + x / (2 * gx) + (aa * (abs_z - two_r) * rL) / (gx * gx))
+            J = J.at[1, 1].set(0.5 + y / (2 * gy) + (acac * (abs_z - two_r) * rL) / (gy * gy))
+            J = J.at[2, 2].set(r_star / abs_z + (r_star / abs_z) * T * L)
+            J = J.at[0, 1].set(rL * acac * (abs_z - two_r) / gxgy)
+            J = J.at[1, 0].set(J[0, 1])
+            J = J.at[0, 2].set(sign_z * a * rL / gx)
+            J = J.at[2, 0].set(J[0, 2])
+            J = J.at[1, 2].set(sign_z * ac * rL / gy)
+            J = J.at[2, 1].set(J[1, 2])
+
+            return proj_v, lx.MatrixLinearOperator(J)
 
 
+        # NOTE(quill): remember that `lx.MatrixLinearOperator` may not work.
+        # Reasoning:
+        #   - When projecting a single element we return a 1D array and a matrix linear operator.
+        #   - When batching the projection we add a batch dimension to the outputs. So the 1D
+        #       array becomes a 2D array, and the JAX arrays in the matrix linear operator
+        #       also get a batch dimension. Consequently, the 2D array the operator is wrapped
+        #       around becomes a 3D array. However, this operator doesn't know how to operate
+        #       on inputs with dimensions > 1.
 
         return jax.lax.cond(_in_cone(x, y, abs_z, self.alpha),
                             identity_case,

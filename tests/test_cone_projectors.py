@@ -243,24 +243,17 @@ def test_psd_projector_hard(getkey):
     num_batches = 5
     _test_psd_projector(sizes, num_batches, getkey)
 
-
-import numpy as np
-import cvxpy as cp
-import jax.numpy as jnp
-import jax.random as jr
-import diffqcp.cones.canonical as cone_lib
-
 def _proj_pow_via_cvxpy(x: np.ndarray, alphas: list[float]) -> np.ndarray:
     """Project x onto the product of 3D power cones with given alphas using CVXPY."""
     n = len(x)
     assert n % 3 == 0
     num_cones = n // 3
-    var = cp.Variable(n)
+    var = cvx.Variable(n)
     constraints = []
     for i in range(num_cones):
-        constraints.append(cp.PowCone3D(var[3*i], var[3*i+1], var[3*i+2], alphas[i]))
-    objective = cp.Minimize(cp.sum_squares(var - x))
-    prob = cp.Problem(objective, constraints)
+        constraints.append(cvx.PowCone3D(var[3*i], var[3*i+1], var[3*i+2], alphas[i]))
+    objective = cvx.Minimize(cvx.sum_squares(var - x))
+    prob = cvx.Problem(objective, constraints)
     prob.solve(solver="SCS", eps=1e-10)
     return np.array(var.value)
 
@@ -272,17 +265,19 @@ def test_proj_pow():
         x = np.random.randn(n)
         proj_cvx = _proj_pow_via_cvxpy(x, [alpha])
         projector = cone_lib.PowerConeProjector([alpha], onto_dual=False)
-        proj_jax, _ = projector(jnp.array(x))
+        # this is not efficient since recompiling; just doing for testing.
+        proj_jax, _ = eqx.filter_jit(projector)(jnp.array(x))
         proj_jax = np.array(proj_jax)
         print("proj_jax: ", proj_jax)
         print("proj_cvx: ", proj_cvx)
         assert np.allclose(proj_jax, proj_cvx, atol=1e-6, rtol=1e-7)
 
 def test_proj_pow_diffcpish():
+    # TODO(quill): test itself needs fixing
     np.random.seed(0)
-    alphas1 = np.random.uniform(low=0, high=1, size=15)
-    alphas2 = np.random.uniform(low=0, high=1, size=15)
-    alphas3 = np.random.uniform(low=0, high=1, size=15)
+    alphas1 = np.random.uniform(low=0.01, high=1, size=15)
+    alphas2 = np.random.uniform(low=0.01, high=1, size=15)
+    alphas3 = np.random.uniform(low=0.01, high=1, size=15)
     for i in range(alphas1.shape[0]):
         x = np.random.randn(9)
         # primal

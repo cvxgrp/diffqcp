@@ -71,7 +71,8 @@ def _pow_calc_fp(
     alpha: Float[Array, ""]
 ) -> Float[Array, ""]:
     alphac = 1 - alpha
-    return xi**alpha + yi**alphac * (alpha * dxidri / xi + alphac * dyidri / yi) - 1
+    # return xi**alpha + yi**alphac * (alpha * dxidri / xi + alphac * dyidri / yi) - 1
+    return (xi**alpha) * (yi**alphac) * (alpha * dxidri / xi + alphac * dyidri / yi) - 1.0
 
 
 def _in_cone(
@@ -165,7 +166,8 @@ def _proj_dproj(
             #   an interation count.
             loop_state["xj"] = _pow_calc_xi(loop_state["rj"], x, abs_z, alpha)
             loop_state["yj"] = _pow_calc_xi(loop_state["rj"], y, abs_z, 1.0 - alpha)
-            fj = _pow_calc_f(loop_state["xj"], loop_state["yj"], loop_state["rj"], alpha)
+            # fj = _pow_calc_f(loop_state["rj"], loop_state["xj"], loop_state["yj"], alpha)
+            fj = _pow_calc_f(loop_state["rj"], loop_state["xj"], loop_state["yj"], alpha)
             
             dxdr = _pow_calc_dxi_dr(loop_state["rj"], loop_state["xj"], x, abs_z, alpha)
             dydr = _pow_calc_dxi_dr(loop_state["rj"], loop_state["yj"], y, abs_z, 1.-alpha)
@@ -211,6 +213,7 @@ def _proj_dproj(
         frac_y = (ac * y) / gy
         T = - (frac_x + frac_y)
         L = 2 * abs_z - two_r
+        L = L / (abs_z + (abs_z - two_r) * (frac_x + frac_y))
 
         gxgy = gx * gy
         rL = r_star * L

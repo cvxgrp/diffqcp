@@ -28,6 +28,7 @@ import equinox as eqx
 from abc import abstractmethod
 from jaxtyping import Array, Float
 
+from ._abstract_projector import AbstractConeProjector
 from .pow import PowerConeProjector
 from diffqcp._linops import _BlockLinearOperator
 from diffqcp._helpers import _to_int_list
@@ -80,19 +81,6 @@ def _collect_cone_batch_info(groups: list[list[int] | list[float]]) -> list[tupl
     for group in groups:
         dims_batches.append((group[0], len(group)))
     return dims_batches
-
-
-class AbstractConeProjector(eqx.Module):
-
-    # TODO(quill): re-consider the need to define `is_dual` or `dim`/`dims` here.
-    #   How does this play with the abstract/final pattern.
-
-    @abstractmethod
-    def proj_dproj(self, x: Float[Array, " _n"]) -> tuple[Float[Array, " _n"], AbstractLinearOperator]:
-        pass
-
-    def __call__(self, x: Float[Array, " _n"]):
-        return self.proj_dproj(x)
 
 
 class _ZeroConeProjectorJacobian(lx.AbstractLinearOperator):

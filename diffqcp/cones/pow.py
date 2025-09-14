@@ -9,7 +9,7 @@ import equinox as eqx
 import lineax as lx
 from jaxtyping import Array, Float, Bool
 
-from .canonical import AbstractConeProjector
+from ._abstract_projector import AbstractConeProjector
 
 if jax.config.jax_enable_x64:
     TOL = 1e-12
@@ -46,7 +46,7 @@ def _pow_calc_f(
     alpha: Float[Array, ""]
 ) -> Float[Array, ""]:
     """Phi from Hien paper."""
-    return xi**alpha + yi**(1.-alpha) - ri
+    return xi**alpha * yi**(1.-alpha) - ri
 
 
 def _pow_calc_dxi_dr(
@@ -80,7 +80,9 @@ def _in_cone(
     abs_z: Float[Array, ""],
     alpha: Float[Array, ""]
 ) -> bool:
-    return (x >= 0 and y >= 0 and TOL + x**alpha * y**(1-alpha) >= abs_z)
+    return jnp.logical_and(x >= 0,
+                           jnp.logical_and(y >= 0,
+                                           TOL + x**alpha * y**(1-alpha) >= abs_z))
 
 
 def _in_polar_cone(
@@ -89,8 +91,10 @@ def _in_polar_cone(
     abs_w: Float[Array, ""],
     alpha: Float[Array, ""]
 ) -> bool:
-    return (u <= 0 and v <= 0 and TOL + jnp.pow(-u, alpha) * jnp.pow(-v, 1. - alpha) >=
-            abs_w * alpha**alpha + jnp.pow(1. - alpha, 1. - alpha))
+    return jnp.logical_and(u <= 0,
+                           jnp.logical_and(v <= 0,
+                                           TOL + jnp.pow(-u, alpha) * jnp.pow(-v, 1. - alpha) >=
+                                            abs_w * alpha**alpha + jnp.pow(1. - alpha, 1. - alpha)))
 
 
 def _proj_dproj(
@@ -105,12 +109,12 @@ def _proj_dproj(
 
     def identity_case():
         return (
-            v, jnp.eye(3, dtype=x.dtype, device=x.device)
+            v, jnp.eye(3, dtype=x.dtype)
         )
 
     def zero_case():
         return (
-            jnp.zeros_like(v), jnp.zeros((3, 3), dtype=x.dtype, device=x.device)
+            jnp.zeros_like(v), jnp.zeros((3, 3), dtype=x.dtype)
         )
 
     def z_zero_case():
@@ -151,6 +155,8 @@ def _proj_dproj(
         
     
     def solve_case():
+
+        jax.debug.print("IN solve CASE")
         
         def _solve_while_body(loop_state):
             # NOTE(quill): we're purposefully using both `i` and `j`.
@@ -162,8 +168,8 @@ def _proj_dproj(
             fj = _pow_calc_f(loop_state["xj"], loop_state["yj"], loop_state["rj"], alpha)
             
             dxdr = _pow_calc_dxi_dr(loop_state["rj"], loop_state["xj"], x, abs_z, alpha)
-            dydr = _pow_calc_dxi_dr(loop_state["rj"], loop_state["yj"], y, abs_z)
-            fp = _pow_calc_fp(loop_state["xj"], loop_state["yj"], dxdr, dydr)
+            dydr = _pow_calc_dxi_dr(loop_state["rj"], loop_state["yj"], y, abs_z, 1.-alpha)
+            fp = _pow_calc_fp(loop_state["xj"], loop_state["yj"], dxdr, dydr, alpha)
 
             loop_state["rj"] = jnp.maximum(loop_state["rj"] - fj / fp, 0)
             loop_state["rj"] = jnp.minimum(loop_state["rj"], abs_z)
@@ -190,7 +196,7 @@ def _proj_dproj(
         r_star = loop_state["rj"]
         x_star = loop_state["xj"]
         y_star = loop_state["yj"]
-        z_star = jax.lax.cond(z < 0, -r_star, r_star)
+        z_star = jax.lax.cond(z < 0, lambda: -r_star, lambda: r_star)
         proj_v = jnp.array([x_star, y_star, z_star])
         a = alpha
         aa = a * a
@@ -208,6 +214,7 @@ def _proj_dproj(
 
         gxgy = gx * gy
         rL = r_star * L
+        J = jnp.zeros((3, 3), dtype=x.dtype)
         J = J.at[0, 0].set(0.5 + x / (2 * gx) + (aa * (abs_z - two_r) * rL) / (gx * gx))
         J = J.at[1, 1].set(0.5 + y / (2 * gy) + (acac * (abs_z - two_r) * rL) / (gy * gy))
         J = J.at[2, 2].set(r_star / abs_z + (r_star / abs_z) * T * L)
@@ -218,6 +225,8 @@ def _proj_dproj(
         J = J.at[1, 2].set(sign_z * ac * rL / gy)
         J = J.at[2, 1].set(J[1, 2])
 
+        jax.debug.print("solve answer: {sa}", sa=proj_v)
+        jax.debug.print("loop state: {ls}", ls=loop_state)
         return proj_v, J
 
     return jax.lax.cond(_in_cone(x, y, abs_z, alpha),
@@ -231,8 +240,6 @@ def _proj_dproj(
                                 solve_case
                             )))
 
-
-# def _pow_cone_jacobian_mv(dx: Float[Array, " 3"])
 
 def _pow_cone_jacobian_mv(
     dx: Float[Array, "num_cones 3"],
@@ -251,13 +258,13 @@ def _pow_cone_jacobian_mv(
 
 class _PowerConeJacobianOperator(lx.AbstractLinearOperator):
 
-    batched_jacobians: Float[Array, "*num_batches *num_cones 3 3"]
+    batched_jacobians: Float[Array, "*num_batches num_cones 3 3"]
     is_dual: Bool[Array, " num_cones"]
     num_cones: int
 
     def __init__(
         self,
-        batched_jacobians: Float[Array, "*num_batches *num_cones 3 3"],
+        batched_jacobians: Float[Array, "*num_batches num_cones 3 3"],
         is_dual: Bool[Array, " num_cones"],
     ):
         self.batched_jacobians = batched_jacobians
@@ -295,7 +302,7 @@ class _PowerConeJacobianOperator(lx.AbstractLinearOperator):
         elif ndim == 3:
             # either a batch of single power cone or 
             # many power cones
-            return jax.ShapeDtypeStruct(shape=(shape[0] * 3),
+            return jax.ShapeDtypeStruct(shape=(shape[0] * 3,),
                                         dtype=self.batched_jacobians.dtype)
         elif ndim == 4:
             # batch of many power cones.
@@ -315,20 +322,21 @@ def _(op):
 class PowerConeProjector(AbstractConeProjector):
 
     alphas: Float[Array, " num_cones"]
+    num_cones: int
     alphas_abs: Float[Array, " num_cones"]
     signs: Float[Array, " num_cones"]
     is_dual: Bool[Array, " num_cones"]
     
     def __init__(self, alphas: list[float], onto_dual: bool):
 
-        self.alphas = alphas
-        self.num_cones = jnp.size(alphas)
+        self.alphas = jnp.array(alphas)
+        self.num_cones = jnp.size(self.alphas)
         self.is_dual = self.alphas < 0
         self.signs = jnp.where(self.alphas < 0, -1.0, 1.0)
         if onto_dual:
             self.signs = -1.0 * self.signs
             self.is_dual = jnp.logical_not(self.is_dual)
-        self.aphas_abs = jnp.abs(alphas)
+        self.alphas_abs = jnp.abs(self.alphas)
 
     def proj_dproj(self, x):
         batch = jnp.reshape(x, (self.num_cones, 3))

@@ -156,8 +156,6 @@ def _proj_dproj(
         
     
     def solve_case():
-
-        jax.debug.print("IN solve CASE")
         
         def _solve_while_body(loop_state):
             # NOTE(quill): we're purposefully using both `i` and `j`.
@@ -166,7 +164,6 @@ def _proj_dproj(
             #   an interation count.
             loop_state["xj"] = _pow_calc_xi(loop_state["rj"], x, abs_z, alpha)
             loop_state["yj"] = _pow_calc_xi(loop_state["rj"], y, abs_z, 1.0 - alpha)
-            # fj = _pow_calc_f(loop_state["rj"], loop_state["xj"], loop_state["yj"], alpha)
             fj = _pow_calc_f(loop_state["rj"], loop_state["xj"], loop_state["yj"], alpha)
             
             dxdr = _pow_calc_dxi_dr(loop_state["rj"], loop_state["xj"], x, abs_z, alpha)
@@ -228,8 +225,6 @@ def _proj_dproj(
         J = J.at[1, 2].set(sign_z * ac * rL / gy)
         J = J.at[2, 1].set(J[1, 2])
 
-        jax.debug.print("solve answer: {sa}", sa=proj_v)
-        jax.debug.print("loop state: {ls}", ls=loop_state)
         return proj_v, J
 
     return jax.lax.cond(_in_cone(x, y, abs_z, alpha),
@@ -252,8 +247,8 @@ def _pow_cone_jacobian_mv(
 ):
     # num cones could be 1.
     dx_batch = jnp.reshape(dx, (num_cones, 3))
-    Jdx = eqx.filter_vmap(lambda y: jacobians @ y,
-                            in_axes=(0, 0), out_axes=0)
+    Jdx = eqx.filter_vmap(lambda jac, y: jac @ y,
+                            in_axes=0, out_axes=0)(jacobians, dx_batch)
     mv_dual = dx_batch - Jdx
     mv = jnp.where(is_dual[:, None], mv_dual, Jdx)
     return jnp.ravel(mv)
@@ -263,7 +258,7 @@ class _PowerConeJacobianOperator(lx.AbstractLinearOperator):
 
     batched_jacobians: Float[Array, "*num_batches num_cones 3 3"]
     is_dual: Bool[Array, " num_cones"]
-    num_cones: int
+    num_cones: int = eqx.field(static=True)
 
     def __init__(
         self,
@@ -286,7 +281,7 @@ class _PowerConeJacobianOperator(lx.AbstractLinearOperator):
         else:
             return eqx.filter_vmap(_pow_cone_jacobian_mv,
                                    in_axes=(0, 0, None, None),
-                                   out_axes=0)
+                                   out_axes=0)(dx, self.batched_jacobians, self.is_dual, self.num_cones)
 
     def as_matrix(self):
         raise NotImplementedError("Power Cone Jacobian `as_matrix` not implemented.")
@@ -325,7 +320,7 @@ def _(op):
 class PowerConeProjector(AbstractConeProjector):
 
     alphas: Float[Array, " num_cones"]
-    num_cones: int
+    num_cones: int = eqx.field(static=True)
     alphas_abs: Float[Array, " num_cones"]
     signs: Float[Array, " num_cones"]
     is_dual: Bool[Array, " num_cones"]

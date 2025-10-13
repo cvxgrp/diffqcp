@@ -109,15 +109,16 @@ if __name__ == "__main__":
     np.random.seed(28)
     
     # SMALL
-    # m = 20
-    # n = 10
+    m = 20
+    n = 10
     # MEDIUM-ish
-    m = 200
-    n = 100
+    # m = 200
+    # n = 100
     # LARGE-ish
     # m = 2_000
     # n = 1_000
-    target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    # target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    target_problem = prob_generator.generate_pow_projection_problem(n=33)
     prob_data_cpu = QCPProbData(target_problem)
 
     Pupper_coo_to_csc_order = np.lexsort((prob_data_cpu.Pupper_coo.row,
@@ -166,7 +167,7 @@ if __name__ == "__main__":
     end_time = time.perf_counter()
     # NOTE(quill): well, technically VJP + loss + step computations
     print("diffqcp VJP compile + compute took: ", end_time - start_time)
-
+    # patdb.debug()
     # --- test compiled solve ---
 
     start_time = time.perf_counter()
@@ -178,7 +179,8 @@ if __name__ == "__main__":
 
     # --- ---
 
-    initial_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    # initial_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    initial_problem = prob_generator.generate_pow_projection_problem(n=33)
     prob_data_cpu = QCPProbData(initial_problem)
 
     cones = prob_data_cpu.clarabel_cones
@@ -193,7 +195,7 @@ if __name__ == "__main__":
                                     cones,
                                     settings)
     
-    num_iter = 100
+    num_iter = 1000
 
     start_time = time.perf_counter()
     losses = grad_desc(Pk=scoo_to_bcoo(prob_data_cpu.Pupper_coo),
@@ -223,8 +225,10 @@ if __name__ == "__main__":
     plt.title(label="diffqcp")
     results_dir = os.path.join(os.path.dirname(__file__), "results")
     if prob_data_cpu.n > 99:
-        output_path = os.path.join(results_dir, "diffqcp_cpu_probability_large.svg")
+        # output_path = os.path.join(results_dir, "diffqcp_cpu_probability_large.svg")
+        output_path = os.path.join(results_dir, "diffqcp_cpu_pow_large.svg")
     else:
-        output_path = os.path.join(results_dir, "diffqcp_cpu_probability_small.svg")
+        # output_path = os.path.join(results_dir, "diffqcp_cpu_probability_small.svg")
+        output_path = os.path.join(results_dir, "diffqcp_cpu_pow_small.svg")
     plt.savefig(output_path, format="svg")
     plt.close()

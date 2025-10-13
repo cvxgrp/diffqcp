@@ -155,7 +155,7 @@ def test_least_squares_cpu(getkey):
         print("true result shape: ", jnp.shape(true_result))
         print("dx shape: ", jnp.shape(dx[m:]))
 
-        patdb.debug()
+        # patdb.debug()
         
         assert jnp.allclose(true_result, dx[m:], atol=1e-8)
 

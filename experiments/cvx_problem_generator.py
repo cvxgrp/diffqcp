@@ -209,3 +209,20 @@ def generate_kalman_smoother(
     prob = cvx.Problem(obj, constr)
     assert prob.is_dpp()
     return prob
+
+
+def generate_pow_projection_problem(
+    n: int
+) -> cvx.Problem:
+    """Project x onto the product of 3D power cones with given alphas using CVXPY."""
+    assert n % 3 == 0
+    x = np.random.randn(n)
+    num_cones = n // 3
+    var = cvx.Variable(n)
+    constraints = []
+    for i in range(num_cones):
+        alpha = np.maximum(np.random.rand(), 0.01)
+        constraints.append(cvx.PowCone3D(var[3*i], var[3*i+1], var[3*i+2], alpha))
+    objective = cvx.Minimize(cvx.sum_squares(var - x))
+    prob = cvx.Problem(objective, constraints)
+    return prob

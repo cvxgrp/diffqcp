@@ -28,6 +28,8 @@ import equinox as eqx
 from abc import abstractmethod
 from jaxtyping import Array, Float
 
+from ._abstract_projector import AbstractConeProjector
+from .pow import PowerConeProjector
 from diffqcp._linops import _BlockLinearOperator
 from diffqcp._helpers import _to_int_list
 
@@ -79,19 +81,6 @@ def _collect_cone_batch_info(groups: list[list[int] | list[float]]) -> list[tupl
     for group in groups:
         dims_batches.append((group[0], len(group)))
     return dims_batches
-
-
-class AbstractConeProjector(eqx.Module):
-
-    # TODO(quill): re-consider the need to define `is_dual` or `dim`/`dims` here.
-    #   How does this play with the abstract/final pattern.
-
-    @abstractmethod
-    def proj_dproj(self, x: Float[Array, " _n"]) -> tuple[Float[Array, " _n"], AbstractLinearOperator]:
-        pass
-
-    def __call__(self, x: Float[Array, " _n"]):
-        return self.proj_dproj(x)
 
 
 class _ZeroConeProjectorJacobian(lx.AbstractLinearOperator):
@@ -538,61 +527,7 @@ class _BatchedProjPSDConeJacobian(AbstractLinearOperator):
 def _(op):
     return True
 
-# class _PSDConeProjector(AbstractConeProjector):
-#     size: int
-#     dim: int
 
-#     def proj_dproj(self, x):
-
-#         X = unvec_symm(x, self.size)
-#         lambd, Q = jnp.linalg.eigh(X)
-#         B = jnp.zeros((self.size, self.size), dtype=x.dtype)
-#         dproj_x = _ProjPSDConeJacobian(lambd, Q, B, self.size, self.dim, x)
-
-#         def identity_case():
-#             B = jnp.zeros((self.size, self.size), dtype=x.dtype)
-#             return x, _ProjPSDConeJacobian(lambd, Q, B, self.size, self.dim, x)
-
-#         def zero_case():
-#             B = jnp.zeros((self.size, self.size), dtype=x.dtype)
-#             return jnp.zeros_like(x), _ProjPSDConeJacobian(lambd, Q, B, self.size, self.dim, x)
-
-#         def general_case():
-#             lambd_pos = jnp.clip(lambd, min=0)
-#             proj_X = Q @ (lambd_pos[..., None] * Q.T)
-#             proj_x = vec_symm(proj_X)
-#             neg_mask = lambd < 0
-#             # If no negatives, set k = -1
-#             # --- Find last negative eigenvalue index ---
-#             neg_mask = lambd < 0
-#             k = jnp.max(jnp.where(neg_mask, jnp.arange(self.size), -1))
-
-#             # Split eigenvalues
-#             lam_neg = lambd[:k+1]
-#             lam_pos = lambd[k+1:]
-
-#             # --- Build B matrix ---
-#             B = jnp.zeros((self.size, self.size), dtype=x.dtype)
-
-#             # Bottom-right block = identity
-#             eye_block = jnp.eye(self.size - (k+1), dtype=x.dtype)
-#             B = B.at[k+1:, k+1:].set(eye_block)
-
-#             # Top-right block
-#             top_right_block = form_B_block(lam_pos, lam_neg)
-#             B = B.at[:k+1, k+1:].set(top_right_block)
-#             B = B.at[k+1:, :k+1].set(top_right_block.T)  # enforce symmetry
-#             return proj_x, _ProjPSDConeJacobian(lambd, Q, B, self.size, self.dim, x)
-
-#         proj_x =  jax.lax.cond(lambd[0] >= 0,
-#                                identity_case,
-#                                lambda: jax.lax.cond(lambd[-1] < 0,
-#                                                  zero_case,
-#                                                  general_case))
-#         return proj_x, dproj_x
-
-
-# ---------- shape-stable form_B_block implementation ----------
 def form_B_block_full(lam_pos_full: jnp.ndarray,
                       lam_neg_full: jnp.ndarray,
                       pos_mask: jnp.ndarray,
@@ -620,14 +555,12 @@ def form_B_block_full(lam_pos_full: jnp.ndarray,
     return jnp.where(tr_mask, block, 0.0)
 
 
-# ---------- integrated projector class (shape-stable) ----------
-class _PSDConeProjector(AbstractConeProjector):  # substitute your actual base class if needed
+class _PSDConeProjector(AbstractConeProjector):
     size: int
     dim: int
 
     def proj_dproj(self, x: jnp.ndarray):
         """
-        JIT/vmap-friendly version of your proj_dproj that uses mask-based B construction.
         Assumes x is the vectorized symmetric input (SCS ordering) and returns (proj_x, dproj_obj).
         """
         # Reconstruct symmetric matrix
@@ -650,7 +583,7 @@ class _PSDConeProjector(AbstractConeProjector):  # substitute your actual base c
             proj_X = Q @ (lambd_pos[..., None] * Q.T)
             proj_x = vec_symm(proj_X)
 
-            # Find last negative index k (you previously said negatives exist, but we keep safe)
+            # Find last negative index k
             idx = jnp.arange(self.size)
             neg_mask = lambd < 0
             k = jnp.max(jnp.where(neg_mask, idx, -1))  # scalar index
@@ -676,7 +609,7 @@ class _PSDConeProjector(AbstractConeProjector):  # substitute your actual base c
 
             return proj_x, _ProjPSDConeJacobian(lambd, Q, B, self.size, self.dim, x)
 
-        # Choose which case applies. We keep the same structure as your original:
+        # Choose which case applies:
         # - if smallest eigenvalue >= 0: identity (already PSD)
         # - elif largest eigenvalue < 0: zero case (all negative -> projection zero)
         # - else general_case
@@ -766,7 +699,8 @@ class ProductConeProjector(AbstractConeProjector):
                     raise ValueError("The dual exponential cone is not yet supported.")
             elif cone_key == POW:
                 if len(val) > 0:
-                    raise ValueError("The power cone and its dual are not yet supported.")
+                    projectors.append(PowerConeProjector(val, onto_dual=onto_dual))
+                    dims.append(3 * np.size(val))
             elif cone_key == PSD:
                 if len(val) > 0:
                     projectors.append(PSDConeProjector(val))

@@ -5,9 +5,14 @@ import jax
 from jax import eval_shape
 import jax.numpy as jnp
 import equinox as eqx
+import lineax as lx
 from lineax import AbstractLinearOperator, IdentityLinearOperator, linear_solve, LSMR
 from jaxtyping import Float, Array
 from jax.experimental.sparse import BCOO, BCSR
+import cupy as cp
+from cupy import from_dlpack as cp_from_dlpack
+from cupyx.scipy.sparse import csr_matrix
+import nvmath
 
 from diffqcp._problem_data import (QCPStructureCPU, QCPStructureGPU,
                                    QCPStructure, ObjMatrixCPU, ObjMatrixGPU, ObjMatrix)
@@ -153,6 +158,92 @@ class AbstractQCP(eqx.Module):
         return produce_output(x=pi_z_n, y=pi_z_m, tau=pi_z_N,
                               w1=d_data_N_n, w2=d_data_N_m, w3=d_data_N_N)
         
+    
+    @eqx.filter_jit
+    def _vjp_direct_solve_block1(
+        self,
+        dx: Float[Array, " n"],
+        dy: Float[Array, " m"],
+        ds: Float[Array, " m"]
+    ):
+        n, m = self.problem_structure.n, self.problem_structure.m
+        pi_z, F, dproj_kstar_v = self._form_atoms()
+        dz = jnp.concatenate([dx,
+                              dproj_kstar_v.mv(dy + ds) - ds,
+                              - jnp.array([self.x @ dx + self.y @ dy + self.s @ ds])]
+                            )
+        return -dz, F, pi_z, n, m
+    
+    @eqx.filter_jit
+    def _vjp_direct_solve_get_FT(self, F):
+        """For prototyping purposes; obviously not efficient.
+        """
+
+        def _get_dense_mat(mat: lx.AbstractLinearOperator):
+            mv = lambda vec: mat.mv(vec)
+            mm = jax.vmap(mv)
+            return mm(jnp.eye(self.problem_structure.N))
+        
+        return _get_dense_mat(F.T)
+
+    
+    def _vjp_actual_solve(self, FT, dz_minus):
+        # NOTE(quill): separating this out for timing purposes.
+        return nvmath.sparse.advanced.direct_solver(FT, dz_minus)
+    
+    def _vjp_nvmath_direct_solve(self, FT, dz_minus):
+        # FT is a full JAX array
+        
+        FT_cupy_csr = csr_matrix(cp_from_dlpack(FT))
+        dz_minus_cupy = cp_from_dlpack(dz_minus)
+        
+        d_data_N_cupy = self._vjp_actual_solve(FT_cupy_csr, dz_minus_cupy)
+        
+        d_data_N = jax.dlpack.from_dlpack(d_data_N_cupy)
+
+        return d_data_N
+    
+    @eqx.filter_jit
+    def _vjp_direct_solve_get_output(
+        self,
+        pi_z,
+        d_data_N,
+        n,
+        m,
+        produce_output
+    ):
+        pi_z_n = pi_z[:n]
+        pi_z_m = pi_z[n:n+m]
+        pi_z_N = pi_z[-1]
+        d_data_N_n = d_data_N[:n]
+        d_data_N_m = d_data_N[n:n+m]
+        d_data_N_N = d_data_N[-1]
+        
+        return produce_output(x=pi_z_n, y=pi_z_m, tau=pi_z_N,
+                              w1=d_data_N_n, w2=d_data_N_m, w3=d_data_N_N)
+
+    def _vjp_direct_solve(
+        self,
+        dx: Float[Array, " n"],
+        dy: Float[Array, " m"],
+        ds: Float[Array, " m"],
+        produce_output: Callable
+    ):
+        info = self._vjp_direct_solve_block1(dx, dy, ds)
+        dz_minus, F, pi_z = info[0], info[1], info[2]
+        n, m = info[3], info[4]
+
+        # now check if 0 or not. This will not be jitted, so we can 
+        # just use typical Python control flow
+        if jnp.allclose(dz_minus, 0):
+            return jnp.zeros_like(dz_minus)
+        else:
+            # obtain FT
+            FT = self._vjp_direct_solve_get_FT(F)
+            d_data_N = self._vjp_nvmath_direct_solve(FT, dz_minus)
+        
+        return self._vjp_direct_solve_get_output(pi_z, d_data_N, n, m, produce_output)
+    
     @abstractmethod
     def vjp(
         self,
@@ -368,7 +459,8 @@ class DeviceQCP(AbstractQCP):
         self,
         dx: Float[Array, " n"],
         dy: Float[Array, " m"],
-        ds: Float[Array, " m"]
+        ds: Float[Array, " m"],
+        use_direct_solve: bool = False
     ) -> tuple[
         Float[BCSR, "n n"], Float[BCSR, "m n"],
         Float[Array, " n"], Float[Array, " m"]]:
@@ -399,6 +491,8 @@ class DeviceQCP(AbstractQCP):
                                                   A_csr_indtpr=self.problem_structure.A_csr_indptr,
                                                   n=self.problem_structure.n,
                                                   m=self.problem_structure.m)
-
-        return self._vjp_common(dx=dx, dy=dy, ds=ds,
-                                produce_output=partial_d_data_Q_adjoint_gpu)
+        
+        if use_direct_solve:
+            return self._vjp_direct_solve(dx=dx, dy=dy, ds=ds, produce_output=partial_d_data_Q_adjoint_gpu)
+        else:
+            return self._vjp_common(dx=dx, dy=dy, ds=ds, produce_output=partial_d_data_Q_adjoint_gpu)

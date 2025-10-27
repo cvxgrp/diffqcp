@@ -12,6 +12,8 @@ dependencies = [
     "jaxtyping>=0.3.2",
     "lineax>=0.0.8",
     "numpy>=2.3.1",
+    "cupy-cuda12x>=13.5.1",
+    "nvmath-python[cu12]>=0.6.0",
     "scipy>=1.15.3",
 ]
 
@@ -23,7 +25,6 @@ lineax = { git = "https://github.com/patrick-kidger/lineax.git" }
 
 [dependency-groups]
 dev = [
-    "cupy-cuda12x>=13.5.1",
     "cvxpy>=1.6.6",
     "diffcp>=1.1.4",
     "juliacall>=0.9.26",

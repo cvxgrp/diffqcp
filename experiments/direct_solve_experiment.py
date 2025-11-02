@@ -124,7 +124,8 @@ if __name__ == "__main__":
     # LARGE-ish
     # m = 2_000
     # n = 1_000
-    target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    # target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    target_problem = prob_generator.generate_LS_problem(m=m, n=n)
     prob_data_cpu = QCPProbData(target_problem)
 
     # ensure validity of the following ordering permutations.
@@ -193,7 +194,8 @@ if __name__ == "__main__":
 
     # --- ---
 
-    initial_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    # initial_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    initial_problem = prob_generator.generate_LS_problem(m=m, n=n)
     prob_data_cpu = QCPProbData(initial_problem)
 
     cones = prob_data_cpu.clarabel_cones
@@ -208,7 +210,7 @@ if __name__ == "__main__":
                                     cones,
                                     settings)
     
-    num_iter = 1
+    num_iter = 100
 
     start_time = time.perf_counter()
     losses = grad_desc(Pk=scsr_to_bcsr(prob_data_cpu.Pcsr),
@@ -238,7 +240,7 @@ if __name__ == "__main__":
     plt.title(label="diffqcp")
     results_dir = os.path.join(os.path.dirname(__file__), "results")
     if prob_data_cpu.n > 99:
-        output_path = os.path.join(results_dir, "dsolve_probability_large.svg")
+        output_path = os.path.join(results_dir, "dsolve_ls_100_iterates.svg")
     else:
         output_path = os.path.join(results_dir, "dsolve_probability_small.svg")
     plt.savefig(output_path, format="svg")

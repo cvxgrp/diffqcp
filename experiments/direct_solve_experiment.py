@@ -3,7 +3,6 @@ Experiment solving problems on the CPU and computing VJPs on the GPU.
 """
 import time
 import os
-from dataclasses import dataclass
 import numpy as np
 import jax
 jax.config.update("jax_enable_x64", True)
@@ -41,8 +40,7 @@ def _update_data(
     return new_Pdata, new_Adata, new_q, new_b
 
 
-# @eqx.filter_jit
-# @eqx.debug.assert_max_traces(max_traces=1)
+@eqx.filter_jit
 def make_step(
     qcp: DeviceQCP,
     target_x: Float[Array, " n"],
@@ -124,8 +122,8 @@ if __name__ == "__main__":
     # LARGE-ish
     # m = 2_000
     # n = 1_000
-    # target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
-    target_problem = prob_generator.generate_LS_problem(m=m, n=n)
+    target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    # target_problem = prob_generator.generate_LS_problem(m=m, n=n)
     prob_data_cpu = QCPProbData(target_problem)
 
     # ensure validity of the following ordering permutations.
@@ -194,8 +192,8 @@ if __name__ == "__main__":
 
     # --- ---
 
-    # initial_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
-    initial_problem = prob_generator.generate_LS_problem(m=m, n=n)
+    initial_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    # initial_problem = prob_generator.generate_LS_problem(m=m, n=n)
     prob_data_cpu = QCPProbData(initial_problem)
 
     cones = prob_data_cpu.clarabel_cones
@@ -232,6 +230,9 @@ if __name__ == "__main__":
     losses = jnp.stack(losses)
     losses = np.asarray(losses)
 
+    print("starting loss: ", losses[0])
+    print("final loss: ", losses[-1])
+
     plt.figure(figsize=(8, 6))
     plt.plot(range(num_iter), losses, label="Objective Trajectory")
     plt.xlabel("num. iterations")
@@ -240,7 +241,7 @@ if __name__ == "__main__":
     plt.title(label="diffqcp")
     results_dir = os.path.join(os.path.dirname(__file__), "results")
     if prob_data_cpu.n > 99:
-        output_path = os.path.join(results_dir, "dsolve_ls_100_iterates.svg")
+        output_path = os.path.join(results_dir, "dsolve_probability_100_iterates_lineax_direct.svg")
     else:
         output_path = os.path.join(results_dir, "dsolve_probability_small.svg")
     plt.savefig(output_path, format="svg")

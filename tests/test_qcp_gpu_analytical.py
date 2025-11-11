@@ -4,10 +4,8 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import scipy.linalg as la
-import jax.numpy.linalg as jla
 import jax.random as jr
 import cvxpy as cvx
-import patdb
 import equinox as eqx
 
 from diffqcp import DeviceQCP, QCPStructureGPU
@@ -94,12 +92,6 @@ def test_least_squares(getkey):
         dq = jnp.zeros_like(q)
 
         Dx_b = jnp.array(la.solve(A_orig.T @ A_orig, A_orig.T))
-
-        # start = time.perf_counter()
-        # dx, dy, ds = qcp.jvp(dP, dA, dq, -db)
-        # tol = jnp.abs(dx)
-        # end = time.perf_counter()
-        # print(f"compile + solve time = {end - start}..")
         
         true_result = Dx_b @ db
 
@@ -118,7 +110,7 @@ def test_least_squares(getkey):
         qcp_traced, qcp_static = eqx.partition(qcp, is_array_and_dtype(jnp.floating))
 
         # Partition inputs similarly
-        jvp_inputs = (dP, dA, dq, -db)
+        jvp_inputs = (dP, dA, dq, -db, "jax-lsmr")
         inputs_traced, inputs_static = eqx.partition(jvp_inputs, is_array_and_dtype(jnp.floating))
 
         # Define a wrapper that takes only the traced inputs
@@ -153,3 +145,91 @@ def test_least_squares(getkey):
         print("dx shape: ", jnp.shape(dx[m:]))
         
         assert jnp.allclose(true_result, dx[m:], atol=1e-8)
+
+def test_least_squares_direct_solve(getkey):
+    """
+    The least squares (approximation) problem
+
+        minimize    ||Ax - b||^2,
+
+        <=>
+
+        minimize    ||r||^2
+        subject to  r = Ax - b,
+
+    where A is a (m x n)-matrix with rank A = n, has
+    the analytical solution
+
+        x^star = (A^T A)^-1 A^T b.
+
+    Considering x^star as a function of b, we know
+
+        Dx^star(b) = (A^T A)^-1 A^T.
+
+    This test checks the accuracy of `diffqcp`'s derivative computations by
+    comparing DS(Data)dData to Dx^star(b)db.
+
+    **Notes:**
+    - `dData == (0, 0, 0, db)`, and other canonicalization considerations must be made
+    (hence the `data_and_soln_from_cvxpy_problem` function call and associated data declaration.)
+    """
+
+    # TODO(quill): update the testing to follow best practices
+
+    np.random.seed(0)
+
+    for solve_method in ["jax-lu", "nvmath-direct"]:
+    
+        for _ in range(10):
+            np.random.seed(0)
+            n = np.random.randint(low=10, high=15)
+            m = n + np.random.randint(low=5, high=15)
+            # n = np.random.randint(low=1_000, high=1_500)
+            # m = n + np.random.randint(low=500, high=1_000)
+
+            A = np.random.randn(m, n)
+            b = np.random.randn(m)
+
+            x = cvx.Variable(n)
+            r = cvx.Variable(m)
+            f0 = cvx.sum_squares(r)
+            problem = cvx.Problem(cvx.Minimize(f0), [r == A@x - b])
+
+            data = QCPProbData(problem)
+
+            P = scsr_to_bcsr(data.Pcsr)
+            A_orig = A
+            A = scsr_to_bcsr(data.Acsr)
+            q = jnp.array(data.q)
+            b_orig = b
+            b = jnp.array(data.b)
+            x = jnp.array(data.x)
+            y = jnp.array(data.y)
+            s = jnp.array(data.s)
+
+            qcp_struc = QCPStructureGPU(P, A, data.scs_cones)
+            qcp = DeviceQCP(P, A, q, b, x, y, s, qcp_struc)
+
+            print("N = ", qcp_struc.N)
+            print("n = ", qcp_struc.n)
+            print("m = ", qcp_struc.m)
+
+            dP = get_zeros_like_csr(data.Pcsr)
+            dP = scsr_to_bcsr(dP)
+            dA = get_zeros_like_csr(data.Acsr)
+            dA = scsr_to_bcsr(dA)
+            assert b_orig.size == b.size
+            np.testing.assert_allclose(-b_orig, b) # sanity check
+            db = 1e-6 * jr.normal(getkey(), shape=jnp.size(b))
+            dq = jnp.zeros_like(q)
+
+            Dx_b = jnp.array(la.solve(A_orig.T @ A_orig, A_orig.T))
+            
+            true_result = Dx_b @ db
+
+            dx, _, _ = eqx.filter_jit(qcp.jvp)(dP, dA, dq, -db, solve_method=solve_method)
+
+            print("true result shape: ", jnp.shape(true_result))
+            print("dx shape: ", jnp.shape(dx[m:]))
+            
+            assert jnp.allclose(true_result, dx[m:], atol=1e-8)

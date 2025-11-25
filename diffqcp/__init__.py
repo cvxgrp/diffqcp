@@ -3,7 +3,8 @@ from .qcp import (
     HostQCP as HostQCP
 )
 
-from ._problem_data import (
+from .problem_data import (
     QCPStructureCPU as QCPStructureCPU,
-    QCPStructureGPU as QCPStructureGPU
+    QCPStructureGPU as QCPStructureGPU,
+    QCPStructureLayers as QCPStructureLayers
 )

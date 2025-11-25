@@ -13,7 +13,7 @@ from cupy import from_dlpack as cp_from_dlpack
 from cupyx.scipy.sparse import csr_matrix
 from nvmath.sparse.advanced import DirectSolver, DirectSolverAlgType
 
-from diffqcp._problem_data import (QCPStructureCPU, QCPStructureGPU,
+from diffqcp.problem_data import (QCPStructureCPU, QCPStructureGPU,
                                    QCPStructure, ObjMatrixCPU, ObjMatrixGPU, ObjMatrix)
 from diffqcp._linops import _BlockLinearOperator
 from diffqcp._qcp_derivs import (_DuQ, _d_data_Q, _d_data_Q_adjoint_cpu, _d_data_Q_adjoint_gpu)
@@ -170,7 +170,9 @@ class AbstractQCP(eqx.Module):
         
         def nonzero_case():
             if solve_method == "jax-lsmr":
-                soln = linear_solve(F.T, -dz, solver=LSMR(rtol=1e-8, atol=1e-8))
+                FT_dense = self._vjp_direct_solve_get_FT(F)
+                soln = linear_solve(lx.MatrixLinearOperator(FT_dense), -dz, solver=LSMR(rtol=1e-8, atol=1e-8))
+                # soln = linear_solve(F.T, -dz, solver=LSMR(rtol=1e-8, atol=1e-8))
                 return soln.value
             else:
                 FT = self._vjp_direct_solve_get_FT(F)
@@ -322,7 +324,8 @@ class HostQCP(AbstractQCP):
                                                   m=self.problem_structure.m)
         
         return self._vjp_common(dx=dx, dy=dy, ds=ds,
-                                produce_output=partial_d_data_Q_adjoint_cpu)
+                                produce_output=partial_d_data_Q_adjoint_cpu,
+                                solve_method="jax-lsmr")
 
 
 class DeviceQCP(AbstractQCP):
@@ -351,7 +354,7 @@ class DeviceQCP(AbstractQCP):
         x: Float[Array, " n"],
         y: Float[Array, " m"],
         s: Float[Array, " m"],
-        problem_structure: QCPStructureCPU
+        problem_structure: QCPStructureGPU
     ):
         """**Arguments:**
         - `P`: BCSR, shape (n, n). The quadratic objective matrix in sparse BCSR format.

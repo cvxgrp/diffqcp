@@ -48,7 +48,8 @@ def test_least_squares(getkey):
 
     np.random.seed(0)
 
-    for _ in range(10):
+    for i in range(10):
+        print(f"iteration {i}")
         np.random.seed(0)
         n = np.random.randint(low=10, high=15)
         m = n + np.random.randint(low=5, high=15)
@@ -78,17 +79,13 @@ def test_least_squares(getkey):
         qcp_struc = QCPStructureGPU(P, A, data.scs_cones)
         qcp = DeviceQCP(P, A, q, b, x, y, s, qcp_struc)
 
-        print("N = ", qcp_struc.N)
-        print("n = ", qcp_struc.n)
-        print("m = ", qcp_struc.m)
-
         dP = get_zeros_like_csr(data.Pcsr)
         dP = scsr_to_bcsr(dP)
         dA = get_zeros_like_csr(data.Acsr)
         dA = scsr_to_bcsr(dA)
         assert b_orig.size == b.size
         np.testing.assert_allclose(-b_orig, b) # sanity check
-        db = 1e-6 * jr.normal(getkey(), shape=jnp.size(b))
+        db = jr.normal(getkey(), shape=jnp.size(b))
         dq = jnp.zeros_like(q)
 
         Dx_b = jnp.array(la.solve(A_orig.T @ A_orig, A_orig.T))
@@ -143,8 +140,12 @@ def test_least_squares(getkey):
 
         print("true result shape: ", jnp.shape(true_result))
         print("dx shape: ", jnp.shape(dx[m:]))
+
+        print("SMALL TRUTH: ", Dx_b @ (1e-6 * db))
+        print("REAL TRUTH: ", true_result)
+        print("COMPUTED: ", dx[m:])
         
-        assert jnp.allclose(true_result, dx[m:], atol=1e-8)
+        assert jnp.allclose(dx[m:], true_result, atol=1e-8)
 
 def test_least_squares_direct_solve(getkey):
     """
@@ -176,11 +177,13 @@ def test_least_squares_direct_solve(getkey):
 
     # TODO(quill): update the testing to follow best practices
 
-    np.random.seed(0)
+    
 
     for solve_method in ["jax-lu", "nvmath-direct"]:
-    
-        for _ in range(10):
+    # for solve_method in ["jax-lu"]:
+        np.random.seed(0)
+        for i in range(10):
+            print(f"== iteration {i} ===")
             np.random.seed(0)
             n = np.random.randint(low=10, high=15)
             m = n + np.random.randint(low=5, high=15)
@@ -220,16 +223,16 @@ def test_least_squares_direct_solve(getkey):
             dA = scsr_to_bcsr(dA)
             assert b_orig.size == b.size
             np.testing.assert_allclose(-b_orig, b) # sanity check
-            db = 1e-6 * jr.normal(getkey(), shape=jnp.size(b))
+            db = jr.normal(getkey(), shape=jnp.size(b))
             dq = jnp.zeros_like(q)
 
             Dx_b = jnp.array(la.solve(A_orig.T @ A_orig, A_orig.T))
             
             true_result = Dx_b @ db
 
-            dx, _, _ = eqx.filter_jit(qcp.jvp)(dP, dA, dq, -db, solve_method=solve_method)
+            dx, _, _ = qcp.jvp(dP, dA, dq, -db, solve_method=solve_method)
 
             print("true result shape: ", jnp.shape(true_result))
             print("dx shape: ", jnp.shape(dx[m:]))
             
-            assert jnp.allclose(true_result, dx[m:], atol=1e-8)
+            assert jnp.allclose(dx[m:], true_result, atol=1e-8)

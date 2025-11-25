@@ -8,7 +8,7 @@ from lineax import AbstractLinearOperator
 from jaxtyping import Array, Float, Integer
 from jax.experimental.sparse import BCOO, BCSR
 
-from diffqcp._problem_data import ObjMatrix
+from diffqcp.problem_data import ObjMatrix
 
 # NOTE(quill): the last bit of that would fail since `dtau * self.q` would be 1D array * 2D array
 #   So I guess the somewhat challenging aspect of this is the fact that the first two bits

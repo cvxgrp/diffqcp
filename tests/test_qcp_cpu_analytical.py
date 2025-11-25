@@ -5,10 +5,8 @@ import jax
 jax.config.update("jax_platform_name", "cpu")
 import jax.numpy as jnp
 import scipy.linalg as la
-import jax.numpy.linalg as jla
 import jax.random as jr
 import cvxpy as cvx
-import patdb
 import equinox as eqx
 
 from diffqcp import  HostQCP, QCPStructureCPU

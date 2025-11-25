@@ -1,5 +1,3 @@
-from . import cones as cones
-
 from .qcp import (
     DeviceQCP as DeviceQCP,
     HostQCP as HostQCP

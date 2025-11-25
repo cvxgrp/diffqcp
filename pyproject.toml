@@ -15,8 +15,8 @@ dependencies = [
     "scipy>=1.15.3",
 ]
 
-[tool.setuptools]
-packages = ["diffqcp"]
+[tool.setuptools.packages.find]
+include = ["diffqcp", "diffqcp.*"]
 
 [tool.uv.sources]
 lineax = { git = "https://github.com/patrick-kidger/lineax.git" }

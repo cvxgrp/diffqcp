@@ -18,6 +18,8 @@ TODO(quill): add ability to compute `proj` or `dproj` (i.e., don't have to compu
     -> again, unimportant for `diffqcp`, but would be nice if you want to provide a JAX cone
     projection library.
 """
+from typing import TYPE_CHECKING
+
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -25,12 +27,11 @@ import jax.numpy.linalg as jla
 import lineax as lx
 from lineax import AbstractLinearOperator
 import equinox as eqx
-from abc import abstractmethod
 from jaxtyping import Array, Float
 
-from ._abstract_projector import AbstractConeProjector
+from .abstract_projector import AbstractConeProjector
 from .pow import PowerConeProjector
-from diffqcp._linops import _BlockLinearOperator
+from diffqcp.linops import _BlockLinearOperator
 from diffqcp._helpers import _to_int_list
 
 ZERO = "z"
@@ -387,7 +388,7 @@ def vec_symm(X: jnp.ndarray) -> jnp.ndarray:
     return vec * scale
 
 
-def unvec_symm(x: Float[Array, "d"], size: int) -> Float[Array, "k k"]:
+def unvec_symm(x: Float[Array, " d"], size: int) -> Float[Array, "k k"]:
     sqrt2 = jnp.sqrt(jnp.array(2.0, dtype=x.dtype))
     X = jnp.zeros((size, size), dtype=x.dtype)
     idxs = jnp.triu_indices(size)
@@ -398,7 +399,7 @@ def unvec_symm(x: Float[Array, "d"], size: int) -> Float[Array, "k k"]:
     return X
 
 
-def form_B_block(v1: Float[Array, "n"], v2: Float[Array, "m"]) -> Float[Array, "m n"]:
+def form_B_block(v1: Float[Array, " n"], v2: Float[Array, " m"]) -> Float[Array, "m n"]:
     v1 = jnp.expand_dims(v1, 0).repeat(v2.shape[0], axis=0)
     block = v1 - jnp.expand_dims(v2, 1)
     block = v1 / block
@@ -430,12 +431,12 @@ def _psd_jacobian_one_dimensional_mv(dx, lambd, Q, B, size):
 
 
 class _ProjPSDConeJacobian(AbstractLinearOperator):
-    lambd: Float[Array, "k"]
+    lambd: Float[Array, " k"]
     Q: Float[Array, "k k"]
     B: Float[Array, "k k"]
     size: int = eqx.field(static=True)
     dim: int = eqx.field(static=True)
-    x: Float[Array, "d"]
+    x: Float[Array, " d"]
 
     def __init__(self, lambd, Q, B, size, dim, x):
         self.lambd = lambd

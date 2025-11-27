@@ -1,4 +1,5 @@
 from abc import abstractmethod
+from typing import TYPE_CHECKING
 
 import equinox as eqx
 from lineax import AbstractLinearOperator

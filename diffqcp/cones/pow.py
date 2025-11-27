@@ -1,7 +1,6 @@
+"""Subroutines for projecting onto power cone and computing JVPs and VJPs with the derivative of the projection.
 """
-Notation:
-- `x` is the 
-"""
+from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
@@ -9,7 +8,7 @@ import equinox as eqx
 import lineax as lx
 from jaxtyping import Array, Float, Bool
 
-from ._abstract_projector import AbstractConeProjector
+from .abstract_projector import AbstractConeProjector
 
 if jax.config.jax_enable_x64:
     TOL = 1e-12

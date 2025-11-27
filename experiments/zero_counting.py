@@ -80,7 +80,8 @@ def get_info(
     cond2 = np.linalg.cond(F_dense)
     print("F condition number:", cond2)
 
-    sparsity = num_zeros / total_elements
+    # sparsity = num_zeros / total_elements
+    sparsity = np.count_nonzero(F_dense) / total_elements
     print(f"Sparsity: {sparsity}")
 
     rows, cols = F_dense.shape
@@ -143,21 +144,21 @@ if __name__ == "__main__":
 
     np.random.seed(28)
 
-    # ls_problem_medium = prob_generator.generate_LS_problem(m=200, n=100)
-    # ls_problem_medium_data = QCPProbData(ls_problem_medium)
-    # get_info(ls_problem_medium_data, "LS_medium")
+    ls_problem_medium = prob_generator.generate_LS_problem(m=200, n=100)
+    ls_problem_medium_data = QCPProbData(ls_problem_medium)
+    get_info(ls_problem_medium_data, "LS_medium", plot=False)
 
-    # ls_problem_large = prob_generator.generate_LS_problem(m=2000, n=1000)
-    # ls_problem_large_data = QCPProbData(ls_problem_large)
-    # get_info(ls_problem_large_data, "LS_large")
+    ls_problem_large = prob_generator.generate_LS_problem(m=2000, n=1000)
+    ls_problem_large_data = QCPProbData(ls_problem_large)
+    get_info(ls_problem_large_data, "LS_large", plot=False)
 
-    # port_problem_small = prob_generator.generate_portfolio_problem(n=200)
-    # port_problem_small_data = QCPProbData(port_problem_small)
-    # get_info(port_problem_small_data, "portfolio_small")
+    port_problem_small = prob_generator.generate_portfolio_problem(n=200)
+    port_problem_small_data = QCPProbData(port_problem_small)
+    get_info(port_problem_small_data, "portfolio_small", plot=False)
 
-    # port_problem_medium = prob_generator.generate_portfolio_problem(n=1_000)
-    # port_problem_medium_data = QCPProbData(port_problem_medium)
-    # get_info(port_problem_medium_data, "portfolio_medium")
+    port_problem_medium = prob_generator.generate_portfolio_problem(n=1_000)
+    port_problem_medium_data = QCPProbData(port_problem_medium)
+    get_info(port_problem_medium_data, "portfolio_medium", plot=False)
     
     max_attempts = 100
     
@@ -179,17 +180,17 @@ if __name__ == "__main__":
     #     attempt_num += 1
 
     # attempt_num = 0
-    # while attempt_num < max_attempts:
-    #     pow_medium = prob_generator.generate_pow_projection_problem(n=33)
-    #     pow_medium_data = QCPProbData(pow_medium)
-    #     if get_info(pow_medium_data, "pow_medium"):
-    #         break
-    #     attempt_num += 1
+    while attempt_num < max_attempts:
+        pow_medium = prob_generator.generate_pow_projection_problem(n=33)
+        pow_medium_data = QCPProbData(pow_medium)
+        if get_info(pow_medium_data, "pow_medium", plot=False):
+            break
+        attempt_num += 1
 
     attempt_num = 0
     while attempt_num < max_attempts:
         pow_large = prob_generator.generate_pow_projection_problem(n=333)
         pow_large_data = QCPProbData(pow_large)
-        if get_info(pow_large_data, "pow_large", plot=True):
+        if get_info(pow_large_data, "pow_large", plot=False):
             break
         attempt_num += 1

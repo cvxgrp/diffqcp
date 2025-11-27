@@ -57,7 +57,7 @@ def make_step(
     dP, dA, dq, db = qcp.vjp(qcp.x - target_x,
                              qcp.y - target_y,
                              qcp.s - target_s,
-                             use_direct_solve=True)
+                             solve_method="jax-lsmr")
     updated_data = eqx.filter_jit(_update_data)(dP, dA, dq, db, Pdata, Adata, q, b, step_size)
     return loss, *updated_data
 
@@ -241,7 +241,7 @@ if __name__ == "__main__":
     plt.title(label="diffqcp")
     results_dir = os.path.join(os.path.dirname(__file__), "results")
     if prob_data_cpu.n > 99:
-        output_path = os.path.join(results_dir, "dsolve_probability_100_iterates_lineax_direct.svg")
+        output_path = os.path.join(results_dir, "lsmr_dense_ls_100_iterates_direct_11_10.svg")
     else:
         output_path = os.path.join(results_dir, "dsolve_probability_small.svg")
     plt.savefig(output_path, format="svg")

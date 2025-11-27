@@ -111,12 +111,13 @@ if __name__ == "__main__":
     # m = 20
     # n = 10
     # MEDIUM-ish
-    # m = 200
-    # n = 100
+    m = 200
+    n = 100
     # LARGE-ish
-    m = 2_000
-    n = 1_000
+    # m = 2_000
+    # n = 1_000
     target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    # target_problem = prob_generator.generate_LS_problem(m=m, n=n)
     prob_data_cpu = QCPProbData(target_problem)
 
     # ensure validity of the following ordering permutations.
@@ -176,8 +177,9 @@ if __name__ == "__main__":
     # --- test compiled solve ---
 
     start_time = time.perf_counter()
+    # with jax.profiler.trace("/home/quill/diffqcp/tmp/indirect-trace", create_perfetto_link=True):
     result = make_step(qcp_initial, fake_target_x, fake_target_y,
-                       fake_target_s, P.data, A.data, q, b, step_size=1e-5)
+                    fake_target_s, P.data, A.data, q, b, step_size=1e-5)
     result[0].block_until_ready()
     end_time = time.perf_counter()
     print("Compiled diffqcp VJP compute took: ", end_time - start_time)
@@ -185,6 +187,7 @@ if __name__ == "__main__":
     # --- ---
 
     initial_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    # initial_problem = prob_generator.generate_LS_problem(m=m, n=n)
     prob_data_cpu = QCPProbData(initial_problem)
 
     cones = prob_data_cpu.clarabel_cones
@@ -221,6 +224,9 @@ if __name__ == "__main__":
     losses = jnp.stack(losses)
     losses = np.asarray(losses)
 
+    print("starting loss: ", losses[0])
+    print("final loss: ", losses[-1])
+
     plt.figure(figsize=(8, 6))
     plt.plot(range(num_iter), losses, label="Objective Trajectory")
     plt.xlabel("num. iterations")
@@ -229,7 +235,7 @@ if __name__ == "__main__":
     plt.title(label="diffqcp")
     results_dir = os.path.join(os.path.dirname(__file__), "results")
     if prob_data_cpu.n > 99:
-        output_path = os.path.join(results_dir, "hetero2_probability_large.svg")
+        output_path = os.path.join(results_dir, "hetero2_ls_large.svg")
     else:
         output_path = os.path.join(results_dir, "hetero2_probability_small.svg")
     plt.savefig(output_path, format="svg")

@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from typing import Callable
+from typing import Callable, TYPE_CHECKING
 import functools as ft
 import jax
 from jax import eval_shape
@@ -15,8 +15,8 @@ from nvmath.sparse.advanced import DirectSolver, DirectSolverAlgType
 
 from diffqcp.problem_data import (QCPStructureCPU, QCPStructureGPU,
                                    QCPStructure, ObjMatrixCPU, ObjMatrixGPU, ObjMatrix)
-from diffqcp._linops import _BlockLinearOperator
-from diffqcp._qcp_derivs import (_DuQ, _d_data_Q, _d_data_Q_adjoint_cpu, _d_data_Q_adjoint_gpu)
+from diffqcp.linops import _BlockLinearOperator
+from diffqcp.qcp_derivs import (_DuQ, _d_data_Q, _d_data_Q_adjoint_cpu, _d_data_Q_adjoint_gpu)
 # TODO(quill): make a note that the "CPU" and "GPU" qualifiers are somewhat misleading.
 
 class AbstractQCP(eqx.Module):
@@ -88,7 +88,7 @@ class AbstractQCP(eqx.Module):
         dAT: Float[BCOO | BCSR, "n m"],
         dq: Float[Array, " n"],
         db: Float[Array, " m"],
-        solve_method: str
+        solve_method: str = "jax-lsmr"
     ) -> tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]:
         pi_z, F, dproj_kstar_v = self._form_atoms()
 
@@ -260,7 +260,8 @@ class HostQCP(AbstractQCP):
         dP: Float[BCOO, "n n"],
         dA: Float[BCOO, "m n"],
         dq: Float[Array, " n"],
-        db: Float[Array, " m"]
+        db: Float[Array, " m"],
+        solve_method: str = "jax-lu"
     ) -> tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]:
         """Apply the derivative of the QCP's solution map to an input perturbation.
 
@@ -284,13 +285,14 @@ class HostQCP(AbstractQCP):
         dAT = dA.T
         dP = self.problem_structure.form_obj(dP)
         # need to wrap dP.
-        return self._jvp_common(dP=dP, dA=dA, dAT=dAT, dq=dq, db=db)
+        return self._jvp_common(dP=dP, dA=dA, dAT=dAT, dq=dq, db=db, solve_method=solve_method)
 
     def vjp(
         self,
         dx: Float[Array, " n"],
         dy: Float[Array, " m"],
-        ds: Float[Array, " m"]
+        ds: Float[Array, " m"],
+        solve_method: str = "jax-lu"
     ) -> tuple[
         Float[BCSR, "n n"], Float[BCSR, "m n"],
         Float[Array, " n"], Float[Array, " m"]]:
@@ -325,7 +327,7 @@ class HostQCP(AbstractQCP):
         
         return self._vjp_common(dx=dx, dy=dy, ds=ds,
                                 produce_output=partial_d_data_Q_adjoint_cpu,
-                                solve_method="jax-lsmr")
+                                solve_method=solve_method)
 
 
 class DeviceQCP(AbstractQCP):

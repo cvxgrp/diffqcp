@@ -19,12 +19,11 @@ import lineax as lx
 from lineax import AbstractLinearOperator
 from jaxtyping import Float, Integer, Bool, Array
 
+if TYPE_CHECKING:
+    from cvxpy.reductions.dcp2cone.cone_matrix_stuffing import ParamConeProg
+
 from diffqcp.cones.canonical import ProductConeProjector
 from diffqcp._helpers import _coo_to_csr_transpose_map, _TransposeCSRInfo
-
-if TYPE_CHECKING:
-    import cvxpy as cvx
-    from cvxpy.reductions.dcp2cone.cone_matrix_stuffing import ParamConeProg
 
 class QCPStructure(eqx.Module):
 

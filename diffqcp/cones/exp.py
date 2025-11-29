@@ -171,7 +171,7 @@ def proj_polar_exp_cone_heuristic(v: jax.Array) -> tuple[jax.Array, jax.Array]:
         return vd, dist
 
     def interior_case():
-        td = jnp.maximum(t0, -r0 * jnp.exp(s0 / r0 - 1))
+        td = jnp.minimum(t0, -r0 * jnp.exp(s0 / r0 - 1.0))
         newdist = t0 - td
 
         def new_dist_case():
@@ -311,8 +311,8 @@ def root_search_binary(
 
         loop_state = jax.lax.cond(
             f < 0,
-            lambda st: {**st, "xl": x},
-            lambda st: {**st, "xu": x},
+            lambda st: {**st, "xl": loop_state["x"]},
+            lambda st: {**st, "xu": loop_state["x"]},
             loop_state
         )
 
@@ -322,7 +322,7 @@ def root_search_binary(
         # Termination coding:
         # 1: max iterations reached
         # 2: within tolerance
-        tol_reached = jnp.logical_or(jnp.abs(x_plus - x) <= EPS, x_plus == loop_state["xl"])
+        tol_reached = jnp.logical_or(jnp.abs(x_plus - loop_state["x"]) <= EPS, x_plus == loop_state["xl"])
         tol_reached = jnp.logical_or(tol_reached, x_plus == loop_state["xu"])
         loop_state["itn"] += 1
         loop_state["istop"] = jax.lax.select(loop_state["itn"] > MAX_ITER, 1, loop_state["istop"])
@@ -330,7 +330,7 @@ def root_search_binary(
 
         # Only commit new_x into x if we will continue (no stop triggered this iter).
         cont = loop_state["istop"] == 0
-        loop_state["x"] = jax.lax.select(cont, x_plus, x)
+        loop_state["x"] = jax.lax.select(cont, x_plus, loop_state["x"])
 
         return loop_state
 
@@ -394,7 +394,7 @@ def root_search_newton(
 
         ftol_reached = jnp.abs(f) <= EPS
         
-        loop_state["xl"], loop_state["xu"] = jax.lax.cond(f < 0,
+        loop_state["xl"], loop_state["xu"] = jax.lax.cond(f < 0.0,
                                                           lambda: (loop_state["x"], loop_state["xu"]),
                                                           lambda: (loop_state["xl"], loop_state["x"]))
         
@@ -410,7 +410,7 @@ def root_search_newton(
         # Newton step
         x_plus = loop_state["x"] - f / df
         
-        tol_reached = jnp.abs(loop_state["x_plus"] - loop_state["x"]) <= EPS * jnp.maximum(1, jnp.abs(x_plus))
+        tol_reached = jnp.abs(x_plus - loop_state["x"]) <= EPS * jnp.maximum(1, jnp.abs(x_plus))
         
         def _case_high():
             return jnp.minimum(LODAMP * loop_state["x"] + HIDAMP * loop_state["xu"], loop_state["xu"])
@@ -418,9 +418,9 @@ def root_search_newton(
         def _case_low():
             return jnp.maximum(LODAMP * loop_state["x"] + HIDAMP * loop_state["xl"], loop_state["xl"])
         
-        new_x = jax.lax.cond(x_plus >= xu,
+        new_x = jax.lax.cond(x_plus >= loop_state["xu"],
                              _case_high,
-                             lambda: jax.lax.cond(x_plus <= xl,
+                             lambda: jax.lax.cond(x_plus <= loop_state["xl"],
                                                     _case_low,
                                                     lambda: x_plus))
 
@@ -454,7 +454,6 @@ def root_search_newton(
         "itn": 0,
         "istop": perform_search,
         "x": x,
-        "x_plus": x,
         "xl": xl,
         "xu": xu,
     }

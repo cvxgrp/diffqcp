@@ -386,8 +386,6 @@ def test_in_exp_dual(getkey):
 def test_proj_exp_scs(getkey):
     """test values ported from scs/test/problems/test_exp_cone.h
     """
-    TOL = 1e-6
-
     vs = [jnp.array([1.0, 2.0, 3.0]),
           jnp.array([0.14814832, 1.04294573, 0.67905585]),
           jnp.array([-0.78301134, 1.82790084, -1.05417044]),
@@ -395,12 +393,14 @@ def test_proj_exp_scs(getkey):
           jnp.array([0.67905585, 0.14814832, 1.04294573]),
           jnp.array([0.50210027, 0.12314491, -1.77568921])]
     
+    num_cones = len(vs)
+    
     vp_true = [jnp.array([0.8899428, 1.94041881, 3.06957226]),
                jnp.array([-0.02001571, 0.8709169, 0.85112944]),
                jnp.array([-1.17415616, 0.9567094, 0.280399]),
                jnp.array([0.53160512, 0.2804836, 1.86652094]),
                jnp.array([0.38322814, 0.27086569, 1.11482228]),
-               jnp.array([0, 0, 0])]
+               jnp.array([0.0, 0.0, 0.0])]
     vd_true = [jnp.array([-0., 2., 3.]),
                jnp.array([-0., 1.04294573, 0.67905585]),
                jnp.array([-0.68541419, 1.85424082, 0.01685653]),
@@ -415,9 +415,7 @@ def test_proj_exp_scs(getkey):
         v = vs[i]
         vp, _ = primal_projector(v)
         vd, _ = dual_projector(v)
-        # assert jnp.allclose(vp, vp_true[i], atol=TOL)
         assert jnp.allclose(vp, vp_true[i])
-        # assert jnp.allclose(vd, vd_true[i], atol=TOL)
         assert jnp.allclose(vd, vd_true[i])
 
     # Now test batched
@@ -428,15 +426,16 @@ def test_proj_exp_scs(getkey):
         assert jnp.allclose(vps[i, :], vp_true[i])
         assert jnp.allclose(vds[i, :], vd_true[i])
 
-    # now test integratated into diffqcp
-    # vs = torch.cat(vs)
-    # vp_true = torch.cat(vp_true)
-    # vd_true = torch.cat(vd_true)
-    # p = cone_lib.proj(vs, cones=[(cone_lib.EXP, 6)], dual=False)
-    # pd = cone_lib.proj(vs, cones=[(cone_lib.EXP_DUAL, 6)], dual=False)
-    # assert torch.allclose(p, vp_true, atol=TOL)
-    # assert torch.allclose(pd, vd_true, atol=TOL)
-    # p = cone_lib.proj(vs, cones=[(cone_lib.EXP_DUAL, 6)], dual=True)
-    # pd = cone_lib.proj(vs, cones=[(cone_lib.EXP, 6)], dual=True)
-    # assert torch.allclose(p, vp_true, atol=TOL)
-    # assert torch.allclose(pd, vd_true, atol=TOL)
+    # now test with num_cones > 1 for single projector
+    vs = jnp.concatenate(vs)
+    vp_true = jnp.concatenate(vp_true)
+    vd_true = jnp.concatenate(vd_true)
+
+    primal_projector = ExponentialConeProjector(num_cones, onto_dual=False)
+    dual_projector = ExponentialConeProjector(num_cones, onto_dual=True)
+
+    vps, _ = primal_projector(vs)
+    vds, _ = dual_projector(vs)
+
+    assert jnp.allclose(vps, vp_true)
+    assert jnp.allclose(vds, vd_true)

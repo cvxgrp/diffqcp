@@ -21,12 +21,20 @@ from jaxtyping import Float, Array
 
 from diffqcp.cones.abstract_projector import AbstractConeProjector
 
-EXP_CONE_INF_VALUE = ...
-EXP_CONE_INF_VALUE = ...
 MAX_ITER = 40
-EPS = ...
-TOL = ...
-CONE_THRESH = ...
+
+if jax.config.jax_enable_x64:
+    EXP_CONE_INF_VALUE = 1e15
+    EPS = 1e-12
+    TOL = ...
+    CONE_THRESH = ...
+else:
+    EXP_CONE_INF_VALUE = ...
+    EPS = ...
+    TOL = ...
+    CONE_THRESH = ...
+
+
 
 def _is_finite(x: Float[Array, " "]) -> bool:
     return jnp.abs(x) < EXP_CONE_INF_VALUE
@@ -88,6 +96,21 @@ def ppsi(v: Float[Array, " "]) -> Float[Array, " "]:
 
     psi = jnp.where(r0 > s0, psi1, psi2)
     return ((psi - 1.0) * r0 + s0) / (psi * (psi - 1.0) + 1.0)
+
+
+def dpsi(v: Float[Array, "3"]):
+    r0, s0 = v[0], v[1]
+
+    def case1():
+        return (r0 - jnp.sqrt(r0*r0 + s0*s0 - r0*s0)) / s0
+    
+    def case2():
+        return (r0 - s0) / (r0 + jnp.sqrt(r0*r0 + s0*s0 - r0*s0))
+
+    psi = jax.lax.cond(s0 > r0,
+                       case1,
+                       case2)
+    return (r0 - psi*s0) / (psi * (psi - 1.0) + 1.0)
 
 
 def proj_primal_exp_cone_heuristic(v: Float[Array, " "]) -> tuple[Float[Array, "3"], Float[Array, " "]]:
@@ -176,31 +199,106 @@ def exp_search_bracket(
     pdist: Float[Array, " "],
     ddist: Float[Array, " "]
 ) -> tuple[Float[Array, " "], Float[Array, " "]]:
-    pass
+    """Generate upper and lower search bounds for root of `hfun`.
+
+    :param v: Point in R^3 being projected.
+    :type v: Float[Array, "3"]
+    :param pdist: Distance between point and its heuristic projection onto EXP cone.
+    :type pdist: Float[Array, " "]
+    :param ddist: Distance between point and its heuristic projection onto polar EXP cone.
+    :type ddist: Float[Array, " "]
+    :return: Lower and upper `hfun` search bounds, respectively.
+    :rtype: tuple[Float[Array, " "], Float[Array, " "]]
+    """
+    r0, s0, t0 = v[0], v[1], v[2]
+    baselow = -EXP_CONE_INF_VALUE
+    baseupr = EXP_CONE_INF_VALUE
+    low = baselow
+    upr = baseupr
+
+    s0m = jnp.minimum(s0, 0.0)
+    Dp = jnp.sqrt(jnp.maximum(0.0, pdist * pdist - s0m * s0m))
+    r0m = jnp.minimum(r0, 0.0)
+    Dd = jnp.sqrt(jnp.maximum(0.0, ddist * ddist - r0m * r0m))
+
+    # t0 > 0  / t0 < 0 branch
+    def tpos(_):
+        curbnd = jnp.log(t0 / ppsi(v))
+        return jnp.maximum(low, curbnd), upr
+
+    def tneg(_):
+        curbnd = -jnp.log(-t0 / dpsi(v))
+        return low, jnp.minimum(upr, curbnd)
+
+    low, upr = jax.lax.cond(t0 > 0.0, tpos, lambda _: jax.lax.cond(t0 < 0.0, tneg, lambda _: (low, upr), operand=None), operand=None)
+
+    # r0 > 0 branch
+    def rpos(_):
+        baselow2 = 1.0 - s0 / r0
+        low2 = jnp.maximum(low, baselow2)
+        tpu = jnp.maximum(EPS, jnp.minimum(Dd, Dp + t0))
+        curbnd = jnp.maximum(low2, baselow2 + tpu / r0 / pomega(low2))
+        upr2 = jnp.minimum(upr, curbnd)
+        return low2, upr2
+
+    low, upr = jax.lax.cond(r0 > 0.0, rpos, lambda _: (low, upr), operand=None)
+
+    # s0 > 0 branch
+    def spos(_):
+        baseupr2 = r0 / s0
+        upr2 = jnp.minimum(upr, baseupr2)
+        tdl = -jnp.maximum(EPS, jnp.minimum(Dp, Dd - t0))
+        curbnd = jnp.minimum(upr2, baseupr2 - tdl / s0 / domega(upr2))
+        low2 = jnp.maximum(low, curbnd)
+        return low2, upr2
+
+    low, upr = jax.lax.cond(s0 > 0.0, spos, lambda _: (low, upr), operand=None)
+
+    # guarantee valid bracket
+    low = _clip(jnp.minimum(low, upr), baselow, baseupr)
+    upr = _clip(jnp.maximum(low, upr), baselow, baseupr)
+
+    # if bracket endpoints different, verify signs and possibly collapse to the closer endpoint
+    def adjust_bracket(_):
+        fl = hfun(v, low)
+        fu = hfun(v, upr)
+        def collapse(_):
+            pick = jnp.where(jnp.abs(fl) < jnp.abs(fu), low, upr)
+            return pick, pick
+        return jax.lax.cond(fl * fu > 0.0, collapse, lambda _: (low, upr), operand=None)
+
+    low, upr = jax.lax.cond(low != upr, adjust_bracket, lambda _: (low, upr), operand=None)
+
+    return low, upr
 
 
 def root_search_binary(
     v: Float[Array, "3"],
     xl: Float[Array, " "],
     xh: Float[Array, " "],
-    x: Float[Array, "3"]
-) -> Float[Array, "3"]:
-    """
-    Docstring for root_search_binary
+    x: Float[Array, " "]
+) -> Float[Array, " "]:
+    """Binary search method for finding root of `hfun`.
     
-    :param v: Description
+    :param v: Point in R^3 being projected.
     :type v: Float[Array, "3"]
-    :param xl: Description
+    :param xl: Lower search bound for the root of `hfun`.
     :type xl: Float[Array, " "]
-    :param xh: Description
+    :param xh: Upper search bound for the root of `hfun`.
     :type xh: Float[Array, " "]
-    :param x: Description
-    :type x: Float[Array, "3"]
-    :return: Description
-    :rtype: Array
+    :param x: The intial guess for the root of `hfun`. (A scalar.)
+    :type x: Float[Array, " "]
+    :return: The root of `hfun`. (A scalar.)
+    :rtype: Float[Array, " "]
     """
 
+    if jax.config.jax_enable_x64:
+        EPS = 1e-12
+
     def _binary_search_body(loop_state):
+        
+        loop_state["x"] = loop_state["x_plus"]
+
         f = hfun(loop_state["v"], loop_state["x"])
 
         loop_state = jax.lax.cond(
@@ -213,9 +311,14 @@ def root_search_binary(
         # binary search step
         x_plus = 0.5 * (loop_state["xl"] + loop_state["xu"])
 
+        # Termination coding:
+        # 1: max iterations reached
+        # 2: within tolerance
+        tol_reached = (jnp.abs(x_plus - x) <= EPS) or (x_plus == loop_state["xl"]) or (x_plus == loop_state["xu"])
         loop_state["itn"] += 1
-        loop_state["istop"] = jax.lax.select(loop_state["itn"] > MAX_ITER, 2, loop_state["istop"])
-        loop_state["istop"] = jax.lax.select(jnp.abs(x_plus - x) <= EPS * jnp.maximum(1))
+        loop_state["x_plus"] = x_plus
+        loop_state["istop"] = jax.lax.select(tol_reached, 2, loop_state["istop"])
+        loop_state["istop"] = jax.lax.select(loop_state["itn"] > MAX_ITER, 1, loop_state["istop"])
 
 
     def condfun(loop_state):
@@ -224,6 +327,7 @@ def root_search_binary(
     loop_state = {
         "v": v,
         "x": x,
+        "x_plus": x,
         "xl": xl,
         "xh": xh,
         "itn": 0,
@@ -232,7 +336,11 @@ def root_search_binary(
 
     # while loop continues while `condfun == True`, so
     # break when istop != 0.
-    jax.lax.while_loop()
+    loop_state = jax.lax.while_loop(condfun, _binary_search_body, loop_state)
+
+    return jax.lax.cond(loop_state["istop"] == 1, lambda _: loop_state["x_plus"], lambda _: loop_state["x"])
+
+    return loop_state["x"]
 
 
 def root_search_newton(
@@ -417,11 +525,86 @@ def _dproj_exp(
     proj_v: Float[Array, "3"],
     onto_dual: bool = False
 ) -> Float[Array, "3 3"]:
-    pass
+    """
+    
+    :param v: Point in R^3.
+    :type v: Float[Array, "3"]
+    :param proj_v: The projection of `v` onto the EXP cone or its dual.
+    :type proj_v: Float[Array, "3"]
+    :param onto_dual: Whether `v` was projected onto the EXP cone or its dual.
+    :type onto_dual: bool
+    :return: The Jacobian of the projection onto the dual cone or its 
+    """
+    
+    if onto_dual:
+        v = -v
+
+    # TODO(quill): JAXify this.
+    if in_exp(v):
+        return jnp.identity(3, dtype=v.dtype)
+    elif in_exp_dual(-v):
+        return jnp.zeros((3, 3), dtype=v.dtype)
+    elif v[0] < 0 and v[1] < 0:
+        
+        J = jnp.zeros((3, 3), dtype=v.dtype)
+        J = J.at[0, 0].set(1.0)
+
+        def case1():
+            J = J.at[2, 2].set(1.0)
+            return J
+
+        return jax.lax.cond(v[2] >= 0,
+                            case1,
+                            lambda: J)
+        
+    else:
+        r = proj_v[0]
+        s = proj_v[1]
+        s = jax.lax.cond(s == 0, lambda: jnp.abs(r), lambda: s)
+        l = proj_v[2] - v[2]
+        alpha = jnp.exp(r / s)
+        beta = l * r / (s * s) * alpha
+        J = jnp.zeros((4, 4), dtype=v.dtype)
+
+        J = J.at[0, 0].set(alpha)
+        J = J.at[0, 1].set((( -r + s) / s) * alpha)
+        J = J.at[0, 2].set(jnp.array(-1.0, dtype=v.dtype))
+        # 0, 3 is 0
+
+        J = J.at[1, 0].set(1.0 + (l / s) * alpha)
+        J = J.at[1, 1].set(-beta)
+        # 1, 2 is 0
+        J = J.at[1, 3].set(alpha)
+
+        J = J.at[2, 0].set(-beta)
+        J = J.at[2, 1].set(1.0 + beta * (r / s))
+        # 2, 2 is 0
+        J = J.at[2, 3].set((1.0 - (r / s)) * alpha)
+
+        # 3, 0 is 0
+        # 3, 1 is 0
+        J = J.at[3, 2].set(jnp.array(1.0, dtype=v.dtype))
+        J = J.at[3, 3].set(jnp.array(-1.0, dtype=v.dtype))
+
+        return J
 
 
 class _ExponentialConeJacobianOperator(lx.AbstractLinearOperator):
-    pass
+
+    jacobians: Float[Array, "num_cones 3 3"]
+
+    def mv(self, dx: Float[Array, "*num_batches num_cones*3"]):
+        ndim = jnp.ndim()
+
+    def in_structure(self):
+
+
+
+        pass
+
+    def out_structure(self):
+        return self.in_structure()
+        
 
 
 class ExponentialConeProjector(AbstractConeProjector):

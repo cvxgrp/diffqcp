@@ -8,6 +8,7 @@ import jax.numpy as jnp
 import jax.random as jr
 
 import diffqcp.cones.canonical as cone_lib
+from diffqcp.cones.exp import in_exp, in_exp_dual, ExponentialConeProjector
 from .helpers import tree_allclose
 
 def _test_dproj_finite_diffs(
@@ -362,3 +363,80 @@ def test_product_projector(getkey):
             _test_dproj_finite_diffs(cone_projector, getkey, dim=total_dim, num_batches=num_batches)
 
 
+def test_in_exp(getkey):
+    in_vecs = [[0., 0., 1.], [-1., 0., 0.], [1., 1., 5.]]
+    for vec in in_vecs:
+        assert in_exp(jnp.array(vec))
+    not_in_vecs = [[1., 0., 0.], [-1., -1., 1.], [-1., 0., -1.]]
+    for vec in not_in_vecs:
+        assert not in_exp(jnp.array(vec))
+
+
+def test_in_exp_dual(getkey):
+    in_vecs = [[0., 1., 1.], [-1., 1., 5.]]
+    not_in_vecs = [[0., -1., 1.], [0., 1., -1.]]
+    for vec in in_vecs:
+        arr = jnp.array(vec)
+        assert in_exp_dual(arr)
+    for vec in not_in_vecs:
+        arr = jnp.array(vec)
+        assert not in_exp_dual(vec)
+
+    
+def test_proj_exp_scs(getkey):
+    """test values ported from scs/test/problems/test_exp_cone.h
+    """
+    TOL = 1e-6
+
+    vs = [jnp.array([1.0, 2.0, 3.0]),
+          jnp.array([0.14814832, 1.04294573, 0.67905585]),
+          jnp.array([-0.78301134, 1.82790084, -1.05417044]),
+          jnp.array([1.3282585, -0.43277314, 1.7468072]),
+          jnp.array([0.67905585, 0.14814832, 1.04294573]),
+          jnp.array([0.50210027, 0.12314491, -1.77568921])]
+    
+    vp_true = [jnp.array([0.8899428, 1.94041881, 3.06957226]),
+               jnp.array([-0.02001571, 0.8709169, 0.85112944]),
+               jnp.array([-1.17415616, 0.9567094, 0.280399]),
+               jnp.array([0.53160512, 0.2804836, 1.86652094]),
+               jnp.array([0.38322814, 0.27086569, 1.11482228]),
+               jnp.array([0, 0, 0])]
+    vd_true = [jnp.array([-0., 2., 3.]),
+               jnp.array([-0., 1.04294573, 0.67905585]),
+               jnp.array([-0.68541419, 1.85424082, 0.01685653]),
+               jnp.array([-0.02277033, -0.12164823, 1.75085347]),
+               jnp.array([-0., 0.14814832, 1.04294573]),
+               jnp.array([-0., 0.12314491, -0.])]
+    
+    primal_projector = ExponentialConeProjector(1, onto_dual=False)
+    dual_projector = ExponentialConeProjector(1, onto_dual=True)
+    
+    for i in range(len(vs)):
+        v = vs[i]
+        vp, _ = primal_projector(v)
+        vd, _ = dual_projector(v)
+        # assert jnp.allclose(vp, vp_true[i], atol=TOL)
+        assert jnp.allclose(vp, vp_true[i])
+        # assert jnp.allclose(vd, vd_true[i], atol=TOL)
+        assert jnp.allclose(vd, vd_true[i])
+
+    # Now test batched
+    vps, _ = vmap(primal_projector)(jnp.array(vs))
+    vds, _ = vmap(dual_projector)(jnp.array(vs))
+
+    for i in range(len(vs)):
+        assert jnp.allclose(vps[i, :], vp_true[i])
+        assert jnp.allclose(vds[i, :], vd_true[i])
+
+    # now test integratated into diffqcp
+    # vs = torch.cat(vs)
+    # vp_true = torch.cat(vp_true)
+    # vd_true = torch.cat(vd_true)
+    # p = cone_lib.proj(vs, cones=[(cone_lib.EXP, 6)], dual=False)
+    # pd = cone_lib.proj(vs, cones=[(cone_lib.EXP_DUAL, 6)], dual=False)
+    # assert torch.allclose(p, vp_true, atol=TOL)
+    # assert torch.allclose(pd, vd_true, atol=TOL)
+    # p = cone_lib.proj(vs, cones=[(cone_lib.EXP_DUAL, 6)], dual=True)
+    # pd = cone_lib.proj(vs, cones=[(cone_lib.EXP, 6)], dual=True)
+    # assert torch.allclose(p, vp_true, atol=TOL)
+    # assert torch.allclose(pd, vd_true, atol=TOL)

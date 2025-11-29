@@ -118,9 +118,11 @@ def proj_primal_exp_cone_heuristic(v: Float[Array, " "]) -> tuple[Float[Array, "
     r0, s0, t0 = v[0], v[1], v[2]
     
     vp = jnp.empty_like(v)
-    vp[0] = jnp.minimum(r0, 0)
-    vp[1] = 0
-    vp[2] = jnp.maximum(t0, 0)
+    vp = jnp.array([
+        jnp.minimum(r0, 0),
+        0.0,
+        jnp.maximum(t0, 0)
+    ], dtype=v.dtype)
 
     dist = jla.norm(v - vp)
 
@@ -132,15 +134,13 @@ def proj_primal_exp_cone_heuristic(v: Float[Array, " "]) -> tuple[Float[Array, "
         newdist = tp - t0
 
         def new_dist_case():
-            vp[0] = r0
-            vp[1] = s0
-            vp[2] = tp
+            vp = jnp.array([r0, s0, tp], dtype=v.dtype)
             
             return vp, newdist
         
         return jax.lax.cond(newdist < dist,
                             new_dist_case,
-                            lambda: vp, dist)
+                            lambda: (vp, dist))
 
     vp, dist = jax.lax.cond(s0 > 0,
                             interior_case,
@@ -160,9 +160,11 @@ def proj_polar_exp_cone_heuristic(v: jax.Array) -> tuple[jax.Array, jax.Array]:
     r0, s0, t0 = v[0], v[1], v[2]
 
     vd = jnp.empty_like(v)
-    vd[0] = 0
-    vd[1] = jnp.minimum(s0, 0)
-    vd[2] = jnp.minimum(t0, 0)
+    vd = jnp.array([
+        0.0,
+        jnp.minimum(s0, 0.0),
+        jnp.minimum(t0, 0)
+    ], dtype=v.dtype)
     dist = jla.norm(v - vd)
 
     def non_interior_case():
@@ -173,19 +175,19 @@ def proj_polar_exp_cone_heuristic(v: jax.Array) -> tuple[jax.Array, jax.Array]:
         newdist = t0 - td
 
         def new_dist_case():
-            vd[0] = r0
-            vd[1] = s0
-            vd[2] = td
+            vd = jnp.array([r0, s0, td], dtype=v.dtype)
             
             return vd, newdist
         
         return jax.lax.cond(newdist < dist,
                             new_dist_case,
-                            lambda: vd, dist)
+                            lambda: (vd, dist))
 
     vd, dist = jax.lax.cond(r0 > 0,
                             interior_case,
                             non_interior_case)
+
+    return vd, dist
 
 
 def exp_search_bracket(
@@ -205,7 +207,7 @@ def exp_search_bracket(
     :rtype: tuple[Float[Array, " "], Float[Array, " "]]
     """
     EPS = 1e-12
-    if not jax.config.enable_x64:
+    if not jax.config.jax_enable_x64:
         EPS = math.sqrt(EPS)
 
     r0, s0, t0 = v[0], v[1], v[2]
@@ -320,7 +322,8 @@ def root_search_binary(
         # Termination coding:
         # 1: max iterations reached
         # 2: within tolerance
-        tol_reached = (jnp.abs(x_plus - x) <= EPS) or (x_plus == loop_state["xl"]) or (x_plus == loop_state["xu"])
+        tol_reached = jnp.logical_or(jnp.abs(x_plus - x) <= EPS, x_plus == loop_state["xl"])
+        tol_reached = jnp.logical_or(tol_reached, x_plus == loop_state["xu"])
         loop_state["itn"] += 1
         loop_state["istop"] = jax.lax.select(loop_state["itn"] > MAX_ITER, 1, loop_state["istop"])
         loop_state["istop"] = jax.lax.select(tol_reached, 2, loop_state["istop"])
@@ -337,7 +340,7 @@ def root_search_binary(
     loop_state = {
         "x": x,
         "xl": xl,
-        "xh": xu,
+        "xu": xu,
         "itn": 0,
         "istop": perform_search
     }
@@ -385,19 +388,19 @@ def root_search_newton(
         EPS = math.sqrt(EPS)
         DFTOL = math.sqrt(DFTOL)
     
-    def _newton_body():
+    def _newton_body(loop_state):
 
         f, df = hfun_and_grad_hfun(v, loop_state["x"])
 
         ftol_reached = jnp.abs(f) <= EPS
         
         loop_state["xl"], loop_state["xu"] = jax.lax.cond(f < 0,
-                                                          lambda _: (loop_state["x"], loop_state["xu"]),
-                                                          lambda _: (loop_state["xl"], loop_state["x"]))
+                                                          lambda: (loop_state["x"], loop_state["xu"]),
+                                                          lambda: (loop_state["xl"], loop_state["x"]))
         
         xu_new, xl_new, brk = jax.lax.cond(loop_state["xu"] <= loop_state["xl"],
-                                           lambda _: (0.5 * (loop_state["xu"] + loop_state["xl"]), loop_state["xu"], True),
-                                           lambda _: (loop_state["xu"], loop_state["xl"], False))
+                                           lambda: (0.5 * (loop_state["xu"] + loop_state["xl"]), loop_state["xu"], True),
+                                           lambda: (loop_state["xu"], loop_state["xl"], False))
         
         loop_state["xl"] = xl_new
         loop_state["xu"] = xu_new
@@ -417,9 +420,9 @@ def root_search_newton(
         
         new_x = jax.lax.cond(x_plus >= xu,
                              _case_high,
-                             lambda _: jax.lax.cond(x_plus <= xl,
+                             lambda: jax.lax.cond(x_plus <= xl,
                                                     _case_low,
-                                                    lambda _: x_plus))
+                                                    lambda: x_plus))
 
         # Termination coding:
         # 1: max iterations reached
@@ -444,7 +447,7 @@ def root_search_newton(
 
         return loop_state
 
-    def condfun():
+    def condfun(loop_state):
         return loop_state["istop"] == 0
 
     loop_state = {
@@ -461,8 +464,8 @@ def root_search_newton(
     do_binary = jax.lax.select(loop_state["itn"] < MAX_ITER, 1, 0)
 
     return jax.lax.cond(loop_state["itn"] < MAX_ITER,
-                        lambda _: _clip(loop_state["x"], loop_state["xl"], loop_state["xu"]),
-                        lambda _: root_search_binary(v, loop_state["xl"], loop_state["xu"], loop_state["x"], do_binary))
+                        lambda: _clip(loop_state["x"], loop_state["xl"], loop_state["xu"]),
+                        lambda: root_search_binary(v, loop_state["xl"], loop_state["xu"], loop_state["x"], do_binary))
 
 
 def proj_sol_primal_exp_cone(
@@ -479,26 +482,25 @@ def proj_sol_primal_exp_cone(
     :rtype: tuple[Array, Array]
     """
     
-    vp = jnp.empty_like(v)
     linrho = (rho - 1) * v[0] + v[1]
     exprho = jnp.exp(rho)
 
     def case1():
         quadrho = rho * (rho - 1) + 1
-        vp[0] = rho * linrho / quadrho
-        vp[1] = linrho / quadrho
-        vp[2] = exprho * linrho / quadrho
+        vp = jnp.array([
+            rho * linrho / quadrho,
+            linrho / quadrho,
+            exprho * linrho / quadrho
+        ], dtype=v.dtype)
         dist = jla.norm(vp - v)
         return vp, dist
 
     def case2():
-        vp[0] = 0
-        vp[1] = 0
-        vp[2] = EXP_CONE_INF_VALUE
+        vp = jnp.array([0.0, 0.0, EXP_CONE_INF_VALUE], dtype=v.dtype)
         dist = EXP_CONE_INF_VALUE
         return vp, dist
 
-    return jax.lax.cond(linrho > 0 and _is_finite(exprho),
+    return jax.lax.cond(jnp.logical_and(linrho > 0, _is_finite(exprho)),
                         case1,
                         case2)
 
@@ -517,27 +519,28 @@ def proj_sol_polar_exp_cone(
     :rtype: tuple[Array, Array]
     """
     
-    vd = jnp.empty_like(v)
     linrho = v[0] - rho * v[1]
     exprho = jnp.exp(-rho)
 
     def case1():
         quadrho = rho * (rho - 1) + 1
         lrho_div_qrho = linrho / quadrho
-        vd[0] = lrho_div_qrho
-        vd[1] = (1 - rho) * lrho_div_qrho
-        vd[2] = -exprho * lrho_div_qrho
+        vd = jnp.array([
+            lrho_div_qrho,
+            (1 - rho) * lrho_div_qrho,
+            -exprho * lrho_div_qrho
+        ], dtype=v.dtype)
         dist = jla.norm(vd - v)
         return vd, dist
 
     def case2():
-        vd[0] = 0
-        vd[1] = 0
-        vd[2] = -EXP_CONE_INF_VALUE
+        vd = jnp.array([
+            0.0, 0.0, -EXP_CONE_INF_VALUE
+        ], dtype=v.dtype)
         dist = EXP_CONE_INF_VALUE
         return vd, dist
 
-    return jax.lax.cond(linrho > 0 and _is_finite(exprho),
+    return jax.lax.cond(jnp.logical_and(linrho > 0, _is_finite(exprho)),
                         case1,
                         case2)
 
@@ -551,8 +554,12 @@ def in_exp(v: Float[Array, "3"]) -> bool:
     :rtype: bool
     """
     x, y, z = v[0], v[1], v[2]
-    return ((x <= 0 and jnp.abs(y) <= CONE_THRESH and z >= 0)
-            or y > 0 and y * jnp.exp(x / y) - z <= CONE_THRESH)
+    # NOTE(quill): yes, all the parethesis are necessary.
+    #   Otherwise we get:
+    #   `TypeError: and does not accept dtype float64 at position 0.`
+    #   `Accepted dtypes at position 0 are subtypes of integer, bool`
+    return (((x <= 0) & (jnp.abs(y) <= CONE_THRESH) & (z >= 0))
+            | (y > 0) & (y * jnp.exp(x / y) - z <= CONE_THRESH))
 
 
 def in_exp_dual(z: Float[Array, "3"]) -> bool:
@@ -564,8 +571,8 @@ def in_exp_dual(z: Float[Array, "3"]) -> bool:
     :rtype: bool
     """
     u, v, w = z[0], z[1], z[2]
-    return (jnp.abs(u) <= CONE_THRESH and v >= 0 and w >= 0
-            or (u < 0 and -u * jnp.exp(v / u) - jnp.exp(1) * w <= CONE_THRESH))
+    return ((jnp.abs(u) <= CONE_THRESH) & (v >= 0) & (w >= 0)
+            | ((u < -CONE_THRESH) & (-u * jnp.exp(v / (u + CONE_THRESH)) - jnp.exp(1) * w <= CONE_THRESH)))
 
 
 def _proj_exp(v: Float[Array, "3"], onto_dual: bool = False) -> Float[Array, "3"]:
@@ -597,9 +604,9 @@ def _proj_exp(v: Float[Array, "3"], onto_dual: bool = False) -> Float[Array, "3"
 
     # skip root search if presolve rules apply
     # or optimality conditions are satisfied
-    opt = (v[1] <= 0 and v[0] <= 0)
-    opt |= jnp.minimum(pdist, ddist) <= TOL
-    opt |= err <= TOL and vp @ vd <= TOL
+    opt = jnp.logical_and(v[1] <= 0, v[0] <= 0)
+    opt = jnp.logical_or(opt, jnp.minimum(pdist, ddist) <= TOL)
+    opt = jnp.logical_or(opt, jnp.logical_and(err <= TOL, vp @ vd <= TOL))
 
     perform_search = jax.lax.select(opt, 1, 0)
     
@@ -608,27 +615,27 @@ def _proj_exp(v: Float[Array, "3"], onto_dual: bool = False) -> Float[Array, "3"
         # NOTE(quill): while we protect against doing a Newton root search if the heuristic
         #   projection is optimal, we stil do many other ops.
 
-        xl, xh = exp_search_bracket(v, pdist, ddist)
-        rho = root_search_newton(v, xl, xh, 0.5 * (xl + xh), perform_search)
+        xl, xu = exp_search_bracket(v, pdist, ddist)
+        rho = root_search_newton(v, xl, xu, 0.5 * (xl + xu), perform_search)
 
         def _proj_onto_primal():
             v_hat, dist_hat = proj_sol_primal_exp_cone(v, rho)
             return jax.lax.cond(dist_hat < pdist,
-                                v_hat,
-                                vp)
+                                lambda: v_hat,
+                                lambda: vp)
 
         def _proj_onto_dual():
             v_hat, dist_hat = proj_sol_polar_exp_cone(v, rho)
             return jax.lax.cond(dist_hat < ddist,
-                                -v_hat,
-                                -vd)
+                                lambda: -v_hat,
+                                lambda: -vd)
 
         return jax.lax.cond(onto_dual,
                             _proj_onto_dual,
                             _proj_onto_primal)
     
     return jax.lax.cond(opt,
-                        lambda _: jax.lax.cond(onto_dual, lambda: -vd, vp),
+                        lambda: jax.lax.cond(onto_dual, lambda: -vd, lambda: vp),
                         heuristic_not_optimal)
 
 
@@ -652,7 +659,7 @@ def _dproj_exp(
         v = -v
 
     # branch for both negative special-case (returns 3x3)
-    def _both_negative(_):
+    def _both_negative():
         J = jnp.zeros((3, 3), dtype=v.dtype)
         J = J.at[0, 0].set(1.0)
 
@@ -662,7 +669,7 @@ def _dproj_exp(
         return jax.lax.cond(v[2] >= 0.0, _case1, lambda _: J, operand=None)
 
     # branch for the "general" case (keeps original 4x4 construction)
-    def _general_case(_):
+    def _general_case():
         r = proj_v[0]
         s = proj_v[1]
         s = jax.lax.cond(s == 0.0, lambda _: jnp.abs(r), lambda _: s, operand=None)
@@ -695,17 +702,17 @@ def _dproj_exp(
         # (Do note that clicking through `inv` shows that we are just computing J_inv = solve(J, eye(3)).)
         J_inv = jla.inv(J)
 
-        return J_inv
+        return J_inv[0:3, 1:4]
 
     # top-level nested conditional using lax.cond for JIT compatibility
     J = jax.lax.cond(
         in_exp(v),
-        lambda _: jnp.identity(3, dtype=v.dtype),
-        lambda _: jax.lax.cond(
+        lambda: jnp.identity(3, dtype=v.dtype),
+        lambda: jax.lax.cond(
             in_exp_dual(-v),
-            lambda __: jnp.zeros((3, 3), dtype=v.dtype),
-            lambda __: jax.lax.cond(
-                (v[0] < 0.0) and (v[1] < 0.0),
+            lambda: jnp.zeros((3, 3), dtype=v.dtype),
+            lambda: jax.lax.cond(
+                jnp.logical_and(v[0] < 0.0, v[1] < 0.0),
                 _both_negative,
                 _general_case
             )))
@@ -757,7 +764,7 @@ class _ExponentialConeJacobianOperator(lx.AbstractLinearOperator):
     def as_matrix(self):
         raise NotImplementedError("Exponential Cone Jacobian `as_matrix` not implemented.")
     
-    def tranpose(self):
+    def transpose(self):
         return self
     
     def in_structure(self):
@@ -795,7 +802,7 @@ class ExponentialConeProjector(AbstractConeProjector):
     def proj_dproj(self, x):
         xs = jnp.reshape(x, (self.num_cones, 3))
         
-        projs = eqx.filter_vmap(_proj_exp, in_axes=(0, None))(xs)
+        projs = eqx.filter_vmap(_proj_exp, in_axes=(0, None))(xs, self.onto_dual)
         jacs = eqx.filter_vmap(_dproj_exp, in_axes=(0, 0, None))(xs, projs, self.onto_dual)
 
         # It seems like `_ExponentialConeJacobianOperator` may be unecessary, but it also could be

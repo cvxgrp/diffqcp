@@ -9,31 +9,25 @@ The projection routines are from
 And even more specifically, the routines are a port from SCS's implementation
 of Fridberg's routines (see exp_cone.c).
 
-The derivative of the projection is a port from https://github.com/cvxgrp/diffcp/blob/master/cpp/src/cones.cpp.
+The derivative of the projection is taken from https://github.com/cvxgrp/diffcp/blob/master/cpp/src/cones.cpp.
 """
+import math
 
 import jax
 import jax.numpy as jnp
 import jax.numpy.linalg as jla
 import equinox as eqx
 import lineax as lx
-from jaxtyping import Float, Array
+from jaxtyping import Float, Integer, Array
 
 from diffqcp.cones.abstract_projector import AbstractConeProjector
 
-MAX_ITER = 40
+EXP_CONE_INF_VALUE = 1e15
+CONE_THRESH = 1e-6
 
 if jax.config.jax_enable_x64:
-    EXP_CONE_INF_VALUE = 1e15
-    EPS = 1e-12
-    TOL = ...
-    CONE_THRESH = ...
-else:
-    EXP_CONE_INF_VALUE = ...
-    EPS = ...
-    TOL = ...
-    CONE_THRESH = ...
-
+    EXP_CONE_INF_VALUE = math.sqrt(EXP_CONE_INF_VALUE)
+    CONE_THRESH = 0.001
 
 
 def _is_finite(x: Float[Array, " "]) -> bool:
@@ -210,6 +204,10 @@ def exp_search_bracket(
     :return: Lower and upper `hfun` search bounds, respectively.
     :rtype: tuple[Float[Array, " "], Float[Array, " "]]
     """
+    EPS = 1e-12
+    if not jax.config.enable_x64:
+        EPS = math.sqrt(EPS)
+
     r0, s0, t0 = v[0], v[1], v[2]
     baselow = -EXP_CONE_INF_VALUE
     baseupr = EXP_CONE_INF_VALUE
@@ -275,8 +273,9 @@ def exp_search_bracket(
 def root_search_binary(
     v: Float[Array, "3"],
     xl: Float[Array, " "],
-    xh: Float[Array, " "],
-    x: Float[Array, " "]
+    xu: Float[Array, " "],
+    x: Float[Array, " "],
+    perform_search: Integer[Array, " "] = jnp.array(0)
 ) -> Float[Array, " "]:
     """Binary search method for finding root of `hfun`.
     
@@ -284,22 +283,29 @@ def root_search_binary(
     :type v: Float[Array, "3"]
     :param xl: Lower search bound for the root of `hfun`.
     :type xl: Float[Array, " "]
-    :param xh: Upper search bound for the root of `hfun`.
-    :type xh: Float[Array, " "]
+    :param xu: Upper search bound for the root of `hfun`.
+    :type xu: Float[Array, " "]
     :param x: The intial guess for the root of `hfun`. (A scalar.)
     :type x: Float[Array, " "]
+    :param perform_search: Whether the binary search should be performed or not.
+        If `perform_search == 0`, the binary search is performed; otherwise it is not.
+        This parameter is included to avoid unnecessarily binary searching after
+        the Newton search due to wrapping the newton method in `vmap`.
+        (See https://kidger.site/thoughts/torch2jax/)
+    :type perform_search: Integer[Array, " "], optional, Default to 0.
     :return: The root of `hfun`. (A scalar.)
     :rtype: Float[Array, " "]
     """
 
-    if jax.config.jax_enable_x64:
-        EPS = 1e-12
+    EPS = 1e-12
+    MAX_ITER = 40
+    
+    if not jax.config.jax_enable_x64:
+        EPS = math.sqrt(EPS)
 
     def _binary_search_body(loop_state):
-        
-        loop_state["x"] = loop_state["x_plus"]
 
-        f = hfun(loop_state["v"], loop_state["x"])
+        f = hfun(v, loop_state["x"])
 
         loop_state = jax.lax.cond(
             f < 0,
@@ -316,29 +322,29 @@ def root_search_binary(
         # 2: within tolerance
         tol_reached = (jnp.abs(x_plus - x) <= EPS) or (x_plus == loop_state["xl"]) or (x_plus == loop_state["xu"])
         loop_state["itn"] += 1
-        loop_state["x_plus"] = x_plus
-        loop_state["istop"] = jax.lax.select(tol_reached, 2, loop_state["istop"])
         loop_state["istop"] = jax.lax.select(loop_state["itn"] > MAX_ITER, 1, loop_state["istop"])
+        loop_state["istop"] = jax.lax.select(tol_reached, 2, loop_state["istop"])
 
+        # Only commit new_x into x if we will continue (no stop triggered this iter).
+        cont = loop_state["istop"] == 0
+        loop_state["x"] = jax.lax.select(cont, x_plus, x)
+
+        return loop_state
 
     def condfun(loop_state):
         return loop_state["istop"] == 0
     
     loop_state = {
-        "v": v,
         "x": x,
-        "x_plus": x,
         "xl": xl,
-        "xh": xh,
+        "xh": xu,
         "itn": 0,
-        "istop": 0
+        "istop": perform_search
     }
 
     # while loop continues while `condfun == True`, so
     # break when istop != 0.
     loop_state = jax.lax.while_loop(condfun, _binary_search_body, loop_state)
-
-    return jax.lax.cond(loop_state["istop"] == 1, lambda _: loop_state["x_plus"], lambda _: loop_state["x"])
 
     return loop_state["x"]
 
@@ -347,20 +353,116 @@ def root_search_newton(
     v: Float[Array, "3"],
     xl: Float[Array, " "],
     xu: Float[Array, " "],
-    x: Float[Array, " "]
+    x: Float[Array, " "],
+    perform_search: Integer[Array, " "] = jnp.array(0)
 ) -> Float[Array, "3"]:
+    """Univariate damped Newton method for finding the root of `hfun`.
+
+    :param v: The point in R^3 being projected.
+    :type v: Float[Array, "3"]
+    :param xl: A lower bound on the root.
+    :type xl: Float[Array, " "]
+    :param xu: An upper bound on the root.
+    :type xu: Float[Array, " "]
+    :param x: Initial guess of the root.
+    :type x: Float[Array, " "]
+    :param perform_search: Whether the Newton search should be performed or not.
+        If `perform_search == 0`, the newton search is performed; otherwise it is not.
+        This parameter is included to avoid unnecessarily Newton searching
+        due to wrapping the `_proj_exp` in `vmap`.
+        (See https://kidger.site/thoughts/torch2jax/)
+    :type perform_search: Integer[Array, " "], optional, Default to 0.
+    :return: The root of `hfun` (a scalar).
+    :rtype: Float[Array, " "]
+    """
+
+    EPS = 1e-15
+    DFTOL = 1e-13
+    MAX_ITER = 20
+    LODAMP = 0.05
+    HIDAMP = 0.95
+    if not jax.config.jax_enable_x64:
+        EPS = math.sqrt(EPS)
+        DFTOL = math.sqrt(DFTOL)
     
     def _newton_body():
-        f, df = hfun_and_grad_hfun(v, x)
+
+        f, df = hfun_and_grad_hfun(v, loop_state["x"])
+
+        ftol_reached = jnp.abs(f) <= EPS
+        
+        loop_state["xl"], loop_state["xu"] = jax.lax.cond(f < 0,
+                                                          lambda _: (loop_state["x"], loop_state["xu"]),
+                                                          lambda _: (loop_state["xl"], loop_state["x"]))
+        
+        xu_new, xl_new, brk = jax.lax.cond(loop_state["xu"] <= loop_state["xl"],
+                                           lambda _: (0.5 * (loop_state["xu"] + loop_state["xl"]), loop_state["xu"], True),
+                                           lambda _: (loop_state["xu"], loop_state["xl"], False))
+        
+        loop_state["xl"] = xl_new
+        loop_state["xu"] = xu_new
+        
+        non_finite_brk = jnp.logical_or(jnp.logical_not(_is_finite(f)), df < DFTOL)
+
+        # Newton step
+        x_plus = loop_state["x"] - f / df
+        
+        tol_reached = jnp.abs(loop_state["x_plus"] - loop_state["x"]) <= EPS * jnp.maximum(1, jnp.abs(x_plus))
+        
+        def _case_high():
+            return jnp.minimum(LODAMP * loop_state["x"] + HIDAMP * loop_state["xu"], loop_state["xu"])
+
+        def _case_low():
+            return jnp.maximum(LODAMP * loop_state["x"] + HIDAMP * loop_state["xl"], loop_state["xl"])
+        
+        new_x = jax.lax.cond(x_plus >= xu,
+                             _case_high,
+                             lambda _: jax.lax.cond(x_plus <= xl,
+                                                    _case_low,
+                                                    lambda _: x_plus))
+
+        # Termination coding:
+        # 1: max iterations reached
+        # 2: `f` within `EPS` of a root
+        # 3: `x_plus` within (roughly) `EPS` of `x` (converging).
+        # 4: nonfinite values
+        # 5: lower bound oversteps upper bound.
+        # NOTE(quill): the order of the following does matter. Whichever should cause a break
+        # in a Newton step first should come last. For instance, in the original code, if `ftol_reached`
+        # then the remainder of the `_newton_body` is not executed. Thus since the last `select`
+        # will overwrite the previous `select`s if the conditional is true, we place
+        # the `ftol_reached` `select` last.
+        loop_state["itn"] += 1
+        loop_state["istop"] = jax.lax.select(loop_state["itn"] > MAX_ITER, 1, loop_state["istop"])
+        loop_state["istop"] = jax.lax.select(tol_reached, 3, loop_state["istop"])
+        loop_state["istop"] = jax.lax.select(non_finite_brk, 4, loop_state["istop"])
+        loop_state["istop"] = jax.lax.select(brk, 5, loop_state["istop"])
+        loop_state["istop"] = jax.lax.select(ftol_reached, 2, loop_state["istop"])
+
+        cont = loop_state["istop"] == 0
+        loop_state["x"] = jax.lax.select(cont, new_x, loop_state["x"])
+
+        return loop_state
 
     def condfun():
-        pass
+        return loop_state["istop"] == 0
 
     loop_state = {
         "itn": 0,
-        "istop": 0,
+        "istop": perform_search,
         "x": x,
+        "x_plus": x,
+        "xl": xl,
+        "xu": xu,
     }
+
+    loop_state = jax.lax.while_loop(condfun, _newton_body, loop_state)
+
+    do_binary = jax.lax.select(loop_state["itn"] < MAX_ITER, 1, 0)
+
+    return jax.lax.cond(loop_state["itn"] < MAX_ITER,
+                        lambda _: _clip(loop_state["x"], loop_state["xl"], loop_state["xu"]),
+                        lambda _: root_search_binary(v, loop_state["xl"], loop_state["xu"], loop_state["x"], do_binary))
 
 
 def proj_sol_primal_exp_cone(
@@ -477,6 +579,11 @@ def _proj_exp(v: Float[Array, "3"], onto_dual: bool = False) -> Float[Array, "3"
     :rtype: Float[Array, "3"]
     """
 
+    TOL = 1e-8
+
+    if not jax.config.jax_enable_x64:
+        TOL = 1e-4
+
     # `onto_dual` is static
     if onto_dual:
         v = -1 * v
@@ -493,11 +600,16 @@ def _proj_exp(v: Float[Array, "3"], onto_dual: bool = False) -> Float[Array, "3"
     opt = (v[1] <= 0 and v[0] <= 0)
     opt |= jnp.minimum(pdist, ddist) <= TOL
     opt |= err <= TOL and vp @ vd <= TOL
+
+    perform_search = jax.lax.select(opt, 1, 0)
     
     def heuristic_not_optimal():
 
+        # NOTE(quill): while we protect against doing a Newton root search if the heuristic
+        #   projection is optimal, we stil do many other ops.
+
         xl, xh = exp_search_bracket(v, pdist, ddist)
-        rho = root_search_newton(v, xl, xh, 0.5 * (xl + xh))
+        rho = root_search_newton(v, xl, xh, 0.5 * (xl + xh), perform_search)
 
         def _proj_onto_primal():
             v_hat, dist_hat = proj_sol_primal_exp_cone(v, rho)
@@ -516,7 +628,7 @@ def _proj_exp(v: Float[Array, "3"], onto_dual: bool = False) -> Float[Array, "3"
                             _proj_onto_primal)
     
     return jax.lax.cond(opt,
-                        lambda: jax.lax.cond(onto_dual, lambda: -vd, vp),
+                        lambda _: jax.lax.cond(onto_dual, lambda: -vd, vp),
                         heuristic_not_optimal)
 
 
@@ -525,7 +637,7 @@ def _dproj_exp(
     proj_v: Float[Array, "3"],
     onto_dual: bool = False
 ) -> Float[Array, "3 3"]:
-    """
+    """Form the Jacobian of the projection onto the exponential cone or its dual.
     
     :param v: Point in R^3.
     :type v: Float[Array, "3"]
@@ -539,28 +651,21 @@ def _dproj_exp(
     if onto_dual:
         v = -v
 
-    # TODO(quill): JAXify this.
-    if in_exp(v):
-        return jnp.identity(3, dtype=v.dtype)
-    elif in_exp_dual(-v):
-        return jnp.zeros((3, 3), dtype=v.dtype)
-    elif v[0] < 0 and v[1] < 0:
-        
+    # branch for both negative special-case (returns 3x3)
+    def _both_negative(_):
         J = jnp.zeros((3, 3), dtype=v.dtype)
         J = J.at[0, 0].set(1.0)
 
-        def case1():
-            J = J.at[2, 2].set(1.0)
-            return J
+        def _case1(_):
+            return J.at[2, 2].set(1.0)
 
-        return jax.lax.cond(v[2] >= 0,
-                            case1,
-                            lambda: J)
-        
-    else:
+        return jax.lax.cond(v[2] >= 0.0, _case1, lambda _: J, operand=None)
+
+    # branch for the "general" case (keeps original 4x4 construction)
+    def _general_case(_):
         r = proj_v[0]
         s = proj_v[1]
-        s = jax.lax.cond(s == 0, lambda: jnp.abs(r), lambda: s)
+        s = jax.lax.cond(s == 0.0, lambda _: jnp.abs(r), lambda _: s, operand=None)
         l = proj_v[2] - v[2]
         alpha = jnp.exp(r / s)
         beta = l * r / (s * s) * alpha
@@ -568,44 +673,115 @@ def _dproj_exp(
 
         J = J.at[0, 0].set(alpha)
         J = J.at[0, 1].set((( -r + s) / s) * alpha)
-        J = J.at[0, 2].set(jnp.array(-1.0, dtype=v.dtype))
-        # 0, 3 is 0
+        J = J.at[0, 2].set(-1.0)
+        # 0,3 remains 0
 
         J = J.at[1, 0].set(1.0 + (l / s) * alpha)
         J = J.at[1, 1].set(-beta)
-        # 1, 2 is 0
+        # 1,2 remains 0
         J = J.at[1, 3].set(alpha)
 
         J = J.at[2, 0].set(-beta)
         J = J.at[2, 1].set(1.0 + beta * (r / s))
-        # 2, 2 is 0
+        # 2,2 remains 0
         J = J.at[2, 3].set((1.0 - (r / s)) * alpha)
 
-        # 3, 0 is 0
-        # 3, 1 is 0
-        J = J.at[3, 2].set(jnp.array(1.0, dtype=v.dtype))
-        J = J.at[3, 3].set(jnp.array(-1.0, dtype=v.dtype))
+        # 3,0 and 3,1 remain 0
+        J = J.at[3, 2].set(1.0)
+        J = J.at[3, 3].set(-1.0)
 
-        return J
+        # NOTE(quill): obviously it's best to avoid explicitly inverting matrices,
+        # but in this 3x3 case I'll just be lazy for now.
+        # (Do note that clicking through `inv` shows that we are just computing J_inv = solve(J, eye(3)).)
+        J_inv = jla.inv(J)
+
+        return J_inv
+
+    # top-level nested conditional using lax.cond for JIT compatibility
+    J = jax.lax.cond(
+        in_exp(v),
+        lambda _: jnp.identity(3, dtype=v.dtype),
+        lambda _: jax.lax.cond(
+            in_exp_dual(-v),
+            lambda __: jnp.zeros((3, 3), dtype=v.dtype),
+            lambda __: jax.lax.cond(
+                (v[0] < 0.0) and (v[1] < 0.0),
+                _both_negative,
+                _general_case
+            )))
+    
+    if onto_dual:
+        # So this leaves us with Dproj_k_star(v)[dv] = dv - Dproj_k(-v)[dv]
+        J = jnp.eye(3, dtype=v.dtype) - J
+    
+    return J
+
+
+def _exp_cone_jacobian_mv(
+    dx: Float[Array, "num_cones 3"],
+    jacobians: Float[Array, "num_cones 3 3"],
+):
+    num_cones = jnp.shape(jacobians)[0]
+    dx = jnp.reshape(dx, (num_cones, 3))
+    Jdx = eqx.filter_vmap(lambda jac, y: jac @ y, in_axes=0, out_axes=0)(jacobians, dx)
+    return jnp.ravel(Jdx)
 
 
 class _ExponentialConeJacobianOperator(lx.AbstractLinearOperator):
 
-    jacobians: Float[Array, "num_cones 3 3"]
+    jacobians: Float[Array, "*num_batches num_cones 3 3"]
 
+    def __check_init__(self):
+        ndim = jnp.ndim(self.jacobians)
+        if ndim not in [3, 4]:
+            raise ValueError("The `jacobians` argument provided to the `_ExponentialConeJacobianOperator` "
+                             f"is {ndim}D, but it must be 3D or 4D.")
+
+    
     def mv(self, dx: Float[Array, "*num_batches num_cones*3"]):
-        ndim = jnp.ndim()
+        
+        ndim = jnp.ndim(dx)
 
+        if ndim == 1:
+            if jnp.ndim(self.jacobians) == 4:
+                raise ValueError("Batched Exponential cone Jacobians cannot be applied to a 1D input.")
+            
+            return _exp_cone_jacobian_mv(dx, self.jacobians, jnp.shape(self.jacobians)[0])
+        elif ndim == 2:
+            return eqx.filter_vmap(_exp_cone_jacobian_mv,
+                                   in_axes=(0, 0), out_axes=(0))(dx, self.jacobians)
+        else:
+            raise ValueError("The `_ExponentialConeJacobianOperator` can only be applied to 1D or 2D inputs "
+                             f"but the provided vector is {ndim}D.")
+
+    def as_matrix(self):
+        raise NotImplementedError("Exponential Cone Jacobian `as_matrix` not implemented.")
+    
+    def tranpose(self):
+        return self
+    
     def in_structure(self):
 
+        ndim = jnp.ndim(self.jacobians)
+        shape = jnp.shape(self.jacobians)
+        dtype = self.jacobians.dtype
 
-
-        pass
+        if ndim == 3:
+            # non-batched case
+            return jax.ShapeDtypeStruct(shape=(shape[0] * 3,),
+                                        dtype=dtype)
+        elif ndim == 4:
+            # batched case
+            return jax.ShapeDtypeStruct(shape=(shape[0], shape[1] * 3),
+                                        dtype=dtype)
 
     def out_structure(self):
         return self.in_structure()
+    
+@lx.is_symmetric.register(_ExponentialConeJacobianOperator)
+def _(op):
+    return True
         
-
 
 class ExponentialConeProjector(AbstractConeProjector):
 

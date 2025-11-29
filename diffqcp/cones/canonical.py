@@ -18,8 +18,6 @@ TODO(quill): add ability to compute `proj` or `dproj` (i.e., don't have to compu
     -> again, unimportant for `diffqcp`, but would be nice if you want to provide a JAX cone
     projection library.
 """
-from typing import TYPE_CHECKING
-
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -31,6 +29,7 @@ from jaxtyping import Array, Float
 
 from .abstract_projector import AbstractConeProjector
 from .pow import PowerConeProjector
+from .exp import ExponentialConeProjector
 from diffqcp.linops import _BlockLinearOperator
 from diffqcp._helpers import _to_int_list
 
@@ -670,7 +669,6 @@ class ProductConeProjector(AbstractConeProjector):
     projectors: list[AbstractConeProjector]
     dims: list[int] = eqx.field(static=True)
     split_indices: list[int] = eqx.field(static=True)
-    # onto_dual: bool = eqx.field(static=True)
     
     def __init__(self, cones: dict[str, int | list[int] | list[float]], onto_dual: bool=False):
         projectors = []
@@ -693,16 +691,24 @@ class ProductConeProjector(AbstractConeProjector):
                     projectors.append(SecondOrderConeProjector(val))
                     dims.append(sum(val))
             elif cone_key == EXP:
+                # EXP cone: `val` is the (integer) number of cones
                 if val > 0:
-                    raise ValueError("The exponential cone is not yet supported.")
+                    projectors.append(ExponentialConeProjector(val, onto_dual=onto_dual))
+                    dims.append(3 * val)
             elif cone_key == EXP_DUAL:
+                # dual EXP cone: `val` is the (integer) number of cones
                 if val > 0:
-                    raise ValueError("The dual exponential cone is not yet supported.")
+                    projectors.append(ExponentialConeProjector(val, onto_dual=not onto_dual))
+                    dims.append(3 * val)
             elif cone_key == POW:
+                # Power cone: val is a list of floats in (-1, 1), which are the defining alphas.
+                #   val[i] < 0 corresponds to projecting onto the dual exponential cone with
+                #   abs(val[i]) as the defining alpha.
                 if len(val) > 0:
                     projectors.append(PowerConeProjector(val, onto_dual=onto_dual))
                     dims.append(3 * np.size(val))
             elif cone_key == PSD:
+                # PSD cone: val is a list of
                 if len(val) > 0:
                     projectors.append(PSDConeProjector(val))
                     dims.append(sum([symm_size_to_dim(s) for s in val]))

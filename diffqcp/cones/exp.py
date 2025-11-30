@@ -18,7 +18,7 @@ import jax.numpy as jnp
 import jax.numpy.linalg as jla
 import equinox as eqx
 import lineax as lx
-from jaxtyping import Float, Integer, Array
+from jaxtyping import Float, Integer, Bool, Array
 
 from diffqcp.cones.abstract_projector import AbstractConeProjector
 
@@ -461,6 +461,7 @@ def root_search_newton(
     loop_state = jax.lax.while_loop(condfun, _newton_body, loop_state)
 
     do_binary = jax.lax.select(loop_state["itn"] < MAX_ITER, 1, 0)
+    do_binary = jax.lax.select(perform_search.astype(jnp.bool), perform_search, do_binary)
 
     return jax.lax.cond(loop_state["itn"] < MAX_ITER,
                         lambda: _clip(loop_state["x"], loop_state["xl"], loop_state["xu"]),
@@ -574,7 +575,11 @@ def in_exp_dual(z: Float[Array, "3"]) -> bool:
             | ((u < -CONE_THRESH) & (-u * jnp.exp(v / (u + CONE_THRESH)) - jnp.exp(1) * w <= CONE_THRESH)))
 
 
-def _proj_exp(v: Float[Array, "3"], onto_dual: bool = False) -> Float[Array, "3"]:
+def _proj_exp(
+    v: Float[Array, "3"],
+    onto_dual: bool = False,
+    perform_searches: Bool[Array, " "] = jnp.array(True)
+) -> Float[Array, "3"]:
     """Project `v` onto the exponential cone (or its dual). 
     
     :param v: Point in R^3 to project.
@@ -608,11 +613,12 @@ def _proj_exp(v: Float[Array, "3"], onto_dual: bool = False) -> Float[Array, "3"
     opt = jnp.logical_or(opt, jnp.logical_and(err <= TOL, vp @ vd <= TOL))
 
     perform_search = jax.lax.select(opt, 1, 0)
+    perform_search = jax.lax.select(perform_searches, perform_search, 1)
     
     def heuristic_not_optimal():
 
         # NOTE(quill): while we protect against doing a Newton root search if the heuristic
-        #   projection is optimal, we stil do many other ops.
+        #   projection is optimal, we still do many other ops.
 
         xl, xu = exp_search_bracket(v, pdist, ddist)
         rho = root_search_newton(v, xl, xu, 0.5 * (xl + xu), perform_search)
@@ -662,17 +668,20 @@ def _dproj_exp(
         J = jnp.zeros((3, 3), dtype=v.dtype)
         J = J.at[0, 0].set(1.0)
 
-        def _case1(_):
+        def _case1():
             return J.at[2, 2].set(1.0)
 
-        return jax.lax.cond(v[2] >= 0.0, _case1, lambda _: J, operand=None)
+        return jax.lax.cond(v[2] > 0.0, _case1, lambda: J)
 
-    # branch for the "general" case (keeps original 4x4 construction)
     def _general_case():
-        r = proj_v[0]
-        s = proj_v[1]
+        # NOTE(quill): noting since this tripped me up for a while; the projection onto the dual cone
+        #   is NOT EQUAL to `proj_v(-v, onto_dual=False)`, which is what is computed on the line below.
+        #   Moreover, when projecting onto the dual
+        p = jax.lax.cond(onto_dual, lambda _: _proj_exp(v), lambda _: proj_v, operand=None)
+        r = p[0]
+        s = p[1]
         s = jax.lax.cond(s == 0.0, lambda _: jnp.abs(r), lambda _: s, operand=None)
-        l = proj_v[2] - v[2]
+        l = p[2] - v[2]
         alpha = jnp.exp(r / s)
         beta = l * r / (s * s) * alpha
         J = jnp.zeros((4, 4), dtype=v.dtype)
@@ -711,7 +720,7 @@ def _dproj_exp(
             in_exp_dual(-v),
             lambda: jnp.zeros((3, 3), dtype=v.dtype),
             lambda: jax.lax.cond(
-                jnp.logical_and(v[0] < 0.0, v[1] < 0.0),
+                (v[0] < 0.0) & (v[1] < 0.0) & (jnp.logical_not(jnp.allclose(v[2], 0.0))),
                 _both_negative,
                 _general_case
             )))
@@ -729,7 +738,7 @@ def _exp_cone_jacobian_mv(
 ):
     num_cones = jnp.shape(jacobians)[0]
     dx = jnp.reshape(dx, (num_cones, 3))
-    Jdx = eqx.filter_vmap(lambda jac, y: jac @ y, in_axes=0, out_axes=0)(jacobians, dx)
+    Jdx = eqx.filter_vmap(lambda jac, y: jac @ y, in_axes=(0, 0), out_axes=0)(jacobians, dx)
     return jnp.ravel(Jdx)
 
 
@@ -752,7 +761,7 @@ class _ExponentialConeJacobianOperator(lx.AbstractLinearOperator):
             if jnp.ndim(self.jacobians) == 4:
                 raise ValueError("Batched Exponential cone Jacobians cannot be applied to a 1D input.")
             
-            return _exp_cone_jacobian_mv(dx, self.jacobians, jnp.shape(self.jacobians)[0])
+            return _exp_cone_jacobian_mv(dx, self.jacobians)
         elif ndim == 2:
             return eqx.filter_vmap(_exp_cone_jacobian_mv,
                                    in_axes=(0, 0), out_axes=(0))(dx, self.jacobians)

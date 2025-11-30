@@ -244,7 +244,7 @@ def _pow_cone_jacobian_mv(
     # num cones could be 1.
     dx_batch = jnp.reshape(dx, (num_cones, 3))
     Jdx = eqx.filter_vmap(lambda jac, y: jac @ y,
-                            in_axes=0, out_axes=0)(jacobians, dx_batch)
+                            in_axes=(0, 0), out_axes=0)(jacobians, dx_batch)
     mv_dual = dx_batch - Jdx
     mv = jnp.where(is_dual[:, None], mv_dual, Jdx)
     return jnp.ravel(mv)

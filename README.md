@@ -1,6 +1,6 @@
 <h1 align='center'>diffqcp: Differentiating through quadratic cone programs</h1>
 
-`diffqcp` is a [JAX](https://docs.jax.dev/en/latest/) library to form the derivative of the solution map to a quadratic cone program (QCP) with respect to the QCP problem data as an abstract linear operator and to compute Jacobian-vector products (JVPs) and vector-Jacobian products (VJPs) with this operator.
+`diffqcp` is a [JAX](https://docs.jax.dev/en/latest/) library to form the derivative of the solution map to a conic quadratic program (CQP) with respect to the CQP problem data as an abstract linear operator and to compute Jacobian-vector products (JVPs) and vector-Jacobian products (VJPs) with this operator.
 The implementation is based on the derivations in our paper (see below) and computes
 these products implicitly via projections onto cones and sparse linear system solves.
 Our approach therefore differs from libraries that compute JVPs and VJPs by unrolling algorithm iterates.
@@ -13,6 +13,8 @@ We directly exploit the underlying structure of QCPs.
     - quadratic programs (QPs),
     - second-order cone programs (SOCPs),
     - and semidefinite programs (SDPs).
+- Support for convex optimization problems constrained to the product of exponential
+and power cones (as well as their duals).
 
 ## Quadratic cone programs
 
@@ -35,7 +37,8 @@ A quadratic cone program is given by the primal and dual problems
 ```
 where $`x \in \mathbf{R}^n`$ is the *primal* variable, $`y \in \mathbf{R}^m`$ is the *dual* variable, and $`s \in \mathbf{R}^m`$ is the primal *slack* variable. The problem data are $`P\in \mathbf{S}_+^{n}`$, $`A \in \mathbf{R}^{m \times n}`$, $`q \in \mathbf{R}^n`$, and $`b \in \mathbf{R}^m`$. We assume that $`\mathcal K \subseteq \mathbf{R}^m`$ is a nonempty, closed, convex cone with dual cone $`\mathcal{K}^*`$.
 
-`diffqcp` currently supports QCPs whose cone is the Cartesian product of the zero cone, the positive orthant, second-order cones, and positive semidefinite cones. Support for exponential and power cones (and their dual cones) is in development.
+`diffqcp` currently supports QCPs whose cone is the Cartesian product of the zero cone, the positive orthant, second-order cones, positive semidefinite cones,
+exponential cones, dual exponential cones, power cones, and dual power cones.
 For more information about these cones, see the appendix of our paper.
 
 ## Usage
@@ -68,7 +71,7 @@ from diffqcp import HostQCP, QCPStructureCPU
 from jax.experimental.sparse import BCOO
 from jaxtyping import Array
 
-P: BCOO = ... # Only the upper triangular part of the QCP matrix P
+P: BCOO = ... # Only the upper triangular part of the CQP matrix P
 A: BCOO = ...
 q: Array = ...
 b: Array = ...
@@ -99,7 +102,7 @@ from diffqcp import DeviceQCP, QCPStructureGPU
 from jax.experimental.sparse import BCSR
 from jaxtyping import Array
 
-P: BCSR = ... # The entirety of the QCP matrix P
+P: BCSR = ... # The entirety of the CQP matrix P
 A: BCSR = ...
 q: Array = ...
 b: Array = ...
@@ -143,7 +146,7 @@ dP, dA, dq, db = qcp.vjp(f1(x), f2(y), f3(s))
 - Support for the exponential cone, the power cone, and their dual cones.
 - Batched problem computations.
 - Migration of tests from our [torch branch](https://github.com/cvxgrp/diffqcp/tree/torch-implementation).
-- Heuristic JVP and VJP computations when the solution map of a QCP is non-differentiable.
+- Heuristic JVP and VJP computations when the solution map of a CQP is non-differentiable.
 
 ## See also
 
@@ -153,6 +156,6 @@ dP, dA, dq, db = qcp.vjp(f1(x), f2(y), f3(s))
 
 **Related** 
 - [CVXPYlayers](https://github.com/cvxpy/cvxpylayers): Construct differentiable convex optimization layers using [CVXPY](https://github.com/cvxpy/cvxpy/). (WIP: `diffqcp` is being added as a backend for CVXPYlayers.)
-- [CuClarabel](https://github.com/oxfordcontrol/Clarabel.jl/tree/CuClarabel): The GPU implemenation of the second-order QCP solver, Clarabel.
-- [SCS](https://github.com/cvxgrp/scs): A first-order QCP solver that has an optional GPU-accelerated backend.
+- [CuClarabel](https://github.com/oxfordcontrol/Clarabel.jl/tree/CuClarabel): The GPU implemenation of the second-order CQP solver, Clarabel.
+- [SCS](https://github.com/cvxgrp/scs): A first-order CQP solver that has an optional GPU-accelerated backend.
 - [diffcp](https://github.com/cvxgrp/diffcp): A (Python with C-bindings) library for differentiating through (linear) cone programs.

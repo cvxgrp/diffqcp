@@ -1,12 +1,12 @@
 from abc import abstractmethod
-from typing import Callable, TYPE_CHECKING
+from typing import Callable
 import functools as ft
 import jax
 from jax import eval_shape
 import jax.numpy as jnp
 import equinox as eqx
 import lineax as lx
-from lineax import AbstractLinearOperator, IdentityLinearOperator, linear_solve, LSMR
+from lineax import AbstractLinearOperator, IdentityLinearOperator, linear_solve
 from jaxtyping import Float, Array
 from jax.experimental.sparse import BCOO, BCSR
 from cupy import from_dlpack as cp_from_dlpack
@@ -102,6 +102,10 @@ class AbstractQCP(eqx.Module):
         
         def nonzero_case():
             if solve_method == "jax-lsmr":
+                try:
+                    from lineax import LSMR
+                except ImportError:
+                    raise ValueError("In your current environment the LSMR solve is not available.")
                 soln = linear_solve(F, -d_data_N, solver=LSMR(rtol=1e-8, atol=1e-8))
                 return soln.value
             else:
@@ -127,7 +131,7 @@ class AbstractQCP(eqx.Module):
         dA: Float[BCOO | BCSR, "m n"],
         dq: Float[Array, " n"],
         db: Float[Array, " m"],
-        solve_method: str
+        solve_method: str = "jax-lu"
     ) -> tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]:
         """Apply the derivative of the QCP's solution map to an input perturbation.
         """
@@ -154,7 +158,7 @@ class AbstractQCP(eqx.Module):
         dy: Float[Array, " m"],
         ds: Float[Array, " m"],
         produce_output: Callable,
-        solve_method: str
+        solve_method: str = "jax-lu"
     ) -> tuple[
         Float[BCOO | BCSR, "n n"], Float[BCOO | BCSR, "m n"],
         Float[Array, " n"], Float[Array, " m"]]:
@@ -170,9 +174,11 @@ class AbstractQCP(eqx.Module):
         
         def nonzero_case():
             if solve_method == "jax-lsmr":
-                FT_dense = self._vjp_direct_solve_get_FT(F)
-                soln = linear_solve(lx.MatrixLinearOperator(FT_dense), -dz, solver=LSMR(rtol=1e-8, atol=1e-8))
-                # soln = linear_solve(F.T, -dz, solver=LSMR(rtol=1e-8, atol=1e-8))
+                try:
+                    from lineax import LSMR
+                except ImportError:
+                    raise ValueError("In your current environment the LSMR solve is not available.")
+                soln = linear_solve(F.T, -dz, solver=LSMR(rtol=1e-8, atol=1e-8))
                 return soln.value
             else:
                 FT = self._vjp_direct_solve_get_FT(F)

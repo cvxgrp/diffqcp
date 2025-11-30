@@ -24,7 +24,7 @@ def _test_dproj_finite_diffs(
     else:
         x = jr.normal(key_func(), dim)
         dx = jr.normal(key_func(), dim)
-        _projector = projection_func
+        _projector = jit(projection_func)
 
     dx = 1e-5 * dx
 
@@ -410,13 +410,34 @@ def test_proj_exp_scs(getkey):
     
     primal_projector = ExponentialConeProjector(1, onto_dual=False)
     dual_projector = ExponentialConeProjector(1, onto_dual=True)
+
+    import diffcp._diffcp as _diffcp
+    from diffcp.cones import parse_cone_dict_cpp
+    cones = [("ep", 1)]
+    cones = parse_cone_dict_cpp(cones)
     
     for i in range(len(vs)):
+        print(f"=== trial {i} ===")
         v = vs[i]
-        vp, _ = primal_projector(v)
-        vd, _ = dual_projector(v)
+        vp, Jp = jit(primal_projector)(v)
+        vd, Jd = jit(dual_projector)(v)
         assert jnp.allclose(vp, vp_true[i])
         assert jnp.allclose(vd, vd_true[i])
+        _test_dproj_finite_diffs(primal_projector, getkey, dim=3)
+        J_diffcp = _diffcp.dprojection(np.array(v), cones, False)
+        e1, e2, e3 = np.array([1., 0., 0.]), np.array([0., 1., 0.]), np.array([0., 0., 1.])
+        col1 = J_diffcp.matvec(e1)
+        col2 = J_diffcp.matvec(e2)
+        col3 = J_diffcp.matvec(e3)
+        J_materialized_diffcp = np.column_stack([col1, col2, col3])
+        assert np.allclose(J_materialized_diffcp, np.array(Jp.jacobians[0, ...]))
+        J_diffcp = _diffcp.dprojection(np.array(v), cones, True)
+        col1 = J_diffcp.matvec(e1)
+        col2 = J_diffcp.matvec(e2)
+        col3 = J_diffcp.matvec(e3)
+        J_materialized_diffcp = np.column_stack([col1, col2, col3])
+        assert np.allclose(J_materialized_diffcp, np.array(Jd.jacobians[0, ...]))
+        _test_dproj_finite_diffs(dual_projector, getkey, dim=3)
 
     # Now test batched
     vps, _ = vmap(primal_projector)(jnp.array(vs))
@@ -439,3 +460,5 @@ def test_proj_exp_scs(getkey):
 
     assert jnp.allclose(vps, vp_true)
     assert jnp.allclose(vds, vd_true)
+    _test_dproj_finite_diffs(primal_projector, getkey, dim=3*num_cones)
+    _test_dproj_finite_diffs(dual_projector, getkey, dim=3*num_cones)

@@ -176,9 +176,10 @@ def test_least_squares_direct_solve(getkey):
     (hence the `data_and_soln_from_cvxpy_problem` function call and associated data declaration.)
     """
 
-    # TODO(quill): update the testing to follow best practices
-
-    if DirectSolver is not None and len(jax.devices("gpu")) > 0:
+    # NOTE(quill): this is a bit sloppy; asserting first device is a
+    #   gpu device.
+    jax_gpu_enabled = jax.devices()[0].platform == "gpu"
+    if DirectSolver is not None and jax_gpu_enabled:
         solvers = ["jax-lu", "nvmath-direct"]
     else:
         solvers = ["jax-lu"]

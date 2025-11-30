@@ -8,6 +8,7 @@ import jax.numpy as jnp
 import jax.random as jr
 
 import diffqcp.cones.canonical as cone_lib
+from diffqcp.cones.exp import in_exp, in_exp_dual, ExponentialConeProjector
 from .helpers import tree_allclose
 
 def _test_dproj_finite_diffs(
@@ -23,7 +24,7 @@ def _test_dproj_finite_diffs(
     else:
         x = jr.normal(key_func(), dim)
         dx = jr.normal(key_func(), dim)
-        _projector = projection_func
+        _projector = jit(projection_func)
 
     dx = 1e-5 * dx
 
@@ -362,3 +363,102 @@ def test_product_projector(getkey):
             _test_dproj_finite_diffs(cone_projector, getkey, dim=total_dim, num_batches=num_batches)
 
 
+def test_in_exp(getkey):
+    in_vecs = [[0., 0., 1.], [-1., 0., 0.], [1., 1., 5.]]
+    for vec in in_vecs:
+        assert in_exp(jnp.array(vec))
+    not_in_vecs = [[1., 0., 0.], [-1., -1., 1.], [-1., 0., -1.]]
+    for vec in not_in_vecs:
+        assert not in_exp(jnp.array(vec))
+
+
+def test_in_exp_dual(getkey):
+    in_vecs = [[0., 1., 1.], [-1., 1., 5.]]
+    not_in_vecs = [[0., -1., 1.], [0., 1., -1.]]
+    for vec in in_vecs:
+        arr = jnp.array(vec)
+        assert in_exp_dual(arr)
+    for vec in not_in_vecs:
+        arr = jnp.array(vec)
+        assert not in_exp_dual(vec)
+
+    
+def test_proj_exp_scs(getkey):
+    """test values ported from scs/test/problems/test_exp_cone.h
+    """
+    vs = [jnp.array([1.0, 2.0, 3.0]),
+          jnp.array([0.14814832, 1.04294573, 0.67905585]),
+          jnp.array([-0.78301134, 1.82790084, -1.05417044]),
+          jnp.array([1.3282585, -0.43277314, 1.7468072]),
+          jnp.array([0.67905585, 0.14814832, 1.04294573]),
+          jnp.array([0.50210027, 0.12314491, -1.77568921])]
+    
+    num_cones = len(vs)
+    
+    vp_true = [jnp.array([0.8899428, 1.94041881, 3.06957226]),
+               jnp.array([-0.02001571, 0.8709169, 0.85112944]),
+               jnp.array([-1.17415616, 0.9567094, 0.280399]),
+               jnp.array([0.53160512, 0.2804836, 1.86652094]),
+               jnp.array([0.38322814, 0.27086569, 1.11482228]),
+               jnp.array([0.0, 0.0, 0.0])]
+    vd_true = [jnp.array([-0., 2., 3.]),
+               jnp.array([-0., 1.04294573, 0.67905585]),
+               jnp.array([-0.68541419, 1.85424082, 0.01685653]),
+               jnp.array([-0.02277033, -0.12164823, 1.75085347]),
+               jnp.array([-0., 0.14814832, 1.04294573]),
+               jnp.array([-0., 0.12314491, -0.])]
+    
+    primal_projector = ExponentialConeProjector(1, onto_dual=False)
+    dual_projector = ExponentialConeProjector(1, onto_dual=True)
+
+    import diffcp._diffcp as _diffcp
+    from diffcp.cones import parse_cone_dict_cpp
+    cones = [("ep", 1)]
+    cones = parse_cone_dict_cpp(cones)
+    
+    for i in range(len(vs)):
+        print(f"=== trial {i} ===")
+        v = vs[i]
+        vp, Jp = jit(primal_projector)(v)
+        vd, Jd = jit(dual_projector)(v)
+        assert jnp.allclose(vp, vp_true[i])
+        assert jnp.allclose(vd, vd_true[i])
+        _test_dproj_finite_diffs(primal_projector, getkey, dim=3)
+        J_diffcp = _diffcp.dprojection(np.array(v), cones, False)
+        e1, e2, e3 = np.array([1., 0., 0.]), np.array([0., 1., 0.]), np.array([0., 0., 1.])
+        col1 = J_diffcp.matvec(e1)
+        col2 = J_diffcp.matvec(e2)
+        col3 = J_diffcp.matvec(e3)
+        J_materialized_diffcp = np.column_stack([col1, col2, col3])
+        assert np.allclose(J_materialized_diffcp, np.array(Jp.jacobians[0, ...]))
+        J_diffcp = _diffcp.dprojection(np.array(v), cones, True)
+        col1 = J_diffcp.matvec(e1)
+        col2 = J_diffcp.matvec(e2)
+        col3 = J_diffcp.matvec(e3)
+        J_materialized_diffcp = np.column_stack([col1, col2, col3])
+        assert np.allclose(J_materialized_diffcp, np.array(Jd.jacobians[0, ...]))
+        _test_dproj_finite_diffs(dual_projector, getkey, dim=3)
+
+    # Now test batched
+    vps, _ = vmap(primal_projector)(jnp.array(vs))
+    vds, _ = vmap(dual_projector)(jnp.array(vs))
+
+    for i in range(len(vs)):
+        assert jnp.allclose(vps[i, :], vp_true[i])
+        assert jnp.allclose(vds[i, :], vd_true[i])
+
+    # now test with num_cones > 1 for single projector
+    vs = jnp.concatenate(vs)
+    vp_true = jnp.concatenate(vp_true)
+    vd_true = jnp.concatenate(vd_true)
+
+    primal_projector = ExponentialConeProjector(num_cones, onto_dual=False)
+    dual_projector = ExponentialConeProjector(num_cones, onto_dual=True)
+
+    vps, _ = primal_projector(vs)
+    vds, _ = dual_projector(vs)
+
+    assert jnp.allclose(vps, vp_true)
+    assert jnp.allclose(vds, vd_true)
+    _test_dproj_finite_diffs(primal_projector, getkey, dim=3*num_cones)
+    _test_dproj_finite_diffs(dual_projector, getkey, dim=3*num_cones)

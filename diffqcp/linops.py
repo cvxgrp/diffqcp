@@ -4,27 +4,13 @@ Note that these operators were purposefully made "private" since they are solely
 to support functionality required by `diffqcp`. They **should not** be accessed as if they
 were true atoms implemented in `lineax`.
 """
-
 import numpy as np
-from jax import ShapeDtypeStruct, eval_shape
+from jax import ShapeDtypeStruct
 import jax.numpy as jnp
 import lineax as lx
 import equinox as eqx
-from jaxtyping import Array, Float
 
 from diffqcp._helpers import _to_int_list
-
-
-def _ZeroOperator(
-    x: Float[Array, " _d1"], y: Float[Array, " _d2"] | None = None
-) -> lx.AbstractLinearOperator:
-    in_struc = eval_shape(lambda: x)
-    if y is None:
-        out_struc = in_struc
-    else:
-        out_struc = eval_shape(lambda: y)
-    # NOTE(quill): safe to multiply by 0.0 (so a float), since we're assuming the linops are arrays of floats.
-    return 0.0 * lx.IdentityLinearOperator(in_struc, out_struc)
 
 
 class _BlockLinearOperator(lx.AbstractLinearOperator):

@@ -1,4 +1,6 @@
 """Helper/Utility functions used """
+from typing import TYPE_CHECKING
+
 import numpy as np
 from jax.numpy import argsort, stack
 from jax.experimental.sparse import BCOO, BCSR
@@ -16,7 +18,6 @@ def _to_int_list(v: np.ndarray) -> list[int]:
     """
     return [int(val) for val in v]
 
-# TODO(quill): make the following a named tuple or dictionary?
 class _TransposeCSRInfo(eqx.Module):
     indices: Integer[Array, "..."]
     indptr: Integer[Array, "..."]

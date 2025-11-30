@@ -5,15 +5,24 @@ import jax
 from jax import eval_shape
 import jax.numpy as jnp
 import equinox as eqx
-from lineax import AbstractLinearOperator, IdentityLinearOperator, linear_solve, LSMR
+import lineax as lx
+from lineax import AbstractLinearOperator, IdentityLinearOperator, linear_solve
 from jaxtyping import Float, Array
 from jax.experimental.sparse import BCOO, BCSR
+try:
+    from cupy import from_dlpack as cp_from_dlpack
+    from cupyx.scipy.sparse import csr_matrix
+    from nvmath.sparse.advanced import DirectSolver, DirectSolverAlgType
+except ImportError:
+    cp_from_dlpack = None
+    csr_matrix = None
+    DirectSolver = None
+    DirectSolverAlgType = None
 
-from diffqcp._problem_data import (QCPStructureCPU, QCPStructureGPU,
+from diffqcp.problem_data import (QCPStructureCPU, QCPStructureGPU,
                                    QCPStructure, ObjMatrixCPU, ObjMatrixGPU, ObjMatrix)
-from diffqcp._linops import _BlockLinearOperator
-from diffqcp._qcp_derivs import (_DuQ, _d_data_Q, _d_data_Q_adjoint_cpu, _d_data_Q_adjoint_gpu)
-# TODO(quill): make a note that the "CPU" and "GPU" qualifiers are somewhat misleading.
+from diffqcp.linops import _BlockLinearOperator
+from diffqcp.qcp_derivs import (_DuQ, _d_data_Q, _d_data_Q_adjoint_cpu, _d_data_Q_adjoint_gpu)
 
 class AbstractQCP(eqx.Module):
     """Quadratic Cone Program.
@@ -65,13 +74,26 @@ class AbstractQCP(eqx.Module):
 
         return (pi_z, F, dproj_kstar_v)
     
+    @eqx.filter_jit
+    def _jvp_direct_solve_get_F(self, F) -> Float[Array, "N N"]:
+        """For prototyping purposes; obviously not efficient.
+        """
+
+        def _get_dense_mat(mat: lx.AbstractLinearOperator):
+            mv = lambda vec: mat.mv(vec)
+            mm = jax.vmap(mv, in_axes=1, out_axes=1)
+            return mm(jnp.eye(self.problem_structure.N))
+        
+        return _get_dense_mat(F)
+    
     def _jvp_common(
         self,
         dP: ObjMatrix,
         dA: Float[BCOO | BCSR, "m n"],
         dAT: Float[BCOO | BCSR, "n m"],
         dq: Float[Array, " n"],
-        db: Float[Array, " m"]
+        db: Float[Array, " m"],
+        solve_method: str = "jax-lsmr"
     ) -> tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]:
         pi_z, F, dproj_kstar_v = self._form_atoms()
 
@@ -84,10 +106,17 @@ class AbstractQCP(eqx.Module):
             return jnp.zeros_like(d_data_N)
         
         def nonzero_case():
-            # TODO(quill): start solver from previous spot?
-            #   => (so would need `dz`)
-            soln = linear_solve(F, -d_data_N, solver=LSMR(rtol=1e-8, atol=1e-8))
-            return soln.value
+            if solve_method == "jax-lsmr":
+                try:
+                    from lineax import LSMR
+                except ImportError:
+                    raise ValueError("In your current environment the LSMR solve is not available.")
+                soln = linear_solve(F, -d_data_N, solver=LSMR(rtol=1e-8, atol=1e-8))
+                return soln.value
+            else:
+                F_dense = self._jvp_direct_solve_get_F(F)
+                soln = linear_solve(lx.MatrixLinearOperator(F_dense), -d_data_N)
+                return soln.value
 
         dz = jax.lax.cond(jnp.allclose(d_data_N, 0),
                           zero_case,
@@ -106,18 +135,35 @@ class AbstractQCP(eqx.Module):
         dP: Float[BCOO | BCSR, "n n"],
         dA: Float[BCOO | BCSR, "m n"],
         dq: Float[Array, " n"],
-        db: Float[Array, " m"]
+        db: Float[Array, " m"],
+        solve_method: str = "jax-lu"
     ) -> tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]:
         """Apply the derivative of the QCP's solution map to an input perturbation.
         """
         raise NotImplementedError
+    
+    @eqx.filter_jit
+    def _vjp_direct_solve_get_FT(self, F) -> Float[Array, "N N"]:
+        """For prototyping purposes; obviously not efficient.
+
+        NOTE(quill): same innards as `_jvp_direct_solve_get_F`, but keeping separate for now
+            since how we efficiently materialize the operators may vary?
+        """
+
+        def _get_dense_mat(mat: lx.AbstractLinearOperator):
+            mv = lambda vec: mat.mv(vec)
+            mm = jax.vmap(mv, in_axes=1, out_axes=1)
+            return mm(jnp.eye(self.problem_structure.N))
+        
+        return _get_dense_mat(F.T)
     
     def _vjp_common(
         self,
         dx: Float[Array, " n"],
         dy: Float[Array, " m"],
         ds: Float[Array, " m"],
-        produce_output: Callable
+        produce_output: Callable,
+        solve_method: str = "jax-lu"
     ) -> tuple[
         Float[BCOO | BCSR, "n n"], Float[BCOO | BCSR, "m n"],
         Float[Array, " n"], Float[Array, " m"]]:
@@ -132,16 +178,21 @@ class AbstractQCP(eqx.Module):
             return jnp.zeros_like(dz)
         
         def nonzero_case():
-            # TODO(quill): start solver from previous spot?
-            #   => (so would need previous `d_data_N`)
-            soln = linear_solve(F.T, -dz, solver=LSMR(rtol=1e-8, atol=1e-8))
-            return soln.value
+            if solve_method == "jax-lsmr":
+                try:
+                    from lineax import LSMR
+                except ImportError:
+                    raise ValueError("In your current environment the LSMR solve is not available.")
+                soln = linear_solve(F.T, -dz, solver=LSMR(rtol=1e-8, atol=1e-8))
+                return soln.value
+            else:
+                FT = self._vjp_direct_solve_get_FT(F)
+                soln = linear_solve(lx.MatrixLinearOperator(FT), -dz)
+                return soln.value
 
         d_data_N = jax.lax.cond(jnp.allclose(dz, 0),
                                 zero_case,
                                 nonzero_case)
-        
-        # TODO(quill): save/output residual?
 
         pi_z_n = pi_z[:n]
         pi_z_m = pi_z[n:n+m]
@@ -151,14 +202,15 @@ class AbstractQCP(eqx.Module):
         d_data_N_N = d_data_N[-1]
         
         return produce_output(x=pi_z_n, y=pi_z_m, tau=pi_z_N,
-                              w1=d_data_N_n, w2=d_data_N_m, w3=d_data_N_N)
-        
+                              w1=d_data_N_n, w2=d_data_N_m, w3=d_data_N_N)    
+    
     @abstractmethod
     def vjp(
         self,
         dx: Float[Array, " n"],
         dy: Float[Array, " m"],
-        ds: Float[Array, " m"]
+        ds: Float[Array, " m"],
+        solve_method = "jax-lu"
     ) -> tuple[
         Float[BCOO | BCSR, "n n"], Float[BCOO | BCSR, "m n"],
         Float[Array, " n"], Float[Array, " m"]]:
@@ -219,7 +271,8 @@ class HostQCP(AbstractQCP):
         dP: Float[BCOO, "n n"],
         dA: Float[BCOO, "m n"],
         dq: Float[Array, " n"],
-        db: Float[Array, " m"]
+        db: Float[Array, " m"],
+        solve_method: str = "jax-lu"
     ) -> tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]:
         """Apply the derivative of the QCP's solution map to an input perturbation.
 
@@ -243,13 +296,14 @@ class HostQCP(AbstractQCP):
         dAT = dA.T
         dP = self.problem_structure.form_obj(dP)
         # need to wrap dP.
-        return self._jvp_common(dP=dP, dA=dA, dAT=dAT, dq=dq, db=db)
+        return self._jvp_common(dP=dP, dA=dA, dAT=dAT, dq=dq, db=db, solve_method=solve_method)
 
     def vjp(
         self,
         dx: Float[Array, " n"],
         dy: Float[Array, " m"],
-        ds: Float[Array, " m"]
+        ds: Float[Array, " m"],
+        solve_method: str = "jax-lu"
     ) -> tuple[
         Float[BCSR, "n n"], Float[BCSR, "m n"],
         Float[Array, " n"], Float[Array, " m"]]:
@@ -283,7 +337,8 @@ class HostQCP(AbstractQCP):
                                                   m=self.problem_structure.m)
         
         return self._vjp_common(dx=dx, dy=dy, ds=ds,
-                                produce_output=partial_d_data_Q_adjoint_cpu)
+                                produce_output=partial_d_data_Q_adjoint_cpu,
+                                solve_method=solve_method)
 
 
 class DeviceQCP(AbstractQCP):
@@ -312,7 +367,7 @@ class DeviceQCP(AbstractQCP):
         x: Float[Array, " n"],
         y: Float[Array, " m"],
         s: Float[Array, " m"],
-        problem_structure: QCPStructureCPU
+        problem_structure: QCPStructureGPU
     ):
         """**Arguments:**
         - `P`: BCSR, shape (n, n). The quadratic objective matrix in sparse BCSR format.
@@ -337,12 +392,89 @@ class DeviceQCP(AbstractQCP):
         self.AT = self.problem_structure.form_A_transpose(self.A)
         self.x, self.y, self.s = x, y, s
     
+    @eqx.filter_jit
+    def _jvp_nvmath_form_atoms(
+        self,
+        dP: ObjMatrix,
+        dA: Float[BCSR, "m n"],
+        dAT: Float[BCSR, "n m"],
+        dq: Float[Array, " n"],
+        db: Float[Array, " m"]
+    ) -> tuple[Float[Array, " N"], AbstractLinearOperator, AbstractLinearOperator]:
+        n = self.problem_structure.n
+        m = self.problem_structure.m
+        pi_z, F, dproj_k_star_v = self._form_atoms()
+        pi_z_n, pi_z_m, pi_z_N = pi_z[:n], pi_z[n:n+m], pi_z[-1]
+        d_data_N = _d_data_Q(x=pi_z_n, y=pi_z_m, tau=pi_z_N, dP=dP,
+                             dA=dA, dAT=dAT, dq=dq, db=db)
+        
+        return -d_data_N, F, dproj_k_star_v
+    
+    def _jvp_nvmath_actual_solve(self, F, d_data_N_minus):
+        # NOTE(quill): separating this out for timing purposes.
+        # return nvmath.sparse.advanced.direct_solver(F, d_data_N_minus)
+
+        with DirectSolver(
+            F,
+            d_data_N_minus
+        ) as solver:
+            
+            config = solver.plan_config
+            config.reordering_algorithm = DirectSolverAlgType.ALG_1
+
+            solver.plan()
+            solver.factorize()
+            x = solver.solve()
+        
+        return x
+    
+    def _jvp_nvmath_direct_solve(self, F, d_data_N_minus):
+        F_cupy_csr = csr_matrix(cp_from_dlpack(F))
+        d_data_N_minus_cupy = cp_from_dlpack(d_data_N_minus)
+        dz_cupy = self._jvp_nvmath_actual_solve(F_cupy_csr, d_data_N_minus_cupy)
+        dz = jax.dlpack.from_dlpack(dz_cupy)
+        return dz
+    
+    @eqx.filter_jit
+    def _jvp_nvmath_get_output(self, dz, dproj_kstar_v):
+        n = self.problem_structure.n
+        m = self.problem_structure.m
+
+        dz_n, dz_m, dz_N = dz[:n], dz[n:n+m], dz[-1]
+        dx = dz_n - self.x * dz_N
+        dproj_k_star_v_dz_m = dproj_kstar_v.mv(dz_m)
+        dy = dproj_k_star_v_dz_m - self.y * dz_N
+        ds = dproj_k_star_v_dz_m - dz_m - self.s * dz_N
+        return dx, dy, ds
+    
+    def _jvp_nvmath(
+        self,
+        dP: ObjMatrix,
+        dA: Float[BCSR, "m n"],
+        dAT: Float[BCSR, "n m"],
+        dq: Float[Array, " n"],
+        db: Float[Array, " m"]
+    ):
+        d_data_N_minus, F, dproj_k_star_v = self._jvp_nvmath_form_atoms(dP, dA, dAT, dq, db)
+
+        # `_jvp_direct_solve` cannot be jitted, so can use regular
+        # Python control flow
+        # TODO(quill): use a norm tolerance instead?
+        if jnp.allclose(d_data_N_minus, 0):
+            return jnp.zeros_like(d_data_N_minus)
+        else:
+            F = self._jvp_direct_solve_get_F(F)
+            dz = self._jvp_nvmath_direct_solve(F, d_data_N_minus)
+
+        return self._jvp_nvmath_get_output(dz, dproj_k_star_v)
+
     def jvp(
         self,
         dP: Float[BCSR, "n n"],
         dA: Float[BCSR, "m n"],
         dq: Float[Array, " n"],
-        db: Float[Array, " m"]
+        db: Float[Array, " m"],
+        solve_method: str = "jax-lu"
     ) -> tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]:
         """Apply the derivative of the QCP's solution map to an input perturbation.
         
@@ -361,14 +493,132 @@ class DeviceQCP(AbstractQCP):
         A 3-tuple containing the perturbations to the solution: `(dx, dy, ds)`.
         """
         dP = ObjMatrixGPU(dP)
-        dAT = self.problem_structure.form_A_transpose(dA)
-        return self._jvp_common(dP=dP, dA=dA, dAT=dAT, dq=dq, db=db)
+        dAT = eqx.filter_jit(self.problem_structure.form_A_transpose)(dA)
+        if solve_method in ["jax-lsmr", "jax-lu"]:
+            return self._jvp_common(dP=dP, dA=dA, dAT=dAT, dq=dq, db=db, solve_method=solve_method)
+        elif solve_method == "nvmath-direct":
+            if DirectSolver is None:
+                raise ValueError("The `nvmath-direct` option can only be used when "
+                                 "`nvmath-python` is installed. Also check that CuPy is "
+                                 "installed.")
+            return self._jvp_nvmath(dP=dP, dA=dA, dAT=dAT, dq=dq, db=db)
+        else:
+            raise ValueError(f"Solve method \"{solve_method}\" is not specified. "
+                             " The options are \"lsmr\", \"nvmath-direct\", and "
+                             "\"lu\".")
 
-    def vjp(
+    @eqx.filter_jit
+    def _vjp_nvmath_form_atoms(
         self,
         dx: Float[Array, " n"],
         dy: Float[Array, " m"],
         ds: Float[Array, " m"]
+    ):
+        pi_z, F, dproj_kstar_v = self._form_atoms()
+        dz = jnp.concatenate([dx,
+                              dproj_kstar_v.mv(dy + ds) - ds,
+                              - jnp.array([self.x @ dx + self.y @ dy + self.s @ ds])]
+                            )
+        return -dz, F, pi_z
+    
+    def _vjp_nvmath_actual_solve(self, FT, dz_minus):
+        # NOTE(quill): separating this out for timing purposes.
+        # return nvmath.sparse.advanced.direct_solver(FT, dz_minus)
+
+        with DirectSolver(
+            FT,
+            dz_minus
+        ) as solver:
+            
+            config = solver.plan_config
+            config.reordering_algorithm = DirectSolverAlgType.ALG_1
+
+            solver.plan()
+            solver.factorize()
+            x = solver.solve()
+        
+        return x
+    
+    def _vjp_nvmath_direct_solve(self, FT, dz_minus):
+        # FT is a  JAX Array (<=> it is materialized.)
+
+        # === some tinkering with preconditioner ===
+
+        # prec_jax = jnp.diag((jnp.diag(jnp.transpose(FT) @ FT))**(-1))
+        # prec = cp_from_dlpack(prec_jax)
+        # FT_cupy_csr = csr_matrix(cp_from_dlpack(prec_jax @ FT))
+        # dz_minus_cupy = cp_from_dlpack(dz_minus)
+        # d_data_N_cupy = self._vjp_actual_solve(FT_cupy_csr, prec @ dz_minus_cupy)
+
+        # === ===
+        
+        FT_cupy_csr = csr_matrix(cp_from_dlpack(FT))
+        dz_minus_cupy = cp_from_dlpack(dz_minus)
+        d_data_N_cupy = self._vjp_nvmath_actual_solve(FT_cupy_csr, dz_minus_cupy)
+        d_data_N = jax.dlpack.from_dlpack(d_data_N_cupy)
+        return d_data_N
+    
+    @eqx.filter_jit()
+    def _vjp_nvmath_get_output(
+        self,
+        pi_z,
+        d_data_N
+    ):
+        n = self.problem_structure.n
+        m = self.problem_structure.m
+        
+        pi_z_n = pi_z[:n]
+        pi_z_m = pi_z[n:n+m]
+        pi_z_N = pi_z[-1]
+        d_data_N_n = d_data_N[:n]
+        d_data_N_m = d_data_N[n:n+m]
+        d_data_N_N = d_data_N[-1]
+
+        return _d_data_Q_adjoint_gpu(
+            x=pi_z_n,
+            y=pi_z_m,
+            tau=pi_z_N,
+            w1=d_data_N_n,
+            w2=d_data_N_m,
+            w3=d_data_N_N,
+            P_rows=self.problem_structure.P_nonzero_rows,
+            P_cols=self.problem_structure.P_nonzero_cols,
+            P_csr_indices=self.problem_structure.P_csr_indices,
+            P_csr_indtpr=self.problem_structure.P_csr_indptr,
+            A_rows=self.problem_structure.A_nonzero_rows,
+            A_cols=self.problem_structure.A_nonzero_cols,
+            A_csr_indices=self.problem_structure.A_csr_indices,
+            A_csr_indtpr=self.problem_structure.A_csr_indptr,
+            n=n,
+            m=m
+        )
+
+    def _vjp_nvmath(
+        self,
+        dx: Float[Array, " n"],
+        dy: Float[Array, " m"],
+        ds: Float[Array, " m"]
+    ):
+        dz_minus, F, pi_z = self._vjp_nvmath_form_atoms(dx, dy, ds)
+
+        # now check if 0 or not. `_vjp_nvmath` cannot be jitted, so we can 
+        # just use typical Python control flow
+        if jnp.allclose(dz_minus, 0):
+            return jnp.zeros_like(dz_minus)
+        else:
+            # obtain FT
+            FT = self._vjp_direct_solve_get_FT(F)
+            d_data_N = self._vjp_nvmath_direct_solve(FT, dz_minus)
+        
+        return self._vjp_nvmath_get_output(pi_z, d_data_N)
+
+    
+    def vjp(
+        self,
+        dx: Float[Array, " n"],
+        dy: Float[Array, " m"],
+        ds: Float[Array, " m"],
+        solve_method: str = "nvmath-direct"
     ) -> tuple[
         Float[BCSR, "n n"], Float[BCSR, "m n"],
         Float[Array, " n"], Float[Array, " m"]]:
@@ -380,6 +630,10 @@ class DeviceQCP(AbstractQCP):
         - `dx`: A perturbation to the primal solution.
         - `dy`: A perturbation to the dual solution.
         - `ds`: A perturbation to the primal slack solution.
+        - `solve_method` (str): How TODO(quill). Options are:
+            - "jax-lsmr"
+            - "jax-lu"
+            - "nvmath-direct"
 
         **Returns**
 
@@ -388,7 +642,8 @@ class DeviceQCP(AbstractQCP):
         will have the same sparsity patterns as their corresponding problem matrices.
         """
 
-        partial_d_data_Q_adjoint_gpu = ft.partial(_d_data_Q_adjoint_gpu,
+        if solve_method in ["jax-lsmr", "jax-lu"]:
+            partial_d_data_Q_adjoint_gpu = ft.partial(_d_data_Q_adjoint_gpu,
                                                   P_rows=self.problem_structure.P_nonzero_rows,
                                                   P_cols=self.problem_structure.P_nonzero_cols,
                                                   P_csr_indices=self.problem_structure.P_csr_indices,
@@ -399,6 +654,15 @@ class DeviceQCP(AbstractQCP):
                                                   A_csr_indtpr=self.problem_structure.A_csr_indptr,
                                                   n=self.problem_structure.n,
                                                   m=self.problem_structure.m)
-
-        return self._vjp_common(dx=dx, dy=dy, ds=ds,
-                                produce_output=partial_d_data_Q_adjoint_gpu)
+            
+            return self._vjp_common(dx=dx, dy=dy, ds=ds, produce_output=partial_d_data_Q_adjoint_gpu, solve_method=solve_method)
+        elif solve_method == "nvmath-direct":
+            if DirectSolver is None:
+                raise ValueError("The `nvmath-direct` option can only be used when "
+                                 "`nvmath-python` is installed. Also check that CuPy is "
+                                 "installed.")
+            return self._vjp_nvmath(dx=dx, dy=dy, ds=ds)
+        else:
+            raise ValueError(f"Solve method \"{solve_method}\" is not specified. "
+                             " The options are \"lsmr\", \"nvmath-direct\", and "
+                             "\"lu\".")

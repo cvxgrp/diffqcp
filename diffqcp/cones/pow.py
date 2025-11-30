@@ -1,7 +1,6 @@
+"""Subroutines for projecting onto power cone and computing JVPs and VJPs with the derivative of the projection.
 """
-Notation:
-- `x` is the 
-"""
+from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
@@ -9,7 +8,7 @@ import equinox as eqx
 import lineax as lx
 from jaxtyping import Array, Float, Bool
 
-from ._abstract_projector import AbstractConeProjector
+from .abstract_projector import AbstractConeProjector
 
 if jax.config.jax_enable_x64:
     TOL = 1e-12
@@ -102,9 +101,6 @@ def _proj_dproj(
     v: Float[Array, " 3"],
     alpha: Float[Array, ""]
 ) -> tuple[Float[Array, " 3"], Float[Array, "3 3"]]:
-    """
-    probably need to return a matrix linear operator as derivative?
-    """
     x, y, z = v
     abs_z = jnp.abs(z)
 
@@ -248,7 +244,7 @@ def _pow_cone_jacobian_mv(
     # num cones could be 1.
     dx_batch = jnp.reshape(dx, (num_cones, 3))
     Jdx = eqx.filter_vmap(lambda jac, y: jac @ y,
-                            in_axes=0, out_axes=0)(jacobians, dx_batch)
+                            in_axes=(0, 0), out_axes=0)(jacobians, dx_batch)
     mv_dual = dx_batch - Jdx
     mv = jnp.where(is_dual[:, None], mv_dual, Jdx)
     return jnp.ravel(mv)
@@ -256,32 +252,37 @@ def _pow_cone_jacobian_mv(
 
 class _PowerConeJacobianOperator(lx.AbstractLinearOperator):
 
-    batched_jacobians: Float[Array, "*num_batches num_cones 3 3"]
+    jacobians: Float[Array, "*num_batches num_cones 3 3"]
     is_dual: Bool[Array, " num_cones"]
     num_cones: int = eqx.field(static=True)
 
     def __init__(
         self,
-        batched_jacobians: Float[Array, "*num_batches num_cones 3 3"],
+        jacobians: Float[Array, "*num_batches num_cones 3 3"],
         is_dual: Bool[Array, " num_cones"],
     ):
-        self.batched_jacobians = batched_jacobians
+        self.jacobians = jacobians
         self.is_dual = is_dual
         self.num_cones = jnp.size(is_dual)
+        ndim = jnp.ndim(jacobians)
+        if ndim not in [3, 4]:
+            raise ValueError("The `jacobians` argument provided to the `_PowerConeJacobianOperator` "
+                             f"is {ndim}D, but it must be 3D or 4D.")
 
     def mv(self, dx: Float[Array, "*batch num_cones*3"]):
-        # cases:
-        # 1. single power cone -> 1D input
-        # 2. multiple power cones -> 1D input
-        # 3. batch over single -> 2D input
-        # 4. batch over many -> 2D input
         ndim = jnp.ndim(dx)
         if ndim == 1:
-            return _pow_cone_jacobian_mv(dx, self.batched_jacobians, self.is_dual, self.num_cones)
-        else:
+            if jnp.ndim(self.jacobians) == 4:
+                raise ValueError("Batched Power cone Jacobians cannot be applied to a 1D input.")
+            
+            return _pow_cone_jacobian_mv(dx, self.jacobians, self.is_dual, self.num_cones)
+        elif ndim == 2:
             return eqx.filter_vmap(_pow_cone_jacobian_mv,
                                    in_axes=(0, 0, None, None),
-                                   out_axes=0)(dx, self.batched_jacobians, self.is_dual, self.num_cones)
+                                   out_axes=0)(dx, self.jacobians, self.is_dual, self.num_cones)
+        else:
+            raise ValueError("The `_PowerConeJacobianOperator` can only be applied to 1D or 2D inputs "
+                             f"but the provided vector is {ndim}D.")
 
     def as_matrix(self):
         raise NotImplementedError("Power Cone Jacobian `as_matrix` not implemented.")
@@ -290,25 +291,18 @@ class _PowerConeJacobianOperator(lx.AbstractLinearOperator):
         return self
 
     def in_structure(self):
-        ndim = jnp.ndim(self.batched_jacobians)
-        shape = jnp.shape(self.batched_jacobians)
-        # will we always have `ndim >= 3` via my handling of input in `proj_dproj`?
-        if ndim == 2:
-            # single Jacobian
-            return jax.ShapeDtypeStruct(shape=(3,),
-                                        dtype=self.batched_jacobians.dtype)
-        elif ndim == 3:
-            # either a batch of single power cone or 
-            # many power cones
+        ndim = jnp.ndim(self.jacobians)
+        shape = jnp.shape(self.jacobians)
+        dtype = self.jacobians.dtype
+        
+        if ndim == 3:
+            # non-batched case
             return jax.ShapeDtypeStruct(shape=(shape[0] * 3,),
-                                        dtype=self.batched_jacobians.dtype)
+                                        dtype=dtype)
         elif ndim == 4:
-            # batch of many power cones.
-            # initialization in case of many power cones has 3D `batched_jacobians`,
-            # then if we batch we have 4D.
-            return jax.ShapeDtypeStruct(shape=(shape[0],
-                                               shape[1] * 3),
-                                        dtype=self.batched_jacobians.dtype)
+            # batched case
+            return jax.ShapeDtypeStruct(shape=(shape[0], shape[1] * 3),
+                                        dtype=dtype)
 
     def out_structure(self):
         return self.in_structure()
@@ -318,6 +312,11 @@ def _(op):
     return True
 
 class PowerConeProjector(AbstractConeProjector):
+
+    # NOTE(quill): while similar, this implementation was a bit more challenging than
+    # the exponential cone projector implementation as the `cone_dims` dictionary
+    # returned by CVXPY has different keys for the exponential cone and its dual, whereas
+    # primal vs dual power cone is encoded within the list of `alphas`.
 
     alphas: Float[Array, " num_cones"]
     num_cones: int = eqx.field(static=True)
@@ -341,7 +340,7 @@ class PowerConeProjector(AbstractConeProjector):
         # negate points being projected onto dual
         batch = batch * self.signs[:, None]
 
-        proj_primal, jacs = eqx.filter_vmap(_proj_dproj, in_axes=(0, 0), out_axes=0)(batch, self.alphas_abs)
+        proj_primal, jacs = eqx.filter_vmap(_proj_dproj, in_axes=(0, 0), out_axes=(0, 0))(batch, self.alphas_abs)
 
         # via Moreau: Pi_K^*(v) = v + Pi_K(-v)
         proj_dual = batch + proj_primal

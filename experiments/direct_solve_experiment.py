@@ -3,7 +3,6 @@ Experiment solving problems on the CPU and computing VJPs on the GPU.
 """
 import time
 import os
-from dataclasses import dataclass
 import numpy as np
 import jax
 jax.config.update("jax_enable_x64", True)
@@ -28,11 +27,20 @@ type SCSC = csc_matrix | csc_array
 
 def compute_loss(target_x, target_y, target_s, x, y, s):
     return (0.5 * la.norm(x - target_x)**2 + 0.5 * la.norm(y - target_y)**2
-            + 0.5 * la.norm(s - target_s)**2)
+            + 0.5 * la.norm(s - target_s)**2) 
+
+
+def _update_data(
+    dP, dA, dq, db, Pdata, Adata, q, b, step_size
+):
+    new_Pdata = Pdata - step_size * dP.data
+    new_Adata = Adata - step_size * dA.data
+    new_q = q - step_size * dq
+    new_b = b - step_size * db
+    return new_Pdata, new_Adata, new_q, new_b
 
 
 @eqx.filter_jit
-@eqx.debug.assert_max_traces(max_traces=1)
 def make_step(
     qcp: DeviceQCP,
     target_x: Float[Array, " n"],
@@ -45,16 +53,13 @@ def make_step(
     step_size: float
 ) -> tuple[Float[Array, ""], Float[Array, "..."], Float[Array, "..."],
            Float[Array, " n"], Float[Array, " m"]]:
-    loss = compute_loss(target_x, target_y, target_s, qcp.x, qcp.y, qcp.s)
+    loss = eqx.filter_jit(compute_loss)(target_x, target_y, target_s, qcp.x, qcp.y, qcp.s)
     dP, dA, dq, db = qcp.vjp(qcp.x - target_x,
                              qcp.y - target_y,
                              qcp.s - target_s,
                              solve_method="jax-lsmr")
-    new_Pdata = Pdata - step_size * dP.data
-    new_Adata = Adata - step_size * dA.data
-    new_q = q - step_size * dq
-    new_b = b - step_size * db
-    return (loss, new_Pdata, new_Adata, new_q, new_b)
+    updated_data = eqx.filter_jit(_update_data)(dP, dA, dq, db, Pdata, Adata, q, b, step_size)
+    return loss, *updated_data
 
 
 def grad_desc(
@@ -109,17 +114,16 @@ if __name__ == "__main__":
     np.random.seed(28)
     
     # SMALL
-    m = 20
-    n = 10
+    # m = 20
+    # n = 10
     # MEDIUM-ish
-    # m = 200
-    # n = 100
+    m = 200
+    n = 100
     # LARGE-ish
     # m = 2_000
     # n = 1_000
-    # target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    target_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
     # target_problem = prob_generator.generate_LS_problem(m=m, n=n)
-    target_problem = prob_generator.generate_group_lasso_logistic(m=m, n=m)
     prob_data_cpu = QCPProbData(target_problem)
 
     # ensure validity of the following ordering permutations.
@@ -137,6 +141,7 @@ if __name__ == "__main__":
     cones = prob_data_cpu.clarabel_cones
     settings = clarabel.DefaultSettings()
     settings.verbose = False
+    # settings.presolve_enable = False
 
     solver = clarabel.DefaultSolver(prob_data_cpu.Pupper_csc,
                                     prob_data_cpu.q,
@@ -178,7 +183,7 @@ if __name__ == "__main__":
     # --- test compiled solve ---
 
     start_time = time.perf_counter()
-    # with jax.profiler.trace("/home/quill/diffqcp/tmp/indirect-trace", create_perfetto_link=True):
+    # with jax.profiler.trace("/home/quill/diffqcp/tmp/jax-trace", create_perfetto_link=True):
     result = make_step(qcp_initial, fake_target_x, fake_target_y,
                     fake_target_s, P.data, A.data, q, b, step_size=1e-5)
     result[0].block_until_ready()
@@ -187,9 +192,8 @@ if __name__ == "__main__":
 
     # --- ---
 
-    # initial_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
+    initial_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
     # initial_problem = prob_generator.generate_LS_problem(m=m, n=n)
-    initial_problem = prob_generator.generate_group_lasso_logistic(m=m, n=m)
     prob_data_cpu = QCPProbData(initial_problem)
 
     cones = prob_data_cpu.clarabel_cones
@@ -237,8 +241,8 @@ if __name__ == "__main__":
     plt.title(label="diffqcp")
     results_dir = os.path.join(os.path.dirname(__file__), "results")
     if prob_data_cpu.n > 99:
-        output_path = os.path.join(results_dir, "diffqcp_logistic_lasso_large.svg")
+        output_path = os.path.join(results_dir, "lsmr_dense_ls_100_iterates_direct_11_10.svg")
     else:
-        output_path = os.path.join(results_dir, "diffqcp_logistic_lasso_small.svg")
+        output_path = os.path.join(results_dir, "dsolve_probability_small.svg")
     plt.savefig(output_path, format="svg")
     plt.close()

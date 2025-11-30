@@ -1,5 +1,15 @@
 from __future__ import annotations
+
+__all__ = [
+    "QCPStructureCPU",
+    "QCPStructureGPU",
+    "QCPStructureLayers",
+    "ObjMatrixGPU",
+    "ObjMatrixCPU"
+]
+
 from abc import abstractmethod
+from typing import TYPE_CHECKING
 
 from jax import ShapeDtypeStruct
 import jax.numpy as jnp
@@ -9,6 +19,8 @@ import lineax as lx
 from lineax import AbstractLinearOperator
 from jaxtyping import Float, Integer, Bool, Array
 
+if TYPE_CHECKING:
+    from cvxpy.reductions.dcp2cone.cone_matrix_stuffing import ParamConeProg
 
 from diffqcp.cones.canonical import ProductConeProjector
 from diffqcp._helpers import _coo_to_csr_transpose_map, _TransposeCSRInfo
@@ -142,12 +154,12 @@ class QCPStructureGPU(QCPStructure):
         self,
         P: Float[BCSR, "*batch n n"],
         A: Float[BCSR, "*batch m n"],
-        cones: dict[str, int | list[int] | list[float]],
+        cone_dims: dict[str, int | list[int] | list[float]],
         onto_dual: bool = True
     ):
         
         # NOTE(quill): checks on `cone_dims` done in `ProductConeProjector.__init__`
-        self.cone_projector = ProductConeProjector(cones, onto_dual=onto_dual)
+        self.cone_projector = ProductConeProjector(cone_dims, onto_dual=onto_dual)
         
         if not isinstance(P, BCSR):
             raise ValueError("The objective matrix `P` must be a `BCSR` JAX matrix,"
@@ -225,6 +237,28 @@ class QCPStructureGPU(QCPStructure):
                      self.A_transpose_info.indices,
                      self.A_transpose_info.indptr),
                      shape=(self.n, self.m))
+
+
+class QCPStructureLayers(QCPStructure):
+    """Meant to be used with CVXPYlayers."""
+
+    n: int
+    m: int
+    N: int
+    cone_projector: ProductConeProjector
+    is_batched: bool
+
+    def __init__(
+        self,
+        prob: ParamConeProg,
+        cone_dims: dict[str, int | list[int] | list[float]],
+        onto_dual: bool = True
+    ):
+        
+        self.cone_projector = ProductConeProjector(cone_dims, onto_dual=onto_dual)
+
+#         # Now we need to obtain
+#         constraint_structure = 
 
 
 type ObjMatrix = ObjMatrixCPU | ObjMatrixGPU

@@ -12,12 +12,14 @@ def generate_sdp(n, p) -> cvx.Problem:
     """
     Taken from https://www.cvxpy.org/examples/basic/sdp.html.
     """
-    C = np.random.randn(n, n)
+    C = randn_symm(n, np.random.randn)
     A = []
     b = []
-    for i in range(p):
-        A.append(np.random.randn(n, n))
-        b.append(np.random.randn())
+    for _ in range(p):
+        # A.append(np.random.randn(n, n))
+        Ai = randn_symm(n, np.random.randn)
+        A.append(Ai)
+        b.append(float(np.random.randn()))
 
     # Define and solve the CVXPY problem.
     # Create a symmetric matrix variable.
@@ -29,6 +31,26 @@ def generate_sdp(n, p) -> cvx.Problem:
     ]
     prob = cvx.Problem(cvx.Minimize(cvx.trace(C @ X)),
                     constraints)
+    return prob
+
+
+def generate_feasible_sdp(n, p, rank=3):
+    # Step 1: Pick a random feasible X*
+    Z = np.random.randn(n, n)
+    X_star = Z @ Z.T  # PSD and full rank
+
+    # Step 2: Generate A_i and b_i consistent with X*
+    A = [randn_symm(n, np.random.randn) for _ in range(p)]
+    b = [float(np.trace(Ai @ X_star)) for Ai in A]
+
+    # Step 3: Random objective matrix
+    C = randn_symm(n, np.random.randn)
+
+    # Step 4: Build the CVXPY problem
+    X = cvx.Variable((n, n), symmetric=True)
+    constraints = [X >> 0]
+    constraints += [cvx.trace(A[i] @ X) == b[i] for i in range(p)]
+    prob = cvx.Problem(cvx.Minimize(cvx.trace(C @ X)), constraints)
     return prob
 
 

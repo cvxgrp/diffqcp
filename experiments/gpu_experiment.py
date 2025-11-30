@@ -279,7 +279,7 @@ if __name__ == "__main__":
 
     # --- JIT compile `make_step` (so compile what's needed for `diffqcp`) ---
     
-    problem_structure = QCPStructureGPU(P=P, A=A, cones=prob_data_cpu.scs_cones)
+    problem_structure = QCPStructureGPU(P=P, A=A, cone_dims=prob_data_cpu.scs_cones)
 
     qcp_initial = DeviceQCP(P=P, A=A, q=q, b=b,
                             x=x_target, y=y_target, s=s_target,

@@ -3,35 +3,9 @@ import jax.numpy as jnp
 import jax.random as jr
 import lineax as lx
 
-from diffqcp._linops import _ZeroOperator, _BlockLinearOperator
+from diffqcp.linops import _BlockLinearOperator
 
 from .helpers import tree_allclose
-
-# TODO(quill): remove the Zero and Scalar operators.
-
-def test_zero_operator(getkey):
-    dim_in = 5
-    dim_out = 3
-    num_batches = 10
-
-    # === same dimension in and out ===
-    x_in = jr.normal(getkey(), dim_in)
-    y_out = jr.normal(getkey(), dim_in)
-    zero_op = _ZeroOperator(x_in, y_out)
-    assert tree_allclose(zero_op.mv(x_in), jnp.zeros_like(y_out))
-
-    # vmap
-    y_outs = jax.vmap(zero_op.mv)(jr.normal(getkey(), (num_batches, dim_in)))
-    assert tree_allclose(y_outs, jnp.zeros((num_batches, dim_in)))
-
-    # === different dimension in than out ===
-    y_out = jr.normal(getkey(), dim_out)
-    zero_op = _ZeroOperator(x_in, y_out)
-    assert tree_allclose(zero_op.mv(x_in), jnp.zeros_like(y_out))
-
-    # vmap
-    y_outs = jax.vmap(zero_op.mv)(jr.normal(getkey(), (num_batches, dim_in)))
-    assert tree_allclose(y_outs, jnp.zeros((num_batches, dim_out)))
 
 
 def test_block_operator(getkey):

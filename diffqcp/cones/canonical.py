@@ -25,12 +25,12 @@ import jax.numpy.linalg as jla
 import lineax as lx
 from lineax import AbstractLinearOperator
 import equinox as eqx
-from abc import abstractmethod
 from jaxtyping import Array, Float
 
-from ._abstract_projector import AbstractConeProjector
+from .abstract_projector import AbstractConeProjector
 from .pow import PowerConeProjector
-from diffqcp._linops import _BlockLinearOperator
+from .exp import ExponentialConeProjector
+from diffqcp.linops import _BlockLinearOperator
 from diffqcp._helpers import _to_int_list
 
 ZERO = "z"
@@ -387,7 +387,7 @@ def vec_symm(X: jnp.ndarray) -> jnp.ndarray:
     return vec * scale
 
 
-def unvec_symm(x: Float[Array, "d"], size: int) -> Float[Array, "k k"]:
+def unvec_symm(x: Float[Array, " d"], size: int) -> Float[Array, "k k"]:
     sqrt2 = jnp.sqrt(jnp.array(2.0, dtype=x.dtype))
     X = jnp.zeros((size, size), dtype=x.dtype)
     idxs = jnp.triu_indices(size)
@@ -398,7 +398,7 @@ def unvec_symm(x: Float[Array, "d"], size: int) -> Float[Array, "k k"]:
     return X
 
 
-def form_B_block(v1: Float[Array, "n"], v2: Float[Array, "m"]) -> Float[Array, "m n"]:
+def form_B_block(v1: Float[Array, " n"], v2: Float[Array, " m"]) -> Float[Array, "m n"]:
     v1 = jnp.expand_dims(v1, 0).repeat(v2.shape[0], axis=0)
     block = v1 - jnp.expand_dims(v2, 1)
     block = v1 / block
@@ -430,12 +430,12 @@ def _psd_jacobian_one_dimensional_mv(dx, lambd, Q, B, size):
 
 
 class _ProjPSDConeJacobian(AbstractLinearOperator):
-    lambd: Float[Array, "k"]
+    lambd: Float[Array, " k"]
     Q: Float[Array, "k k"]
     B: Float[Array, "k k"]
     size: int = eqx.field(static=True)
     dim: int = eqx.field(static=True)
-    x: Float[Array, "d"]
+    x: Float[Array, " d"]
 
     def __init__(self, lambd, Q, B, size, dim, x):
         self.lambd = lambd
@@ -669,7 +669,6 @@ class ProductConeProjector(AbstractConeProjector):
     projectors: list[AbstractConeProjector]
     dims: list[int] = eqx.field(static=True)
     split_indices: list[int] = eqx.field(static=True)
-    # onto_dual: bool = eqx.field(static=True)
     
     def __init__(self, cones: dict[str, int | list[int] | list[float]], onto_dual: bool=False):
         projectors = []
@@ -692,16 +691,24 @@ class ProductConeProjector(AbstractConeProjector):
                     projectors.append(SecondOrderConeProjector(val))
                     dims.append(sum(val))
             elif cone_key == EXP:
+                # EXP cone: `val` is the (integer) number of cones
                 if val > 0:
-                    raise ValueError("The exponential cone is not yet supported.")
+                    projectors.append(ExponentialConeProjector(val, onto_dual=onto_dual))
+                    dims.append(3 * val)
             elif cone_key == EXP_DUAL:
+                # dual EXP cone: `val` is the (integer) number of cones
                 if val > 0:
-                    raise ValueError("The dual exponential cone is not yet supported.")
+                    projectors.append(ExponentialConeProjector(val, onto_dual=not onto_dual))
+                    dims.append(3 * val)
             elif cone_key == POW:
+                # Power cone: val is a list of floats in (-1, 1), which are the defining alphas.
+                #   val[i] < 0 corresponds to projecting onto the dual exponential cone with
+                #   abs(val[i]) as the defining alpha.
                 if len(val) > 0:
                     projectors.append(PowerConeProjector(val, onto_dual=onto_dual))
                     dims.append(3 * np.size(val))
             elif cone_key == PSD:
+                # PSD cone: val is a list of
                 if len(val) > 0:
                     projectors.append(PSDConeProjector(val))
                     dims.append(sum([symm_size_to_dim(s) for s in val]))

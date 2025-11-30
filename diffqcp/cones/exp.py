@@ -18,7 +18,7 @@ import jax.numpy as jnp
 import jax.numpy.linalg as jla
 import equinox as eqx
 import lineax as lx
-from jaxtyping import Float, Integer, Bool, Array
+from jaxtyping import Float, Integer, Array
 
 from diffqcp.cones.abstract_projector import AbstractConeProjector
 
@@ -113,7 +113,7 @@ def proj_primal_exp_cone_heuristic(v: Float[Array, " "]) -> tuple[Float[Array, "
     :param v: Point to (heuristically) project onto the (primal) exponential cone.
     :type v: Float[Array, " "]
     :return: Heuristic projection and distance between this projection and provided point.
-    :rtype: tuple[Array, Array]
+    :rtype: tuple[Float[Array, "3"], Float[Array, " "]]
     """
     r0, s0, t0 = v[0], v[1], v[2]
     
@@ -149,13 +149,13 @@ def proj_primal_exp_cone_heuristic(v: Float[Array, " "]) -> tuple[Float[Array, "
     return vp, dist
 
 
-def proj_polar_exp_cone_heuristic(v: jax.Array) -> tuple[jax.Array, jax.Array]:
+def proj_polar_exp_cone_heuristic(v: Float[Array, "3"]) -> tuple[Float[Array, "3"], Float[Array, " "]]:
     """Computes heuristic (cheap) projection onto polar EXP cone.
     
     :param v: 1D array of size three to heuristically project onto EXP cone.
-    :type v: jax.Array
-    :return: Description
-    :rtype: tuple[Array, Array]
+    :type v: Float[Array, "3"]
+    :return: Heuristic projection and distance between this projection and provided point.
+    :rtype: tuple[Float[Array, "3"], Float[Array, " "]]
     """
     r0, s0, t0 = v[0], v[1], v[2]
 
@@ -372,7 +372,7 @@ def root_search_newton(
     :param perform_search: Whether the Newton search should be performed or not.
         If `perform_search == 0`, the newton search is performed; otherwise it is not.
         This parameter is included to avoid unnecessarily Newton searching
-        due to wrapping the `_proj_exp` in `vmap`.
+        due to wrapping the `_proj_exp_and_polar` in `vmap`.
         (See https://kidger.site/thoughts/torch2jax/)
     :type perform_search: Integer[Array, " "], optional, Default to 0.
     :return: The root of `hfun` (a scalar).
@@ -575,29 +575,22 @@ def in_exp_dual(z: Float[Array, "3"]) -> bool:
             | ((u < -CONE_THRESH) & (-u * jnp.exp(v / (u + CONE_THRESH)) - jnp.exp(1) * w <= CONE_THRESH)))
 
 
-def _proj_exp(
-    v: Float[Array, "3"],
-    onto_dual: bool = False,
-    perform_searches: Bool[Array, " "] = jnp.array(True)
-) -> Float[Array, "3"]:
-    """Project `v` onto the exponential cone (or its dual). 
+def _proj_exp_and_polar(v: Float[Array, "3"]) -> tuple[Float[Array, "3"], Float[Array, "3"]]:
+    """Project `v` onto the exponential cone and its polar cone.
+
+    To use this subroutine for projecting onto the dual cone, negate `v` before
+    passing it and then negate the polar projection output.
     
     :param v: Point in R^3 to project.
-    :type v: jax.Array
-    :param onto_dual: Whether `v` should be projected onto the EXP cone or its dual.
-    :type onto_dual: bool
-    :return: Projection of `v` onto the primal or dual EXP cone.
-    :rtype: Float[Array, "3"]
+    :type v: Float[Array, "3"],
+    :return: Projection of `v` onto the EXP cone and its polar cone, respectively.
+    :rtype: tuple[Float[Array, "3"], Float[Array, "3"]]
     """
 
     TOL = 1e-8
 
     if not jax.config.jax_enable_x64:
         TOL = 1e-4
-
-    # `onto_dual` is static
-    if onto_dual:
-        v = -1 * v
 
     vp, pdist = proj_primal_exp_cone_heuristic(v)
     vd, ddist = proj_polar_exp_cone_heuristic(v)
@@ -612,8 +605,10 @@ def _proj_exp(
     opt = jnp.logical_or(opt, jnp.minimum(pdist, ddist) <= TOL)
     opt = jnp.logical_or(opt, jnp.logical_and(err <= TOL, vp @ vd <= TOL))
 
+    # NOTE(quill): we pass this integer select to `root_search_newton`
+    #   otherwise when `vmap`ping `_proj_exp_and_polar` we are liable
+    #   to perform Newton (and binary) searches even when `opt == True`.
     perform_search = jax.lax.select(opt, 1, 0)
-    perform_search = jax.lax.select(perform_searches, perform_search, 1)
     
     def heuristic_not_optimal():
 
@@ -629,41 +624,40 @@ def _proj_exp(
                                 lambda: v_hat,
                                 lambda: vp)
 
-        def _proj_onto_dual():
+        def _proj_onot_polar():
             v_hat, dist_hat = proj_sol_polar_exp_cone(v, rho)
             return jax.lax.cond(dist_hat < ddist,
-                                lambda: -v_hat,
-                                lambda: -vd)
+                                lambda: v_hat,
+                                lambda: vd)
 
-        return jax.lax.cond(onto_dual,
-                            _proj_onto_dual,
-                            _proj_onto_primal)
+        return (_proj_onto_primal(), _proj_onot_polar())
     
     return jax.lax.cond(opt,
-                        lambda: jax.lax.cond(onto_dual, lambda: -vd, lambda: vp),
+                        lambda: (vp, vd),
                         heuristic_not_optimal)
 
 
 def _dproj_exp(
     v: Float[Array, "3"],
     proj_v: Float[Array, "3"],
-    onto_dual: bool = False
 ) -> Float[Array, "3 3"]:
-    """Form the Jacobian of the projection onto the exponential cone or its dual.
-    
-    :param v: Point in R^3.
-    :type v: Float[Array, "3"]
-    :param proj_v: The projection of `v` onto the EXP cone or its dual.
-    :type proj_v: Float[Array, "3"]
-    :param onto_dual: Whether `v` was projected onto the EXP cone or its dual.
-    :type onto_dual: bool
-    :return: The Jacobian of the projection onto the dual cone or its 
-    """
-    
-    if onto_dual:
-        v = -v
+    """Form the Jacobian of the projection onto the exponential cone.
 
-    # branch for both negative special-case (returns 3x3)
+    To use this subroutine to form the derivative of the projection onto the dual
+    cone, be sure
+        
+    1. To negate `v` before passing it to this function.
+
+    2. That the provided `proj_v` is in fact the projection of the negated `v`
+    onto the (primal) EXP cone.
+
+    :param v: Point in R^3 being projected.
+    :type v: Float[Array, "3"]
+    :param proj_v: The projection of `v` onto the EXP cone.
+        (**NOT** onto the dual or polar EXP cone.)
+    :type proj_v: Float[Array, "3"]
+    :return: The Jacobian of the projection of `v` onto the EXP cone.
+    """
     def _both_negative():
         J = jnp.zeros((3, 3), dtype=v.dtype)
         J = J.at[0, 0].set(1.0)
@@ -674,14 +668,10 @@ def _dproj_exp(
         return jax.lax.cond(v[2] > 0.0, _case1, lambda: J)
 
     def _general_case():
-        # NOTE(quill): noting since this tripped me up for a while; the projection onto the dual cone
-        #   is NOT EQUAL to `proj_v(-v, onto_dual=False)`, which is what is computed on the line below.
-        #   Moreover, when projecting onto the dual
-        p = jax.lax.cond(onto_dual, lambda _: _proj_exp(v), lambda _: proj_v, operand=None)
-        r = p[0]
-        s = p[1]
+        r = proj_v[0]
+        s = proj_v[1]
         s = jax.lax.cond(s == 0.0, lambda _: jnp.abs(r), lambda _: s, operand=None)
-        l = p[2] - v[2]
+        l = proj_v[2] - v[2]
         alpha = jnp.exp(r / s)
         beta = l * r / (s * s) * alpha
         J = jnp.zeros((4, 4), dtype=v.dtype)
@@ -712,7 +702,6 @@ def _dproj_exp(
 
         return J_inv[0:3, 1:4]
 
-    # top-level nested conditional using lax.cond for JIT compatibility
     J = jax.lax.cond(
         in_exp(v),
         lambda: jnp.identity(3, dtype=v.dtype),
@@ -724,10 +713,6 @@ def _dproj_exp(
                 _both_negative,
                 _general_case
             )))
-    
-    if onto_dual:
-        # So this leaves us with Dproj_k_star(v)[dv] = dv - Dproj_k(-v)[dv]
-        J = jnp.eye(3, dtype=v.dtype) - J
     
     return J
 
@@ -801,6 +786,9 @@ def _(op):
 class ExponentialConeProjector(AbstractConeProjector):
 
     num_cones: int = eqx.field(static=True)
+    # NOTE(quill): `onto_dual` being static is what allows us to 
+    #   use regular Python control flow with this flag throughout
+    #   this file.
     onto_dual: bool = eqx.field(static=True)
 
     def __init__(self, num_cones: int, onto_dual: bool):
@@ -808,11 +796,28 @@ class ExponentialConeProjector(AbstractConeProjector):
         self.onto_dual = onto_dual
 
     def proj_dproj(self, x):
+
+        ndimx = jnp.ndim(x)
+        if ndimx > 1:
+            raise ValueError("Only 1D arrays can be passed to `proj_dproj` "
+                             f"but a {ndimx}D array was provided. "
+                             "To operate on higher-dimensional arrays, wrap "
+                             "`proj_dproj` in `vmap`.")
+
         xs = jnp.reshape(x, (self.num_cones, 3))
         
-        projs = eqx.filter_vmap(_proj_exp, in_axes=(0, None))(xs, self.onto_dual)
-        jacs = eqx.filter_vmap(_dproj_exp, in_axes=(0, 0, None))(xs, projs, self.onto_dual)
+        if self.onto_dual:
+            xs = -xs
+        
+        primal_projs, polar_projs = eqx.filter_vmap(_proj_exp_and_polar, in_axes=0, out_axes=(0, 0))(xs)
+        jacs = eqx.filter_vmap(_dproj_exp, in_axes=(0, 0, None))(xs, primal_projs, self.onto_dual)
 
-        # It seems like `_ExponentialConeJacobianOperator` may be unecessary, but it also could be
-        #   due to potential batching.
+        if self.onto_dual:
+            projs = -polar_projs
+            # So this leaves us with Dproj_k_star(v)[dv] = dv - Dproj_k(-v)[dv]
+            jacs = eqx.filter_vmap(lambda jac: jnp.eye(3, dtype=xs.dtype) - jac, in_axes=0, out_axes=0)(jacs)
+
+        else:
+            projs = primal_projs
+
         return jnp.ravel(projs), _ExponentialConeJacobianOperator(jacs)

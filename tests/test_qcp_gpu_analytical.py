@@ -178,7 +178,7 @@ def test_least_squares_direct_solve(getkey):
 
     # TODO(quill): update the testing to follow best practices
 
-    if DirectSolver is not None:
+    if DirectSolver is not None and len(jax.devices("gpu")) > 0:
         solvers = ["jax-lu", "nvmath-direct"]
     else:
         solvers = ["jax-lu"]

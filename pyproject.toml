@@ -23,7 +23,8 @@ gpu = [
 ]
 
 [tool.setuptools.packages.find]
-packages = ["diffqcp", "diffqcp.*"]
+where = ["."]
+include = ["diffqcp*"]
 
 [dependency-groups]
 dev = [

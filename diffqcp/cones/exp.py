@@ -810,7 +810,7 @@ class ExponentialConeProjector(AbstractConeProjector):
             xs = -xs
         
         primal_projs, polar_projs = eqx.filter_vmap(_proj_exp_and_polar, in_axes=0, out_axes=(0, 0))(xs)
-        jacs = eqx.filter_vmap(_dproj_exp, in_axes=(0, 0, None))(xs, primal_projs, self.onto_dual)
+        jacs = eqx.filter_vmap(_dproj_exp, in_axes=(0, 0))(xs, primal_projs)
 
         if self.onto_dual:
             projs = -polar_projs

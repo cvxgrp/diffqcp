@@ -8,25 +8,28 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "equinox>=0.12.2",
-    "jax[cuda12]>=0.6.2",
+    "jax>=0.7.2",
     "jaxtyping>=0.3.2",
-    "lineax @ git+https://github.com/patrick-kidger/lineax.git",
+    "lineax",
     "numpy>=2.3.1",
-    "cupy-cuda12x>=13.5.1",
-    "nvmath-python[cu12]>=0.6.0",
     "scipy>=1.15.3",
 ]
 
-[tool.setuptools]
-packages = ["diffqcp"]
+[project.optional-dependencies]
+gpu = [
+    "cupy-cuda12x>=13.6.0",
+    "jax[cuda12]>=0.7.2",
+    "nvmath-python[cu12]>=0.7.0",
+]
 
-[tool.uv.sources]
-lineax = { git = "https://github.com/patrick-kidger/lineax.git" }
+[tool.setuptools.packages.find]
+packages = ["diffqcp", "diffqcp.*"]
 
 [dependency-groups]
 dev = [
     "cvxpy>=1.6.6",
     "diffcp>=1.1.4",
+    "diffqcp[gpu]",
     "juliacall>=0.9.26",
     "matplotlib>=3.10.5",
     "patdb>=0.1.0",
@@ -36,3 +39,7 @@ dev = [
 
 [tool.ruff.lint]
 ignore = ["F722"]
+
+[tool.uv.sources]
+lineax = { git = "https://github.com/patrick-kidger/lineax.git" }
+diffqcp = { workspace = true }

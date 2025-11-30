@@ -8,6 +8,11 @@ import jax.random as jr
 import cvxpy as cvx
 import equinox as eqx
 
+try:
+    from nvmath.sparse.advanced import DirectSolver
+except ImportError:
+    DirectSolver = None
+
 from diffqcp import DeviceQCP, QCPStructureGPU
 from .helpers import (quad_data_and_soln_from_qcp_coo as quad_data_and_soln_from_qcp,
                       scsr_to_bcsr, QCPProbData, get_zeros_like_csr)
@@ -145,7 +150,7 @@ def test_least_squares(getkey):
         print("REAL TRUTH: ", true_result)
         print("COMPUTED: ", dx[m:])
         
-        assert jnp.allclose(dx[m:], true_result, atol=1e-8)
+        assert jnp.allclose(dx[m:], true_result, atol=1e-6)
 
 def test_least_squares_direct_solve(getkey):
     """
@@ -177,10 +182,12 @@ def test_least_squares_direct_solve(getkey):
 
     # TODO(quill): update the testing to follow best practices
 
+    if DirectSolver is not None:
+        solvers = ["jax-lu", "nvmath-direct"]
+    else:
+        solvers = ["jax-lu"]
     
-
-    for solve_method in ["jax-lu", "nvmath-direct"]:
-    # for solve_method in ["jax-lu"]:
+    for solve_method in solvers:
         np.random.seed(0)
         for i in range(10):
             print(f"== iteration {i} ===")

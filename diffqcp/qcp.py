@@ -9,15 +9,20 @@ import lineax as lx
 from lineax import AbstractLinearOperator, IdentityLinearOperator, linear_solve
 from jaxtyping import Float, Array
 from jax.experimental.sparse import BCOO, BCSR
-from cupy import from_dlpack as cp_from_dlpack
-from cupyx.scipy.sparse import csr_matrix
-from nvmath.sparse.advanced import DirectSolver, DirectSolverAlgType
+try:
+    from cupy import from_dlpack as cp_from_dlpack
+    from cupyx.scipy.sparse import csr_matrix
+    from nvmath.sparse.advanced import DirectSolver, DirectSolverAlgType
+except ImportError:
+    cp_from_dlpack = None
+    csr_matrix = None
+    DirectSolver = None
+    DirectSolverAlgType = None
 
 from diffqcp.problem_data import (QCPStructureCPU, QCPStructureGPU,
                                    QCPStructure, ObjMatrixCPU, ObjMatrixGPU, ObjMatrix)
 from diffqcp.linops import _BlockLinearOperator
 from diffqcp.qcp_derivs import (_DuQ, _d_data_Q, _d_data_Q_adjoint_cpu, _d_data_Q_adjoint_gpu)
-# TODO(quill): make a note that the "CPU" and "GPU" qualifiers are somewhat misleading.
 
 class AbstractQCP(eqx.Module):
     """Quadratic Cone Program.
@@ -205,7 +210,7 @@ class AbstractQCP(eqx.Module):
         dx: Float[Array, " n"],
         dy: Float[Array, " m"],
         ds: Float[Array, " m"],
-        solve_method
+        solve_method = "jax-lu"
     ) -> tuple[
         Float[BCOO | BCSR, "n n"], Float[BCOO | BCSR, "m n"],
         Float[Array, " n"], Float[Array, " m"]]:
@@ -469,7 +474,7 @@ class DeviceQCP(AbstractQCP):
         dA: Float[BCSR, "m n"],
         dq: Float[Array, " n"],
         db: Float[Array, " m"],
-        solve_method: str
+        solve_method: str = "jax-lu"
     ) -> tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]:
         """Apply the derivative of the QCP's solution map to an input perturbation.
         
@@ -491,8 +496,16 @@ class DeviceQCP(AbstractQCP):
         dAT = eqx.filter_jit(self.problem_structure.form_A_transpose)(dA)
         if solve_method in ["jax-lsmr", "jax-lu"]:
             return self._jvp_common(dP=dP, dA=dA, dAT=dAT, dq=dq, db=db, solve_method=solve_method)
-        else:
+        elif solve_method == "nvmath-direct":
+            if DirectSolver is None:
+                raise ValueError("The `nvmath-direct` option can only be used when "
+                                 "`nvmath-python` is installed. Also check that CuPy is "
+                                 "installed.")
             return self._jvp_nvmath(dP=dP, dA=dA, dAT=dAT, dq=dq, db=db)
+        else:
+            raise ValueError(f"Solve method \"{solve_method}\" is not specified. "
+                             " The options are \"lsmr\", \"nvmath-direct\", and "
+                             "\"lu\".")
 
     @eqx.filter_jit
     def _vjp_nvmath_form_atoms(
@@ -644,6 +657,10 @@ class DeviceQCP(AbstractQCP):
             
             return self._vjp_common(dx=dx, dy=dy, ds=ds, produce_output=partial_d_data_Q_adjoint_gpu, solve_method=solve_method)
         elif solve_method == "nvmath-direct":
+            if DirectSolver is None:
+                raise ValueError("The `nvmath-direct` option can only be used when "
+                                 "`nvmath-python` is installed. Also check that CuPy is "
+                                 "installed.")
             return self._vjp_nvmath(dx=dx, dy=dy, ds=ds)
         else:
             raise ValueError(f"Solve method \"{solve_method}\" is not specified. "

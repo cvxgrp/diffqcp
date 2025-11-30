@@ -17,10 +17,6 @@ from diffqcp import DeviceQCP, QCPStructureGPU
 from .helpers import (quad_data_and_soln_from_qcp_coo as quad_data_and_soln_from_qcp,
                       scsr_to_bcsr, QCPProbData, get_zeros_like_csr)
 
-# TODO(quill): configure so don't run GPU tests when no GPU present
-#   => does require utilizing BCOO vs. BCSR matrices, so probably
-#   have to create different tests.
-
 def test_least_squares(getkey):
     """
     The least squares (approximation) problem
@@ -191,6 +187,7 @@ def test_least_squares_direct_solve(getkey):
         np.random.seed(0)
         for i in range(10):
             print(f"== iteration {i} ===")
+            print("!!! JAX devices: ", jax.devices())
             np.random.seed(0)
             n = np.random.randint(low=10, high=15)
             m = n + np.random.randint(low=5, high=15)

@@ -16,7 +16,7 @@ We directly exploit the underlying structure of CQPs.
 - Support for convex optimization problems constrained to the product of exponential
 and power cones (as well as their duals).
 
-# Quadratic cone programs
+# Conic quadratic programs
 
 A conic quadratic program is given by the primal and dual problems
 

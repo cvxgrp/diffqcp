@@ -210,7 +210,7 @@ class AbstractQCP(eqx.Module):
         dx: Float[Array, " n"],
         dy: Float[Array, " m"],
         ds: Float[Array, " m"],
-        solve_method = "jax-lu"
+        solve_method: str = "jax-lu"
     ) -> tuple[
         Float[BCOO | BCSR, "n n"], Float[BCOO | BCSR, "m n"],
         Float[Array, " n"], Float[Array, " m"]]:
@@ -504,8 +504,8 @@ class DeviceQCP(AbstractQCP):
             return self._jvp_nvmath(dP=dP, dA=dA, dAT=dAT, dq=dq, db=db)
         else:
             raise ValueError(f"Solve method \"{solve_method}\" is not specified. "
-                             " The options are \"lsmr\", \"nvmath-direct\", and "
-                             "\"lu\".")
+                             " The options are \"jax-lsmr\", \"nvmath-direct\", and "
+                             "\"jax-lu\".")
 
     @eqx.filter_jit
     def _vjp_nvmath_form_atoms(
@@ -618,7 +618,7 @@ class DeviceQCP(AbstractQCP):
         dx: Float[Array, " n"],
         dy: Float[Array, " m"],
         ds: Float[Array, " m"],
-        solve_method: str = "nvmath-direct"
+        solve_method: str = "jax-lu"
     ) -> tuple[
         Float[BCSR, "n n"], Float[BCSR, "m n"],
         Float[Array, " n"], Float[Array, " m"]]:
@@ -664,5 +664,5 @@ class DeviceQCP(AbstractQCP):
             return self._vjp_nvmath(dx=dx, dy=dy, ds=ds)
         else:
             raise ValueError(f"Solve method \"{solve_method}\" is not specified. "
-                             " The options are \"lsmr\", \"nvmath-direct\", and "
-                             "\"lu\".")
+                             " The options are \"jax-lsmr\", \"nvmath-direct\", and "
+                             "\"jax-lu\".")

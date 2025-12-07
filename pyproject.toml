@@ -2,7 +2,7 @@
 
 [project]
 name = "diffqcp"
-version = "0.4.3"
+version = "0.4.4"
 description = "Engine to compute Jacobian-vector and vector-Jacobian products for (convex) quadratic cone programs."
 readme = "README.md"
 requires-python = ">=3.11"

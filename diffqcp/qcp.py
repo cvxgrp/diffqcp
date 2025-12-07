@@ -136,7 +136,7 @@ class AbstractQCP(eqx.Module):
         dA: Float[BCOO | BCSR, "m n"],
         dq: Float[Array, " n"],
         db: Float[Array, " m"],
-        solve_method: str = "jax-lu"
+        solve_method: str = "jax-lsmr"
     ) -> tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]:
         """Apply the derivative of the QCP's solution map to an input perturbation.
         """
@@ -163,7 +163,7 @@ class AbstractQCP(eqx.Module):
         dy: Float[Array, " m"],
         ds: Float[Array, " m"],
         produce_output: Callable,
-        solve_method: str = "jax-lu"
+        solve_method: str = "jax-lsmr"
     ) -> tuple[
         Float[BCOO | BCSR, "n n"], Float[BCOO | BCSR, "m n"],
         Float[Array, " n"], Float[Array, " m"]]:
@@ -210,7 +210,7 @@ class AbstractQCP(eqx.Module):
         dx: Float[Array, " n"],
         dy: Float[Array, " m"],
         ds: Float[Array, " m"],
-        solve_method: str = "jax-lu"
+        solve_method: str = "jax-lsmr"
     ) -> tuple[
         Float[BCOO | BCSR, "n n"], Float[BCOO | BCSR, "m n"],
         Float[Array, " n"], Float[Array, " m"]]:
@@ -272,7 +272,7 @@ class HostQCP(AbstractQCP):
         dA: Float[BCOO, "m n"],
         dq: Float[Array, " n"],
         db: Float[Array, " m"],
-        solve_method: str = "jax-lu"
+        solve_method: str = "jax-lsmr"
     ) -> tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]:
         """Apply the derivative of the QCP's solution map to an input perturbation.
 
@@ -303,7 +303,7 @@ class HostQCP(AbstractQCP):
         dx: Float[Array, " n"],
         dy: Float[Array, " m"],
         ds: Float[Array, " m"],
-        solve_method: str = "jax-lu"
+        solve_method: str = "jax-lsmr"
     ) -> tuple[
         Float[BCSR, "n n"], Float[BCSR, "m n"],
         Float[Array, " n"], Float[Array, " m"]]:
@@ -474,7 +474,7 @@ class DeviceQCP(AbstractQCP):
         dA: Float[BCSR, "m n"],
         dq: Float[Array, " n"],
         db: Float[Array, " m"],
-        solve_method: str = "jax-lu"
+        solve_method: str = "jax-lsmr"
     ) -> tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]:
         """Apply the derivative of the QCP's solution map to an input perturbation.
         

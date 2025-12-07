@@ -132,12 +132,15 @@ For this solve, `diffqcp` provides three options:
 - LU via `lineax`, a direct method that materializes the dense coefficient matrix.
 - A direct method via `nvmath-python` / `cuDSS` that materializes the dense coefficient matrix.
 
-The default solve method is `lineax`'s LU. The LSMR solve is not packaged by default as it is not
-currently in a released `lineax` version, but it is accessible if you build `diffqcp` from source.
+The default solve method is `lineax`'s LSMR, aleit it is not packaged in a released
+`lineax` version, so `lineax `must be installed from source (*e.g.*,
+`uv add "lineax @ git+https://github.com/patrick-kidger/lineax.git"`).
 To switch between the solvers, provide `jax-lsmr`, `jax-lu`, or `nvmath-direct` (as strings) to the optional
 `solve_method` parameter of an `AbstractQCP`'s `jvp` and `vjp` methods. 
 
-**Future direction:** We're currently working on materializing the coefficient matrix as a sparse array, not a dense matrix. The `lineax` LU method would still require forming the dense matrix,
+**Future direction:** 
+1. We're currently debugging why the direct solve methods yield exploding gradients.
+2. We're currently working on materializing the coefficient matrix as a sparse array, not a dense matrix. The `lineax` LU method would still require forming the dense matrix,
 but the cuDSS backed-solve already accepts sparse arrays in CSR layout.
 
 # Installation

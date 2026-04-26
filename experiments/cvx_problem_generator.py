@@ -1,7 +1,7 @@
-import numpy as np
 import cvxpy as cvx
-import scipy.sparse as sparse
+import numpy as np
 import scipy.linalg as la
+
 
 def randn_symm(n, random_array):
     A = random_array(n, n)
@@ -69,7 +69,7 @@ def generate_portfolio_problem(n) -> cvx.Problem:
     problem = cvx.Problem(cvx.Maximize(ret - gamma * risk), [cvx.sum(w) == 1, w >= 0])
 
     return problem
-    
+
 
 def generate_least_squares_eq(m, n) -> cvx.Problem:
     """Generate a conic problem with unique solution.
@@ -88,7 +88,7 @@ def generate_least_squares_eq(m, n) -> cvx.Problem:
     problem = cvx.Problem(cvx.Minimize(objective), constraints)
     assert problem.is_dpp()
     return problem
-    
+
 
 def generate_LS_problem(m, n) -> cvx.Problem:
     A = np.random.randn(m, n)
@@ -100,7 +100,7 @@ def generate_LS_problem(m, n) -> cvx.Problem:
     problem = cvx.Problem(cvx.Minimize(f0), [r == A@x - b])
     return problem
 
-    
+
 def sigmoid(z):
   return 1/(1 + np.exp(-z))
 
@@ -108,7 +108,7 @@ def generate_group_lasso_logistic(n: int, m: int) -> cvx.Problem:
     X = np.random.randn(m, 10 * n)
     true_beta = np.zeros(10 * n)
     true_beta[:10 * n // 100] = 1.0
-    y = np.round(sigmoid(X @ true_beta + np.random.randn(m)*0.5)) 
+    y = np.round(sigmoid(X @ true_beta + np.random.randn(m)*0.5))
 
     beta = cvx.Variable(10 * n)
     lambd = 0.1

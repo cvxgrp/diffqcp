@@ -1,13 +1,12 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING
 
-from jax import ShapeDtypeStruct
-import jax.numpy as jnp
 import equinox as eqx
+import jax.numpy as jnp
 import lineax as lx
-from lineax import AbstractLinearOperator
-from jaxtyping import Array, Float, Integer
+from jax import ShapeDtypeStruct
 from jax.experimental.sparse import BCOO, BCSR
+from jaxtyping import Array, Float, Integer
+from lineax import AbstractLinearOperator
 
 from diffqcp.problem_data import ObjMatrix
 
@@ -41,7 +40,7 @@ class _DuQAdjoint(AbstractLinearOperator):
     def as_matrix(self):
         raise NotImplementedError(f"{self.__class__.__name__}'s `as_matrix` method is"
                                   + " not yet implemented.")
-    
+
     def transpose(self) -> _DuQ:
         return _DuQ(self.P, self.Px, self.xTPx, self.A, self.AT, self.q,
                     self.b, self.x, self.tau, self.n, self.m)
@@ -49,7 +48,7 @@ class _DuQAdjoint(AbstractLinearOperator):
     def in_structure(self):
         return ShapeDtypeStruct(shape=(self.n + self.m + 1,),
                                 dtype=self.A.dtype)
-    
+
     def out_structure(self):
         return self.in_structure()
 
@@ -78,19 +77,19 @@ class _DuQ(AbstractLinearOperator):
         out3 = ((-2/self.tau) * self.x @ Pdx - self.q @ dx - self.b @ dy
                 + (1/self.tau**2) * dtau * self.xTPx)
         return jnp.concatenate([out1, out2, jnp.array([out3])])
-    
+
     def as_matrix(self):
         raise NotImplementedError(f"{self.__class__.__name__}'s `as_matrix` method is"
                                   + " not yet implemented.")
-    
+
     def transpose(self) -> _DuQAdjoint:
         return _DuQAdjoint(self.P, self.Px, self.xTPx, self.A, self.AT, self.q,
                            self.b, self.x, self.tau, self.n, self.m)
-    
+
     def in_structure(self):
         return ShapeDtypeStruct(shape=(self.n + self.m + 1,),
                                 dtype=self.A.dtype)
-    
+
     def out_structure(self):
         return self.in_structure()
 
@@ -130,7 +129,7 @@ def _d_data_Q(
     Specifically, note that dP should be the true perturbation to the matrix P,
     **not just the upper triangular part.**
     """
-    
+
     dPx = dP.mv(x)
     out1 = dPx + dAT @ y + tau * dq
     out2 = dA @ -x + tau * db
@@ -158,7 +157,7 @@ def _adjoint_values(
     dA_values = y[A_rows] * w1[A_cols] - w2[A_rows] * x[A_cols]
     dq = tau * w1 - w3 * x
     db = tau * w2 - w3 * y
-    
+
     return (dP_values, dA_values, dq, db)
 
 
@@ -187,7 +186,7 @@ def _d_data_Q_adjoint_cpu(
     dP = BCOO((dP_values, P_indices), shape=(n, n))
     A_indices = jnp.stack([A_rows, A_cols], axis=1)
     dA = BCOO((dA_values, A_indices), shape=(m, n))
-    
+
     return (dP, dA, dq, db)
 
 

@@ -20,8 +20,10 @@ def test_block_operator(getkey):
     A = jr.normal(getkey(), (m, n))
     op1 = lx.DiagonalLinearOperator(x)
     op2 = lx.MatrixLinearOperator(A)
-    _fn = lambda y: A.T @ y
-    in_struc_fn = lambda: jnp.arange(m, dtype=x.dtype)
+    def _fn(y):
+        return A.T @ y
+    def in_struc_fn():
+        return jnp.arange(m, dtype=x.dtype)
     op3 = lx.FunctionLinearOperator(_fn, input_structure=jax.eval_shape(in_struc_fn))
     ops = [op1, op2, op3]
     block_op = _BlockLinearOperator(ops)
@@ -40,7 +42,7 @@ def test_block_operator(getkey):
     assert tree_allclose(out_correct, block_op.mv(v))
 
     # --- test vmap ---
-    
+
     v = jr.normal(getkey(), (5, in_dim))
     out1 = jax.vmap(op1.mv)(v[:, 0:n])
     out2 = jax.vmap(op2.mv)(v[:, n:2*n])
@@ -49,7 +51,7 @@ def test_block_operator(getkey):
     assert tree_allclose(out_correct, jax.vmap(block_op.mv)(v))
 
     # === test transpose ===
-    
+
     u = jr.normal(getkey(), out_dim)
     out1 = op1.transpose().mv(u[0:n])
     out2 = op2.transpose().mv(u[n:n+m])

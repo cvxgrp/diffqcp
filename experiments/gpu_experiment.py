@@ -9,37 +9,41 @@ Some sharp bits:
 
 """
 
+from typing import TypeAlias
+
 from juliacall import Main as jl
+
 # jl.seval('import Pkg; Pkg.develop(url="https://github.com/oxfordcontrol/Clarabel.jl.git")')
 jl.seval('using Clarabel, LinearAlgebra, SparseArrays')
 # jl.seval('Pkg.add("CUDA")')
 jl.seval('using CUDA, CUDA.CUSPARSE')
 
-type CuVector = jl.CUDA.Cuvector
-type CuSparseMatrixCSR = jl.CUDA.CUSPARSE.CuSparseMatrixCSR
+CuVector: TypeAlias = jl.CUDA.Cuvector
+CuSparseMatrixCSR: TypeAlias = jl.CUDA.CUSPARSE.CuSparseMatrixCSR
 
-import time
 import os
+import time
 from dataclasses import dataclass, field
-import numpy as np
+
 import jax
+import numpy as np
+
 # TODO(quill): set JAX flags
 jax.config.update("jax_enable_x64", True)
+import cupy as cp
+import equinox as eqx
 import jax.numpy as jnp
 import jax.numpy.linalg as la
-from jaxtyping import Float, Array
-import cupy as cp
+import matplotlib.pyplot as plt
+import scipy.sparse as sparse
 from cupy import from_dlpack as cp_from_dlpack
 from cupy.sparse import csr_matrix
-import equinox as eqx
-import scipy.sparse as sparse
-import patdb
 from jax.experimental.sparse import BCSR
+from jaxtyping import Array, Float
 
-from diffqcp.qcp import DeviceQCP, QCPStructureGPU
 import experiments.cvx_problem_generator as prob_generator
+from diffqcp.qcp import DeviceQCP, QCPStructureGPU
 from tests.helpers import QCPProbData, scsr_to_bcsr
-import matplotlib.pyplot as plt
 
 # what auxillary objects can I create to store the CuPy <-> Julia objects?
 
@@ -57,10 +61,7 @@ def JuliaCuVector2CuPyArray(jl_arr):
     dtype = jl.eltype(jl_arr)
 
     # Map Julia type to CuPy dtype
-    if dtype == jl.Float64:
-        dtype = cp.float64
-    else:
-        dtype = cp.float32
+    dtype = cp.float64 if dtype == jl.Float64 else cp.float32
 
     # Compute memory size in bytes (assuming 1D vector)
     size_bytes = int(span[0] * cp.dtype(dtype).itemsize)
@@ -126,7 +127,7 @@ class SolverData:
 
     def __post_init__(self):
         self.Pjl = cupy_csr_to_julia_csr(self.Pcp)
-        self.Ajl = cupy_csr_to_julia_csr(self.Acp)        
+        self.Ajl = cupy_csr_to_julia_csr(self.Acp)
         self.qjl = jl.Clarabel.cupy_to_cuvector(jl.Float64, int(self.qcp.data.ptr), self.qcp.size)
         self.bjl = jl.Clarabel.cupy_to_cuvector(jl.Float64, int(self.bcp.data.ptr), self.bcp.size)
 
@@ -160,7 +161,7 @@ def make_step(
 
 def grad_desc(
     Pk: Float[BCSR, "n n"],
-    Ak: Float[BCSR, "m n"], 
+    Ak: Float[BCSR, "m n"],
     solver_data: SolverData,
     target_x: Float[Array, " n"],
     target_y: Float[Array, " m"],
@@ -170,10 +171,10 @@ def grad_desc(
     num_iter: int = 100,
     step_size: float = 1e-5,
 ) -> list[Float[Array, ""]]:
-    
+
     curr_iter = 0
     losses = []
-    
+
     while curr_iter < num_iter:
 
         jl.Clarabel.solve_b(cuclarabel_solver)
@@ -206,8 +207,8 @@ def grad_desc(
         curr_iter += 1
 
     return losses
-        
-        
+
+
 if __name__ == "__main__":
 
     np.random.seed(28)
@@ -223,9 +224,9 @@ if __name__ == "__main__":
     print("Time to generate the target problem,"
           + " canonicalize it, and solve it on the CPU:"
           + f" {end_time - start_time} seconds")
-    
+
     # === Obtain target vectors + warm up GPU and JIT compile CuClarabel and diffqcp ===
-    
+
     solver_data = SolverData(cpu_csr_to_cupy_csr(prob_data_cpu.Pcsr),
                              cpu_csr_to_cupy_csr(prob_data_cpu.Acsr),
                              cp.array(prob_data_cpu.q),
@@ -278,7 +279,7 @@ if __name__ == "__main__":
     b = jax.dlpack.from_dlpack(solver_data.bcp)
 
     # --- JIT compile `make_step` (so compile what's needed for `diffqcp`) ---
-    
+
     problem_structure = QCPStructureGPU(P=P, A=A, cone_dims=prob_data_cpu.scs_cones)
 
     qcp_initial = DeviceQCP(P=P, A=A, q=q, b=b,
@@ -288,7 +289,7 @@ if __name__ == "__main__":
     fake_target_x = 1e-3 * jnp.arange(jnp.size(q), dtype=q.dtype)
     fake_target_y = 1e-3 * jnp.arange(jnp.size(b), dtype=b.dtype)
     fake_target_s = 1e-3 * jnp.arange(jnp.size(b), dtype=b.dtype)
-    
+
     start_time = time.perf_counter()
     result = make_step(qcp_initial, fake_target_x, fake_target_y,
                        fake_target_s, step_size=1e-5)
@@ -323,12 +324,12 @@ if __name__ == "__main__":
     print(f"Canonicalized m is: {prob_data_cpu.m}")
 
     # Put new data on GPU and create CuPy <-> Julia linking
-    
+
     solver_data = SolverData(cpu_csr_to_cupy_csr(prob_data_cpu.Pcsr),
                              cpu_csr_to_cupy_csr(prob_data_cpu.Acsr),
                              cp.array(prob_data_cpu.q),
                              cp.array(prob_data_cpu.b))
-    
+
     # Because problem is DPP-compliant, now just update existing solver object
     jl.Clarabel.update_P_b(jl.solver, solver_data.Pjl)
     jl.Clarabel.update_A_b(jl.solver, solver_data.Ajl)
@@ -342,7 +343,7 @@ if __name__ == "__main__":
     Ak = BCSR((jax.dlpack.from_dlpack(solver_data.Acp.data),
                prob_data_cpu.Acsr.indices,
                prob_data_cpu.Acsr.indptr), shape=solver_data.Acp.shape)
-    
+
     # num_iter = 100
     num_iter = 25
     cp.cuda.Device().synchronize()
@@ -372,4 +373,3 @@ if __name__ == "__main__":
     plt.savefig(output_path, format="svg")
     plt.close()
 
-    

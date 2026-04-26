@@ -1,12 +1,12 @@
 import time
 
-import numpy as np
-import jax
-import jax.numpy as jnp
-import scipy.linalg as la
-import jax.random as jr
 import cvxpy as cvx
 import equinox as eqx
+import jax
+import jax.numpy as jnp
+import jax.random as jr
+import numpy as np
+import scipy.linalg as la
 
 try:
     from nvmath.sparse.advanced import DirectSolver
@@ -14,8 +14,9 @@ except ImportError:
     DirectSolver = None
 
 from diffqcp import DeviceQCP, QCPStructureGPU
-from .helpers import (quad_data_and_soln_from_qcp_coo as quad_data_and_soln_from_qcp,
-                      scsr_to_bcsr, QCPProbData, get_zeros_like_csr)
+
+from .helpers import QCPProbData, get_zeros_like_csr, scsr_to_bcsr
+
 
 def test_least_squares(getkey):
     """
@@ -90,7 +91,7 @@ def test_least_squares(getkey):
         dq = jnp.zeros_like(q)
 
         Dx_b = jnp.array(la.solve(A_orig.T @ A_orig, A_orig.T))
-        
+
         true_result = Dx_b @ db
 
         # patdb.debug()
@@ -122,7 +123,7 @@ def test_least_squares(getkey):
         jvp_compiled = eqx.filter_jit(jvp_wrapped)
 
         # print out static vs traced inputs
-        
+
         # Call it
         start = time.perf_counter()
         dx, dy, ds = jvp_compiled(qcp_traced, inputs_traced)
@@ -131,7 +132,7 @@ def test_least_squares(getkey):
         print(f"compile + solve time = {end - start}..")
 
         start = time.perf_counter()
-        dx, dy, ds = jvp_compiled(qcp_traced, inputs_traced)
+        dx, _dy, _ds = jvp_compiled(qcp_traced, inputs_traced)
         # tol = jnp.abs(dx)
         dx.block_until_ready()
         end = time.perf_counter()
@@ -145,7 +146,7 @@ def test_least_squares(getkey):
         print("SMALL TRUTH: ", Dx_b @ (1e-6 * db))
         print("REAL TRUTH: ", true_result)
         print("COMPUTED: ", dx[m:])
-        
+
         assert jnp.allclose(dx[m:], true_result, atol=1e-6)
 
 def test_least_squares_direct_solve(getkey):
@@ -179,11 +180,8 @@ def test_least_squares_direct_solve(getkey):
     # NOTE(quill): this is a bit sloppy; asserting first device is a
     #   gpu device.
     jax_gpu_enabled = jax.devices()[0].platform == "gpu"
-    if DirectSolver is not None and jax_gpu_enabled:
-        solvers = ["jax-lu", "nvmath-direct"]
-    else:
-        solvers = ["jax-lu"]
-    
+    solvers = ["jax-lu", "nvmath-direct"] if DirectSolver is not None and jax_gpu_enabled else ["jax-lu"]
+
     for solve_method in solvers:
         np.random.seed(0)
         for i in range(10):
@@ -232,12 +230,12 @@ def test_least_squares_direct_solve(getkey):
             dq = jnp.zeros_like(q)
 
             Dx_b = jnp.array(la.solve(A_orig.T @ A_orig, A_orig.T))
-            
+
             true_result = Dx_b @ db
 
             dx, _, _ = qcp.jvp(dP, dA, dq, -db, solve_method=solve_method)
 
             print("true result shape: ", jnp.shape(true_result))
             print("dx shape: ", jnp.shape(dx[m:]))
-            
+
             assert jnp.allclose(dx[m:], true_result, atol=1e-8)

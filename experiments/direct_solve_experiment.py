@@ -1,33 +1,34 @@
 """
 Experiment solving problems on the CPU and computing VJPs on the GPU.
 """
-import time
 import os
-import numpy as np
+import time
+from typing import TypeAlias
+
 import jax
+import numpy as np
+
 jax.config.update("jax_enable_x64", True)
+import clarabel
+import equinox as eqx
 import jax.numpy as jnp
 import jax.numpy.linalg as la
-from jaxtyping import Float, Array
-import equinox as eqx
-from jax.experimental.sparse import BCSR
-import clarabel
-from scipy.sparse import (spmatrix, sparray,
-                          csc_matrix, csc_array, triu)
-import patdb
 import matplotlib.pyplot as plt
+from jax.experimental.sparse import BCSR
+from jaxtyping import Array, Float
+from scipy.sparse import csc_array, csc_matrix, sparray, spmatrix, triu
 
-from diffqcp import DeviceQCP, QCPStructureGPU
 import experiments.cvx_problem_generator as prob_generator
+from diffqcp import DeviceQCP, QCPStructureGPU
 from tests.helpers import QCPProbData, scsr_to_bcsr
 
-type SP = spmatrix | sparray
-type SCSC = csc_matrix | csc_array
+SP: TypeAlias = spmatrix | sparray
+SCSC: TypeAlias = csc_matrix | csc_array
 
 
 def compute_loss(target_x, target_y, target_s, x, y, s):
     return (0.5 * la.norm(x - target_x)**2 + 0.5 * la.norm(y - target_y)**2
-            + 0.5 * la.norm(s - target_s)**2) 
+            + 0.5 * la.norm(s - target_s)**2)
 
 
 def _update_data(
@@ -84,13 +85,13 @@ def grad_desc(
     while curr_iter < num_iter:
 
         solution = clarabel_solver.solve()
-        
+
         xk = jnp.array(solution.x)
         yk = jnp.array(solution.z)
         sk = jnp.array(solution.s)
-        
+
         qcp = DeviceQCP(Pk, Ak, qk, bk, xk, yk, sk, qcp_problem_structure)
-        
+
         loss, *new_data = make_step(qcp, target_x, target_y, target_s,
                                     Pk.data, Ak.data, qk, bk, step_size)
         losses.append(loss)
@@ -103,7 +104,7 @@ def grad_desc(
         data.Acsc.data = np.asarray(Ak.data)[Acoo_csc_perm]
         data.q = np.asarray(qk)
         data.b = np.asarray(bk)
-        
+
         solver.update(P=data.Pupper_csc, q=data.q, A=data.Acsc, b=data.b)
 
         curr_iter += 1
@@ -112,7 +113,7 @@ def grad_desc(
 
 if __name__ == "__main__":
     np.random.seed(28)
-    
+
     # SMALL
     # m = 20
     # n = 10
@@ -129,7 +130,7 @@ if __name__ == "__main__":
     # ensure validity of the following ordering permutations.
     np.testing.assert_allclose(prob_data_cpu.Pcoo.data,
                                prob_data_cpu.Pcsr.data)
-    
+
     np.testing.assert_allclose(prob_data_cpu.Acoo.data,
                                prob_data_cpu.Acsr.data)
 
@@ -137,7 +138,7 @@ if __name__ == "__main__":
                                      prob_data_cpu.Pupper_coo.col))
     A_coo_to_csc_order = np.lexsort((prob_data_cpu.Acoo.row,
                                      prob_data_cpu.Acoo.col))
-    
+
     cones = prob_data_cpu.clarabel_cones
     settings = clarabel.DefaultSettings()
     settings.verbose = False
@@ -154,7 +155,7 @@ if __name__ == "__main__":
     solution = solver.solve()
     end_solve = time.perf_counter()
     print(f"Clarabel solve took: {end_solve - start_solve} seconds")
-    
+
     target_x = jnp.array(solution.x)
     target_y = jnp.array(solution.z)
     target_s = jnp.array(solution.s)
@@ -207,7 +208,7 @@ if __name__ == "__main__":
                                     prob_data_cpu.b,
                                     cones,
                                     settings)
-    
+
     num_iter = 100
 
     start_time = time.perf_counter()

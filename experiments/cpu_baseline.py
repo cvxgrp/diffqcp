@@ -1,27 +1,34 @@
 """Clarabel+diffcp learning loop for paper experiment."""
 
+import os
 import time
 from dataclasses import dataclass, field
-import os
+from typing import TypeAlias
 
-import numpy as np
-from numpy import ndarray
-import scipy.linalg as la
-from scipy.sparse import (spmatrix, sparray, csr_matrix,
-                          csr_array, coo_matrix, coo_array,
-                          csc_matrix, csc_array)
 import cvxpy as cvx
+import matplotlib.pyplot as plt
+import numpy as np
+import scipy.linalg as la
 from diffcp import solve_and_derivative
 from jaxtyping import Float
+from numpy import ndarray
+from scipy.sparse import (
+    coo_array,
+    coo_matrix,
+    csc_array,
+    csc_matrix,
+    csr_array,
+    csr_matrix,
+    sparray,
+    spmatrix,
+)
 
 import experiments.cvx_problem_generator as prob_generator
-import patdb
-import matplotlib.pyplot as plt
 
-type SP = spmatrix | sparray
-type SCSR = csr_matrix | csr_array
-type SCSC = csc_matrix | csc_array
-type SCOO = coo_matrix | coo_array
+SP: TypeAlias = spmatrix | sparray
+SCSR: TypeAlias = csr_matrix | csr_array
+SCSC: TypeAlias = csc_matrix | csc_array
+SCOO: TypeAlias = coo_matrix | coo_array
 
 @dataclass
 class CPProbData:
@@ -37,7 +44,7 @@ class CPProbData:
     m: int = field(init=False)
 
     def __post_init__(self):
-        
+
         probdata, _, _ = self.problem.get_problem_data(cvx.CLARABEL, ignore_dpp=True, solver_opts={'use_quad_obj': False})
         self.A = probdata["A"].tocsc()
         self.c, self.b = probdata["c"], probdata["b"]
@@ -85,12 +92,12 @@ def grad_desc(
         prob_data.b += -step_size * db
 
         curr_iter += 1
-    
+
     return losses
 
 
 if __name__ == "__main__":
-    
+
     np.random.seed(28)
 
     # SMALL
@@ -109,7 +116,7 @@ if __name__ == "__main__":
     end_time = time.perf_counter()
     print("Time to generate the target problem and"
           + f" canonicalize it: {end_time - start_time} seconds")
-    
+
     start_time = time.perf_counter()
     target_x, target_y, target_s, _, DT = solve_and_derivative(prob_data.A,
                                                                prob_data.b,
@@ -131,7 +138,7 @@ if __name__ == "__main__":
     end_time = time.perf_counter()
     print("Time to do the main diffcp computations:"
           + f" {end_time - start_time}")
-    
+
     start_time = time.perf_counter()
     # initial_problem = prob_generator.generate_least_squares_eq(m=m, n=n)
     initial_problem = prob_generator.generate_group_lasso_logistic(m=m, n=m)
@@ -169,5 +176,5 @@ if __name__ == "__main__":
     plt.savefig(output_path, format="svg")
     plt.close()
 
-    
+
 

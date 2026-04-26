@@ -1,37 +1,42 @@
 """
 Experiment solving problems on the GPU and computing VJPs on the CPU.
 """
+from typing import TypeAlias
+
 from juliacall import Main as jl
+
 # jl.seval('import Pkg; Pkg.develop(url="https://github.com/oxfordcontrol/Clarabel.jl.git")')
 jl.seval('using Clarabel, LinearAlgebra, SparseArrays')
 # jl.seval('Pkg.add("CUDA")')
 jl.seval('using CUDA, CUDA.CUSPARSE')
 
-type CuVector = jl.CUDA.Cuvector
-type CuSparseMatrixCSR = jl.CUDA.CUSPARSE.CuSparseMatrixCSR
+CuVector: TypeAlias = jl.CUDA.Cuvector
+CuSparseMatrixCSR: TypeAlias = jl.CUDA.CUSPARSE.CuSparseMatrixCSR
 
-import time
 import os
+import time
 from dataclasses import dataclass, field
-import numpy as np
+
 import jax
+import numpy as np
+
 # TODO(quill): set JAX flags
 jax.config.update("jax_enable_x64", True)
 jax.config.update("jax_platform_name", "cpu")
+import cupy as cp
+import equinox as eqx
 import jax.numpy as jnp
 import jax.numpy.linalg as la
-from jaxtyping import Float, Array
-import cupy as cp
-from cupy.sparse import csr_matrix
-import equinox as eqx
-import scipy.sparse as sparse
-import patdb
-from jax.experimental.sparse import BCOO
-
-from diffqcp.qcp import HostQCP, QCPStructureCPU
-import experiments.cvx_problem_generator as prob_generator
-from tests.helpers import QCPProbData, scoo_to_bcoo
 import matplotlib.pyplot as plt
+import scipy.sparse as sparse
+from cupy.sparse import csr_matrix
+from jax.experimental.sparse import BCOO
+from jaxtyping import Array, Float
+
+import experiments.cvx_problem_generator as prob_generator
+from diffqcp.qcp import HostQCP, QCPStructureCPU
+from tests.helpers import QCPProbData, scoo_to_bcoo
+
 
 def JuliaCuVector2CuPyArray(jl_arr) -> cp.ndarray:
     """Taken from https://github.com/cvxgrp/CuClarabel/blob/main/src/python/jl2py.py.
@@ -44,10 +49,7 @@ def JuliaCuVector2CuPyArray(jl_arr) -> cp.ndarray:
     dtype = jl.eltype(jl_arr)
 
     # Map Julia type to CuPy dtype
-    if dtype == jl.Float64:
-        dtype = cp.float64
-    else:
-        dtype = cp.float32
+    dtype = cp.float64 if dtype == jl.Float64 else cp.float32
 
     # Compute memory size in bytes (assuming 1D vector)
     size_bytes = int(span[0] * cp.dtype(dtype).itemsize)
@@ -100,7 +102,7 @@ class SolverData:
 
     def __post_init__(self):
         self.Pjl = cupy_csr_to_julia_csr(self.Pcp)
-        self.Ajl = cupy_csr_to_julia_csr(self.Acp)        
+        self.Ajl = cupy_csr_to_julia_csr(self.Acp)
         self.qjl = jl.Clarabel.cupy_to_cuvector(jl.Float64, int(self.qcp.data.ptr), self.qcp.size)
         self.bjl = jl.Clarabel.cupy_to_cuvector(jl.Float64, int(self.bcp.data.ptr), self.bcp.size)
 
@@ -151,7 +153,7 @@ def grad_desc(
     while curr_iter < num_iter:
 
         jl.Clarabel.solve_b(cuclarabel_solver)
-        
+
         xkcp = JuliaCuVector2CuPyArray(jl.solver.solution.x)
         xk = cp.asnumpy(xkcp)
         ykcp = JuliaCuVector2CuPyArray(jl.solver.solution.z)
@@ -173,7 +175,7 @@ def grad_desc(
         solver_data.Acp.data += cp.asarray(dA_step.data)
         solver_data.qcp += cp.asarray(dq_step)
         solver_data.bcp += cp.asarray(db_step)
-        
+
         # Also update solver
         jl.Clarabel.update_P_b(cuclarabel_solver, solver_data.Pjl)
         jl.Clarabel.update_A_b(cuclarabel_solver, solver_data.Ajl)
@@ -201,14 +203,14 @@ if __name__ == "__main__":
     print("Time to generate the target problem,"
           + " canonicalize it, and solve it on the CPU:"
           + f" {end_time - start_time} seconds")
-    
+
     # === Obtain target vectors + warm up GPU and JIT compile CuClarabel and diffqcp ===
-    
+
     solver_data = SolverData(cpu_csr_to_cupy_csr(prob_data_cpu.Pcsr),
                              cpu_csr_to_cupy_csr(prob_data_cpu.Acsr),
                              cp.array(prob_data_cpu.q),
                              cp.array(prob_data_cpu.b))
-    
+
     # Create Julia cone variables
     jl.zero_cone = prob_data_cpu.scs_cones["z"]
     jl.nonneg_cone = prob_data_cpu.scs_cones["l"]
@@ -240,7 +242,7 @@ if __name__ == "__main__":
     x_target = jnp.array(cp.asnumpy(xcp))
     y_target = jnp.array(cp.asnumpy(ycp))
     s_target = jnp.array(cp.asnumpy(scp))
-    
+
     # --- Time compiled speedup ---
     start_solve = time.perf_counter()
     jl.Clarabel.solve_b(jl.solver) # solve new problem w/o creating memory
@@ -297,12 +299,12 @@ if __name__ == "__main__":
     print(f"Canonicalized m is: {prob_data_cpu.m}")
 
     # Put new data on GPU and create CuPy <-> Julia linking
-    
+
     solver_data = SolverData(cpu_csr_to_cupy_csr(prob_data_cpu.Pcsr),
                              cpu_csr_to_cupy_csr(prob_data_cpu.Acsr),
                              cp.array(prob_data_cpu.q),
                              cp.array(prob_data_cpu.b))
-    
+
     # Because problem is DPP-compliant, now just update existing solver object
     jl.Clarabel.update_P_b(jl.solver, solver_data.Pjl)
     jl.Clarabel.update_A_b(jl.solver, solver_data.Ajl)

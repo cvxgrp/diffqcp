@@ -1,29 +1,30 @@
 from __future__ import annotations
 
 __all__ = [
+    "ObjMatrixCPU",
+    "ObjMatrixGPU",
     "QCPStructureCPU",
     "QCPStructureGPU",
-    "QCPStructureLayers",
-    "ObjMatrixGPU",
-    "ObjMatrixCPU"
+    "QCPStructureLayers"
 ]
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeAlias
 
-from jax import ShapeDtypeStruct
-import jax.numpy as jnp
-from jax.experimental.sparse import BCOO, BCSR
 import equinox as eqx
+import jax.numpy as jnp
 import lineax as lx
+from jax import ShapeDtypeStruct
+from jax.experimental.sparse import BCOO, BCSR
+from jaxtyping import Array, Bool, Float, Integer
 from lineax import AbstractLinearOperator
-from jaxtyping import Float, Integer, Bool, Array
 
 if TYPE_CHECKING:
     from cvxpy.reductions.dcp2cone.cone_matrix_stuffing import ParamConeProg
 
-from diffqcp.cones.canonical import ProductConeProjector
 from diffqcp._helpers import _coo_to_csr_transpose_map, _TransposeCSRInfo
+from diffqcp.cones.canonical import ProductConeProjector
+
 
 class QCPStructure(eqx.Module):
 
@@ -32,11 +33,11 @@ class QCPStructure(eqx.Module):
     m: eqx.AbstractVar[int]
     N: eqx.AbstractVar[int]
     cone_projector: eqx.AbstractVar[ProductConeProjector]
-    
+
     @abstractmethod
     def obj_matrix_init(self):
         pass
-    
+
     @abstractmethod
     def constr_matrix_init(self):
         pass
@@ -46,7 +47,7 @@ class QCPStructureCPU(QCPStructure):
     """
     `P` is assumed to be the upper triangular part of the matrix in the quadratic form.
     """
-    
+
     n: int
     m: int
     N: int
@@ -68,7 +69,7 @@ class QCPStructureCPU(QCPStructure):
         cone_dims: dict[str, int | list[int] | list[float]],
         onto_dual: bool = True
     ):
-        
+
         # NOTE(quill): checks on `cone_dims` done in `ProductConeProjector.__init__`
         self.cone_projector = ProductConeProjector(cone_dims, onto_dual=onto_dual)
 
@@ -92,7 +93,7 @@ class QCPStructureCPU(QCPStructure):
         if not isinstance(A, BCOO):
             raise ValueError("The objective matrix `A` must be a `BCOO` JAX matrix,"
                              + f" but the provided `A` is a {type(A)}.")
-        
+
         # NOTE(quill): could theoretically allow mismatch and broadcast
         #   (Just to keep in mind for the future; not needed now.)
         if A.n_batch != P.n_batch:
@@ -106,7 +107,7 @@ class QCPStructureCPU(QCPStructure):
             self.constr_matrix_init(A)
 
         self.N = self.n + self.m + 1
-    
+
     def obj_matrix_init(self, P: Float[BCOO, "n n"]):
         # TODO(quill): checks on P being upper triangular.
         #   (Might as well do since this structure is formed once.)
@@ -115,12 +116,12 @@ class QCPStructureCPU(QCPStructure):
         self.P_nonzero_cols = P.indices[:, 1]
         self.P_diag_mask = P.indices[:, 0] == P.indices[:, 1]
         self.P_diag_indices = P.indices[:, 0][self.P_diag_mask]
-        
+
     def constr_matrix_init(self, A: Float[BCOO, "m n"]):
         self.m = jnp.shape(A)[0]
         self.A_nonzero_rows = A.indices[:, 0]
         self.A_nonzero_cols = A.indices[:, 1]
-            
+
     def form_obj(self, P_like: Float[BCOO, "n n"]) -> ObjMatrixCPU:
         diag_values = P_like.data[self.P_diag_mask]
         diag = jnp.zeros(self.n)
@@ -138,12 +139,12 @@ class QCPStructureGPU(QCPStructure):
     N: int
     cone_projector: ProductConeProjector
     is_batched: bool
-    
+
     P_csr_indices: Integer[Array, "..."]
     P_csr_indptr: Integer[Array, "..."]
     P_nonzero_rows: Integer[Array, "..."]
     P_nonzero_cols: Integer[Array, "..."]
-    
+
     A_csr_indices: Integer[Array, "..."]
     A_csr_indptr: Integer[Array, "..."]
     A_nonzero_rows: Integer[Array, "..."]
@@ -157,10 +158,10 @@ class QCPStructureGPU(QCPStructure):
         cone_dims: dict[str, int | list[int] | list[float]],
         onto_dual: bool = True
     ):
-        
+
         # NOTE(quill): checks on `cone_dims` done in `ProductConeProjector.__init__`
         self.cone_projector = ProductConeProjector(cone_dims, onto_dual=onto_dual)
-        
+
         if not isinstance(P, BCSR):
             raise ValueError("The objective matrix `P` must be a `BCSR` JAX matrix,"
                              + f" but the provided `P` is a {type(P)}.")
@@ -175,25 +176,25 @@ class QCPStructureGPU(QCPStructure):
         else:
             raise ValueError("The objective matrix `P` must have at most one batch dimension,"
                              + f" but the provided BCSR matrix has {P.n_batch} dimensions.")
-        
+
         if not isinstance(A, BCSR):
             raise ValueError("The objective matrix `A` must be a `BCSR` JAX matrix,"
                              + f" but the provided `A` is a {type(A)}.")
-        
+
         # NOTE(quill): see note in `QCPStructureCPU`
         if A.n_batch != P.n_batch:
             raise ValueError(f"The objective matrix `P` has {P.n_batch} dimensions"
                              + f" while the constraint matrix `A` has {A.n_batch}"
                              + " dimensions. The batch dimensionality of `P` and `A`"
                              + " must match.")
-        
+
         if self.is_batched:
             self.constr_matrix_init(A[0])
         else:
             self.constr_matrix_init(A)
 
         self.N = self.n + self.m + 1
-    
+
     def obj_matrix_init(self, P: Float[BCSR, "n n"]):
         self.n = jnp.shape(P)[0]
         P_coo = P.to_bcoo()
@@ -202,17 +203,17 @@ class QCPStructureGPU(QCPStructure):
         #   If this error occurs more frequently than not, then it will probably
         #   be worth canonicalizing the data matrices by default.
         # NOTE(quill): must use `allclose` since `!=` compares if same data in memory.
-        if not jnp.allclose(P_coo.data, P.data): 
+        if not jnp.allclose(P_coo.data, P.data):
             raise ValueError("The ordering of the data in `P_coo` and `P`"
                              + " (a BCSR matrix) does not match."
                              + " Please try to coerce `P` into canonical form.")
-        
+
         self.P_csr_indices = P.indices
         self.P_csr_indptr = P.indptr
-        
+
         self.P_nonzero_rows  = P_coo.indices[:, 0]
         self.P_nonzero_cols = P_coo.indices[:, 1]
-        
+
     def constr_matrix_init(self, A: Float[BCSR, "m n"]):
         self.m = jnp.shape(A)[0]
         A_coo = A.to_bcoo()
@@ -221,10 +222,10 @@ class QCPStructureGPU(QCPStructure):
             raise ValueError("The ordering of the data in `A_coo` and `A`"
                              + " (a BCSR matrix) does not match."
                              + " Please try to coerce `A` into canonical form.")
-        
+
         self.A_csr_indices = A.indices
         self.A_csr_indptr = A.indptr
-        
+
         self.A_nonzero_rows = A_coo.indices[:, 0]
         self.A_nonzero_cols = A_coo.indices[:, 1]
 
@@ -254,14 +255,14 @@ class QCPStructureLayers(QCPStructure):
         cone_dims: dict[str, int | list[int] | list[float]],
         onto_dual: bool = True
     ):
-        
+
         self.cone_projector = ProductConeProjector(cone_dims, onto_dual=onto_dual)
 
 #         # Now we need to obtain
-#         constraint_structure = 
+#         constraint_structure =
 
 
-type ObjMatrix = ObjMatrixCPU | ObjMatrixGPU
+# `ObjMatrix` is defined below, after `ObjMatrixCPU` and `ObjMatrixGPU`.
 
 
 class ObjMatrixCPU(AbstractLinearOperator):
@@ -280,23 +281,23 @@ class ObjMatrixCPU(AbstractLinearOperator):
         n = jnp.shape(P)[0]
         self.in_struc = ShapeDtypeStruct(shape=(n,),
                                          dtype=P.data.dtype)
-    
+
     def mv(self, vector):
         return self.P @ vector + self.PT @ vector - self.diag*vector
-    
+
     def transpose(self):
         return self
-    
+
     def as_matrix(self):
         raise NotImplementedError(f"{self.__class__.__name__}'s `as_matrix` method is"
                                   + " not yet implemented.")
-    
+
     def in_structure(self):
         pass
 
     def out_structure(self):
         return self.in_structure()
-    
+
 class ObjMatrixGPU(AbstractLinearOperator):
     P: Float[BCSR, "n n"]
     in_struc: ShapeDtypeStruct
@@ -309,17 +310,17 @@ class ObjMatrixGPU(AbstractLinearOperator):
         n = jnp.shape(P)[0]
         self.in_struc = ShapeDtypeStruct(shape=(n,),
                                          dtype=P.data.dtype)
-    
+
     def mv(self, vector):
         return self.P @ vector
-    
+
     def transpose(self):
         return self
-    
+
     def as_matrix(self):
         raise NotImplementedError(f"{self.__class__.__name__}'s `as_matrix` method is"
                                   + " not yet implemented.")
-    
+
     def in_structure(self):
         pass
 
@@ -333,3 +334,6 @@ def _(op):
 @lx.is_symmetric.register(ObjMatrixGPU)
 def _(op):
     return True
+
+
+ObjMatrix: TypeAlias = ObjMatrixCPU | ObjMatrixGPU

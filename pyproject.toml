@@ -1,16 +1,25 @@
-
-
 [project]
 name = "diffqcp"
 version = "0.4.4"
 description = "Engine to compute Jacobian-vector and vector-Jacobian products for (convex) quadratic cone programs."
 readme = "README.md"
 requires-python = ">=3.11"
+license = { file = "LICENSE.md" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
 dependencies = [
     "equinox>=0.12.2",
     "jax>=0.7.2",
     "jaxtyping>=0.3.2",
-    "lineax",
+    "lineax>=0.1.0",
     "numpy>=2.3.1",
     "scipy>=1.15.3",
 ]
@@ -30,17 +39,110 @@ include = ["diffqcp*"]
 dev = [
     "cvxpy>=1.6.6",
     "diffcp>=1.1.4",
-    "diffqcp[gpu]",
-    "juliacall>=0.9.26",
     "matplotlib>=3.10.5",
     "patdb>=0.1.0",
+    "pre-commit>=3.7",
+    "pyright>=1.1.380",
     "pytest>=8.4.1",
+    "pytest-cov>=5.0",
     "ruff>=0.12.0",
 ]
-
-[tool.ruff.lint]
-ignore = ["F722"]
+cuclarabel-dev = [
+    "juliacall>=0.9.26",
+]
 
 [tool.uv.sources]
-lineax = { git = "https://github.com/patrick-kidger/lineax.git" }
 diffqcp = { workspace = true }
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "N",   # pep8-naming
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+    "RUF", # ruff-specific
+]
+# TODO(productionization): re-enable N802/N803/N806 once we rename
+# canonical-math-notation identifiers (P, A, q, b, x, y, s, dP, dA, ...) to
+# snake_case. Tracked in STATUS.md under "Wave 1 deferred".
+ignore = [
+    "F722",  # jaxtyping shape-string forward references
+    "E741",  # allow conventional math var names (l, I, O)
+    "N802",  # function names not lowercase (math notation)
+    "N803",  # argument names not lowercase (math notation)
+    "N806",  # variable in function not lowercase (math notation)
+    "N815",  # mixedCase class field (e.g., xTPx) — math notation
+    "UP037", # don't strip quotes from jaxtyping shape strings (e.g., "...")
+]
+
+[tool.ruff.lint.per-file-ignores]
+# `jax.config.update(...)` must run before any jax import — that's why these
+# files have imports below the call, hence E402 is intentional.
+"tests/conftest.py" = ["E402"]
+"tests/test_qcp_cpu_analytical.py" = ["E402", "B023"]
+"tests/test_qcp_gpu_analytical.py" = ["E402", "B023"]
+# Tests are slated for full reorganisation in Wave 2; relax pedantic rules.
+"tests/**" = ["E501", "F841", "RUF059"]
+# Experiments are exploratory scratch — Wave 2 may consolidate them.
+"experiments/**" = ["E402", "E501", "F841", "B023", "RUF059", "N813"]
+# These modules are slated for refactor in Waves 3–5; existing line lengths are
+# tolerated so we don't churn them now.
+"diffqcp/cones/canonical.py" = ["E501"]
+"diffqcp/cones/exp.py" = ["E501"]
+"diffqcp/qcp.py" = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pyright]
+include = ["diffqcp", "tests"]
+exclude = [
+    "**/__pycache__",
+    "**/node_modules",
+    "**/.*",
+    ".venv",
+    ".pytest_cache",
+    ".ruff_cache",
+    "experiments",
+    "**/*.ipynb",
+    # Files slated for refactor in later waves; their existing type debt is
+    # tracked in STATUS.md and gets paid down as each wave lands. Adding
+    # these back to the include set is part of the wave's PR.
+    "diffqcp/cones/canonical.py",   # Wave 3
+    "diffqcp/cones/exp.py",         # Wave 3
+    "diffqcp/cones/pow.py",         # Wave 3
+    "diffqcp/qcp.py",               # Waves 4 + 5
+    "diffqcp/problem_data.py",      # Wave 4
+    "tests",                        # Wave 2 (test reorganisation)
+]
+typeCheckingMode = "basic"
+pythonVersion = "3.11"
+reportMissingImports = "error"
+reportMissingTypeStubs = "none"
+# Wave 1 sets the floor at "basic" on a small clean subset. Subsequent waves
+# add files back to the include set and may ratchet individual modules up to
+# "strict" via overrides.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
+[tool.coverage.run]
+source = ["diffqcp"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]

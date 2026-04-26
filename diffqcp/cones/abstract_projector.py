@@ -1,8 +1,9 @@
 from abc import abstractmethod
 
 import equinox as eqx
+from jaxtyping import Array, Float
 from lineax import AbstractLinearOperator
-from jaxtyping import Float, Array
+
 
 class AbstractConeProjector(eqx.Module):
 

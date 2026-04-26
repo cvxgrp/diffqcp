@@ -1,10 +1,12 @@
 """Mainly testing adjoint
 """
 
-from diffqcp import QCPStructureCPU, QCPStructureGPU, QCPStructureLayers
-import numpy as np
 import jax.numpy as jnp
+import numpy as np
 from jax.experimental.sparse import BCOO, BCSR
+
+from diffqcp import QCPStructureCPU, QCPStructureGPU
+
 
 def _make_upper_tri_bcoo(n, rng):
     M = rng.standard_normal(n)
@@ -44,7 +46,7 @@ def test_qcpstructurecpu_obj_matrix_and_mv():
     # positions reported should match nonzero positions of the upper triangular matrix
     mask = (np.triu(P_upper) != 0)
     rows, cols = np.where(np.asarray(mask))
-    assert set(zip(rows.tolist(), cols.tolist())) == set(zip(nz_rows.tolist(), nz_cols.tolist()))
+    assert set(zip(rows.tolist(), cols.tolist(), strict=False)) == set(zip(nz_rows.tolist(), nz_cols.tolist(), strict=False))
 
 def test_qcpstructuregpu_A_transpose_inner_product():
     rng = np.random.default_rng(1)

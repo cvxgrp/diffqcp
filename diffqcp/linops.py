@@ -4,11 +4,11 @@ Note that these operators were purposefully made "private" since they are solely
 to support functionality required by `diffqcp`. They **should not** be accessed as if they
 were true atoms implemented in `lineax`.
 """
-import numpy as np
-from jax import ShapeDtypeStruct
+import equinox as eqx
 import jax.numpy as jnp
 import lineax as lx
-import equinox as eqx
+import numpy as np
+from jax import ShapeDtypeStruct
 
 from diffqcp._helpers import _to_int_list
 
@@ -51,12 +51,12 @@ class _BlockLinearOperator(lx.AbstractLinearOperator):
         #   (Since I've declared `split_indices` as static this isn't necessary, but there's no true cost
         #       to keeping.)
         self.split_indices = _to_int_list(np.cumsum(in_sizes[:-1]))
-    
+
     def mv(self, x):
         chunks = jnp.split(x, self.split_indices, axis=-1)
-        results = [op.mv(xi) for op, xi in zip(self.blocks, chunks)]
+        results = [op.mv(xi) for op, xi in zip(self.blocks, chunks, strict=False)]
         return jnp.concatenate(results, axis=-1)
-    
+
     def as_matrix(self):
         """uses output dtype
 
@@ -74,7 +74,7 @@ class _BlockLinearOperator(lx.AbstractLinearOperator):
 
     def transpose(self):
         return _BlockLinearOperator([block.T for block in self.blocks])
-    
+
     def in_structure(self):
         if len(self.blocks[0].in_structure().shape) == 2:
             num_batches = self.blocks[0].in_structure().shape[0]
@@ -102,7 +102,7 @@ class _BlockLinearOperator(lx.AbstractLinearOperator):
         dtype = self.blocks[0].out_structure().dtype
         in_shape = (num_batches, out_size) if num_batches > 0 else (out_size,)
         return ShapeDtypeStruct(shape=in_shape, dtype=dtype)
-    
+
 @lx.is_symmetric.register(_BlockLinearOperator)
 def _(op):
     return all(lx.is_symmetric(block) for block in op.blocks)

@@ -1,17 +1,18 @@
 import time
 
-import numpy as np
 import jax
+import numpy as np
+
 jax.config.update("jax_platform_name", "cpu")
-import jax.numpy as jnp
-import scipy.linalg as la
-import jax.random as jr
 import cvxpy as cvx
 import equinox as eqx
+import jax.numpy as jnp
+import jax.random as jr
+import scipy.linalg as la
 
-from diffqcp import  HostQCP, QCPStructureCPU
-from .helpers import (quad_data_and_soln_from_qcp_coo as quad_data_and_soln_from_qcp,
-                      scoo_to_bcoo, QCPProbData, get_zeros_like_coo)
+from diffqcp import HostQCP, QCPStructureCPU
+
+from .helpers import QCPProbData, get_zeros_like_coo, scoo_to_bcoo
 
 # TODO(quill): configure so don't run GPU tests when no GPU present
 #   => does require utilizing BCOO vs. BCSR matrices, so probably
@@ -100,7 +101,7 @@ def test_least_squares_cpu(getkey):
         # tol = jnp.abs(dx)
         # end = time.perf_counter()
         # print(f"compile + solve time = {end - start}..")
-        
+
         true_result = Dx_b @ db
 
         # patdb.debug()
@@ -132,7 +133,7 @@ def test_least_squares_cpu(getkey):
         jvp_compiled = eqx.filter_jit(jvp_wrapped)
 
         # print out static vs traced inputs
-        
+
         # Call it
         start = time.perf_counter()
         dx, dy, ds = jvp_compiled(qcp_traced, inputs_traced)
@@ -141,16 +142,16 @@ def test_least_squares_cpu(getkey):
         print(f"compile + solve time = {end - start}..")
 
         start = time.perf_counter()
-        dx, dy, ds = jvp_compiled(qcp_traced, inputs_traced)
+        dx, _dy, _ds = jvp_compiled(qcp_traced, inputs_traced)
         tol = np.asarray(dx)
         end = time.perf_counter()
         print(f"solve only time = {end - start}..")
-        
+
         # dx, dy, ds = jvp(dP, dA, dq, -db)
 
         true_result = Dx_b @ db
 
         print("true result shape: ", jnp.shape(true_result))
         print("dx shape: ", jnp.shape(dx[m:]))
-        
+
         assert jnp.allclose(true_result, dx[m:], atol=1e-8)

@@ -1,19 +1,15 @@
 """Subroutines for projecting onto power cone and computing JVPs and VJPs with the derivative of the projection.
 """
-from typing import TYPE_CHECKING
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
-import equinox as eqx
 import lineax as lx
-from jaxtyping import Array, Float, Bool
+from jaxtyping import Array, Bool, Float
 
 from .abstract_projector import AbstractConeProjector
 
-if jax.config.jax_enable_x64:
-    TOL = 1e-12
-else:
-    TOL = 1e-6
+TOL = 1e-12 if jax.config.jax_enable_x64 else 1e-06
 
 MAX_ITER = 20
 
@@ -149,10 +145,10 @@ def _proj_dproj(
         J = J.at[2, 2].set(J22)
         proj_v = jnp.array([jnp.maximum(x, 0), jnp.maximum(y, 0), 0.0], dtype=v.dtype)
         return proj_v, J
-        
-    
+
+
     def solve_case():
-        
+
         def _solve_while_body(loop_state):
             # NOTE(quill): we're purposefully using both `i` and `j`.
             #   The former (which is in the function names) is denoting
@@ -161,7 +157,7 @@ def _proj_dproj(
             loop_state["xj"] = _pow_calc_xi(loop_state["rj"], x, abs_z, alpha)
             loop_state["yj"] = _pow_calc_xi(loop_state["rj"], y, abs_z, 1.0 - alpha)
             fj = _pow_calc_f(loop_state["rj"], loop_state["xj"], loop_state["yj"], alpha)
-            
+
             dxdr = _pow_calc_dxi_dr(loop_state["rj"], loop_state["xj"], x, abs_z, alpha)
             dydr = _pow_calc_dxi_dr(loop_state["rj"], loop_state["yj"], y, abs_z, 1.-alpha)
             fp = _pow_calc_fp(loop_state["xj"], loop_state["yj"], dxdr, dydr, alpha)
@@ -274,7 +270,7 @@ class _PowerConeJacobianOperator(lx.AbstractLinearOperator):
         if ndim == 1:
             if jnp.ndim(self.jacobians) == 4:
                 raise ValueError("Batched Power cone Jacobians cannot be applied to a 1D input.")
-            
+
             return _pow_cone_jacobian_mv(dx, self.jacobians, self.is_dual, self.num_cones)
         elif ndim == 2:
             return eqx.filter_vmap(_pow_cone_jacobian_mv,
@@ -286,7 +282,7 @@ class _PowerConeJacobianOperator(lx.AbstractLinearOperator):
 
     def as_matrix(self):
         raise NotImplementedError("Power Cone Jacobian `as_matrix` not implemented.")
-    
+
     def transpose(self):
         return self
 
@@ -294,7 +290,7 @@ class _PowerConeJacobianOperator(lx.AbstractLinearOperator):
         ndim = jnp.ndim(self.jacobians)
         shape = jnp.shape(self.jacobians)
         dtype = self.jacobians.dtype
-        
+
         if ndim == 3:
             # non-batched case
             return jax.ShapeDtypeStruct(shape=(shape[0] * 3,),
@@ -306,7 +302,7 @@ class _PowerConeJacobianOperator(lx.AbstractLinearOperator):
 
     def out_structure(self):
         return self.in_structure()
-    
+
 @lx.is_symmetric.register(_PowerConeJacobianOperator)
 def _(op):
     return True
@@ -323,7 +319,7 @@ class PowerConeProjector(AbstractConeProjector):
     alphas_abs: Float[Array, " num_cones"]
     signs: Float[Array, " num_cones"]
     is_dual: Bool[Array, " num_cones"]
-    
+
     def __init__(self, alphas: list[float], onto_dual: bool):
 
         self.alphas = jnp.array(alphas)

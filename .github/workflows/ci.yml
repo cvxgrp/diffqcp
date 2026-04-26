@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+# Cancel in-progress runs for the same PR/branch when a new commit is pushed
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Set Python version
+        run: uv python pin 3.11
+      - name: Sync dependencies
+        run: uv sync --group dev
+      - name: ruff check
+        run: uv run ruff check .
+      # ruff format check intentionally not enforced in Wave 1 (would churn
+      # 23 files). Format pass lands in Wave 2 with the test reorganisation.
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Set Python version
+        run: uv python pin 3.11
+      - name: Sync dependencies
+        run: uv sync --group dev
+      - name: pyright
+        run: uv run pyright
+
+  test:
+    name: test (${{ matrix.os }} / py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    # 3.13 is informational: failures don't block the pipeline. Once it's
+    # stable across the matrix, drop the continue-on-error and make it required.
+    continue-on-error: ${{ matrix.python-version == '3.13' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Set Python version
+        run: uv python pin ${{ matrix.python-version }}
+      - name: Sync dependencies
+        run: uv sync --group dev
+      - name: Run tests with coverage
+        run: uv run pytest --cov --cov-report=term --cov-report=xml
+      - name: Upload coverage artifact
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml

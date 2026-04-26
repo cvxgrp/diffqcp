@@ -1,25 +1,32 @@
 from dataclasses import dataclass, field
+from typing import TypeAlias
 
-import numpy as np
-from scipy import sparse
-from scipy.sparse import (spmatrix, sparray, csr_matrix,
-                          csr_array, coo_matrix, coo_array,
-                          csc_matrix, csc_array)
-import cvxpy as cvx
 import clarabel
+import cvxpy as cvx
+import equinox as eqx
 import jax
 import jax.numpy as jnp
-import equinox as eqx
-from jaxtyping import Float, Array
-from jax.experimental.sparse import BCSR, BCOO
-import patdb
+import numpy as np
+from jax.experimental.sparse import BCOO, BCSR
+from jaxtyping import Array, Float
+from scipy import sparse
+from scipy.sparse import (
+    coo_array,
+    coo_matrix,
+    csc_array,
+    csc_matrix,
+    csr_array,
+    csr_matrix,
+    sparray,
+    spmatrix,
+)
 
 CPU = jax.devices("cpu")[0]
 
-type SP = spmatrix | sparray
-type SCSR = csr_matrix | csr_array
-type SCSC = csc_matrix | csc_array
-type SCOO = coo_matrix | coo_array
+SP: TypeAlias = spmatrix | sparray
+SCSR: TypeAlias = csr_matrix | csr_array
+SCSC: TypeAlias = csc_matrix | csc_array
+SCOO: TypeAlias = coo_matrix | coo_array
 
 def tree_allclose(x, y, *, rtol=1e-5, atol=1e-8):
     return eqx.tree_equal(x, y, typematch=True, rtol=rtol, atol=atol)
@@ -33,7 +40,7 @@ def scoo_to_bcoo(coo_mat: SCOO) -> BCOO:
     """just assume `coo_mat` is in correct form."""
     row_indices = coo_mat.row
     col_indices = coo_mat.col
-    indices = list(zip(row_indices, col_indices))
+    indices = list(zip(row_indices, col_indices, strict=False))
     if len(indices) == 0:
         return BCOO.fromdense(jnp.zeros(coo_mat.shape))
     else:
@@ -46,7 +53,7 @@ def scsr_to_bcsr(csr_mat: SCSR) -> BCSR:
                     shape=csr_mat.shape)
     else:
         return BCSR.fromdense(jnp.zeros(csr_mat.shape))
-    
+
 
 def quad_data_and_soln_from_qcp(problem: cvx.Problem, return_csr: bool = True):
     """
@@ -79,8 +86,10 @@ def quad_data_and_soln_from_qcp(problem: cvx.Problem, return_csr: bool = True):
 
     return Pfull, P_upper, A, q, b, np.array(soln.x), np.array(soln.z), np.array(soln.s), scs_cone_dict, clarabel_cones
 
-quad_data_and_soln_from_qcp_coo = lambda prob: quad_data_and_soln_from_qcp(prob, return_csr=False)
-quad_data_and_soln_from_qcp_csr = lambda prob: quad_data_and_soln_from_qcp(prob, return_csr=True)
+def quad_data_and_soln_from_qcp_coo(prob):
+    return quad_data_and_soln_from_qcp(prob, return_csr=False)
+def quad_data_and_soln_from_qcp_csr(prob):
+    return quad_data_and_soln_from_qcp(prob, return_csr=True)
 
 @dataclass
 class QCPProbData:
@@ -90,21 +99,21 @@ class QCPProbData:
     Pcsc: SCSC = field(init=False)
     Pcsr: SCSR = field(init=False)
     Pcoo: SCOO = field(init=False)
-    
+
     Pupper_csc: SCSC = field(init=False)
     Pupper_csr: SCSR = field(init=False)
     Pupper_coo: SCOO = field(init=False)
-    
+
     Acsc: SCSC = field(init=False)
     Acsr: SCSR = field(init=False)
     Acoo: SCOO = field(init=False)
-    
+
     q: np.ndarray = field(init=False)
     b: np.ndarray = field(init=False)
-    
+
     n: np.ndarray = field(init=False)
     m: np.ndarray = field(init=False)
-    
+
     x: np.ndarray = field(init=False)
     y: np.ndarray = field(init=False)
     s: np.ndarray = field(init=False)
@@ -114,7 +123,7 @@ class QCPProbData:
 
     def __post_init__(self):
         """
-        
+
         **Note**
         - `get_problem_data` seems to be returning CSR matrices/arrays.
         - for `P`, it returns the whole array, not just the upper triangular part.

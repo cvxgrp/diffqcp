@@ -1,15 +1,17 @@
-from typing import Callable
+from collections.abc import Callable
 
-import numpy as np
 import cvxpy as cvx
-from jax import vmap, jit
 import equinox as eqx
 import jax.numpy as jnp
 import jax.random as jr
+import numpy as np
+from jax import jit, vmap
 
 import diffqcp.cones.canonical as cone_lib
-from diffqcp.cones.exp import in_exp, in_exp_dual, ExponentialConeProjector
+from diffqcp.cones.exp import ExponentialConeProjector, in_exp, in_exp_dual
+
 from .helpers import tree_allclose
+
 
 def _test_dproj_finite_diffs(
     projection_func: Callable, key_func, dim: int, num_batches: int = 0
@@ -30,13 +32,13 @@ def _test_dproj_finite_diffs(
 
     proj_x, dproj_x = _projector(x)
     proj_x_plus_dx, _ = _projector(x + dx)
-    
-    dproj_x_fd = proj_x_plus_dx - proj_x    
+
+    dproj_x_fd = proj_x_plus_dx - proj_x
     dproj_x_dx = dproj_x.mv(dx)
     assert dproj_x_dx is not None
     assert dproj_x_fd is not None
     assert tree_allclose(dproj_x_dx, dproj_x_fd)
-    
+
 
 def test_zero_projector(getkey):
     n = 100
@@ -49,9 +51,9 @@ def test_zero_projector(getkey):
         batched_zero_projector = jit(vmap(_zero_projector))
 
         for _ in range(15):
-            
+
             x = jr.normal(getkey(), n)
-            
+
             proj_x, _ = zero_projector(x)
             truth = jnp.zeros_like(x) if not dual else x
             assert tree_allclose(truth, proj_x)
@@ -80,7 +82,7 @@ def test_nonnegative_projector(getkey):
         truth = jnp.maximum(x, 0)
         assert tree_allclose(truth, proj_x)
         _test_dproj_finite_diffs(nn_projector, getkey, dim=n, num_batches=0)
-        
+
         x = jr.normal(getkey(), (num_batches, n))
         proj_x, _ = batched_nn_projector(x)
         truth = jnp.maximum(x, 0)
@@ -110,7 +112,7 @@ def test_soc_private_projector(getkey):
         x_jnp = jr.normal(getkey(), n)
         x_np = np.array(x_jnp)
         proj_x_solver = jnp.array(_proj_soc_via_cvxpy(x_np))
-        
+
         proj_x, _ = soc_projector(x_jnp)
         assert tree_allclose(proj_x, proj_x_solver)
         _test_dproj_finite_diffs(soc_projector, getkey, dim=n, num_batches=0)
@@ -132,7 +134,7 @@ def _test_soc_projector(dims, num_batches, keyfunc):
     _soc_projector = cone_lib.SecondOrderConeProjector(dims=dims)
     soc_projector = eqx.filter_jit(_soc_projector)
     batched_soc_projector = eqx.filter_jit(eqx.filter_vmap(_soc_projector))
-    
+
     for _ in range(15):
 
         x_jnp = jr.normal(keyfunc(), total_dim)
@@ -205,7 +207,7 @@ def _test_psd_projector(sizes, num_batches, keyfunc):
     _psd_projector = cone_lib.PSDConeProjector(sizes=sizes)
     psd_projector = eqx.filter_jit(_psd_projector)
     batched_psd_projector = eqx.filter_jit(eqx.filter_vmap(_psd_projector))
-    
+
     for _ in range(10):
         x_jnp = jr.normal(keyfunc(), total_size)
         x_np = np.array(x_jnp)
@@ -327,7 +329,7 @@ def test_product_projector(getkey):
     _soc_projector = cone_lib.SecondOrderConeProjector(dims=soc_dims)
     soc_projector = eqx.filter_jit(_soc_projector)
     batched_soc_projector = eqx.filter_jit(eqx.filter_vmap(_soc_projector))
-    
+
     for dual in [True, False]:
 
         _zero_projector = cone_lib.ZeroConeProjector(onto_dual=dual)
@@ -337,7 +339,7 @@ def test_product_projector(getkey):
         _cone_projector = cone_lib.ProductConeProjector(cones, onto_dual=dual)
         cone_projector = eqx.filter_jit(_cone_projector)
         batched_cone_projector = eqx.filter_jit(eqx.filter_vmap(_cone_projector))
-    
+
         for _ in range(15):
             x = jr.normal(getkey(), total_dim)
             proj_x, _ = cone_projector(x)
@@ -382,7 +384,7 @@ def test_in_exp_dual(getkey):
         arr = jnp.array(vec)
         assert not in_exp_dual(vec)
 
-    
+
 def test_proj_exp_scs(getkey):
     """test values ported from scs/test/problems/test_exp_cone.h
     """
@@ -392,9 +394,9 @@ def test_proj_exp_scs(getkey):
           jnp.array([1.3282585, -0.43277314, 1.7468072]),
           jnp.array([0.67905585, 0.14814832, 1.04294573]),
           jnp.array([0.50210027, 0.12314491, -1.77568921])]
-    
+
     num_cones = len(vs)
-    
+
     vp_true = [jnp.array([0.8899428, 1.94041881, 3.06957226]),
                jnp.array([-0.02001571, 0.8709169, 0.85112944]),
                jnp.array([-1.17415616, 0.9567094, 0.280399]),
@@ -407,7 +409,7 @@ def test_proj_exp_scs(getkey):
                jnp.array([-0.02277033, -0.12164823, 1.75085347]),
                jnp.array([-0., 0.14814832, 1.04294573]),
                jnp.array([-0., 0.12314491, -0.])]
-    
+
     primal_projector = ExponentialConeProjector(1, onto_dual=False)
     dual_projector = ExponentialConeProjector(1, onto_dual=True)
 
@@ -415,7 +417,7 @@ def test_proj_exp_scs(getkey):
     from diffcp.cones import parse_cone_dict_cpp
     cones = [("ep", 1)]
     cones = parse_cone_dict_cpp(cones)
-    
+
     for i in range(len(vs)):
         print(f"=== trial {i} ===")
         v = vs[i]

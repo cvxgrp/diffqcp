@@ -1,11 +1,11 @@
 """Helper/Utility functions used """
-from typing import TYPE_CHECKING
 
-import numpy as np
-from jax.numpy import argsort, stack
-from jax.experimental.sparse import BCOO, BCSR
 import equinox as eqx
-from jaxtyping import Float, Integer, Array
+import numpy as np
+from jax.experimental.sparse import BCOO, BCSR
+from jax.numpy import argsort, stack
+from jaxtyping import Array, Float, Integer
+
 
 def _to_int_list(v: np.ndarray) -> list[int]:
     """

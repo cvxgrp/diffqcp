@@ -1,27 +1,28 @@
-import time
 import os
+import time
 from dataclasses import dataclass
-import numpy as np
+from typing import TypeAlias
+
 import jax
+import numpy as np
+
 jax.config.update("jax_enable_x64", True)
 jax.config.update("jax_platform_name", "cpu")
+import clarabel
+import equinox as eqx
 import jax.numpy as jnp
 import jax.numpy.linalg as la
-from jaxtyping import Float, Array
-import equinox as eqx
-from jax.experimental.sparse import BCOO
-import clarabel
-from scipy.sparse import (spmatrix, sparray,
-                          csc_matrix, csc_array)
-import patdb
 import matplotlib.pyplot as plt
+from jax.experimental.sparse import BCOO
+from jaxtyping import Array, Float
+from scipy.sparse import csc_array, csc_matrix, sparray, spmatrix
 
-from diffqcp import HostQCP, QCPStructureCPU
 import experiments.cvx_problem_generator as prob_generator
+from diffqcp import HostQCP, QCPStructureCPU
 from tests.helpers import QCPProbData, scoo_to_bcoo
 
-type SP = spmatrix | sparray
-type SCSC = csc_matrix | csc_array
+SP: TypeAlias = spmatrix | sparray
+SCSC: TypeAlias = csc_matrix | csc_array
 
 @dataclass
 class SolverData:
@@ -81,13 +82,13 @@ def grad_desc(
     while curr_iter < num_iter:
 
         solution = clarabel_solver.solve()
-        
+
         xk = jnp.array(solution.x)
         yk = jnp.array(solution.z)
         sk = jnp.array(solution.s)
-        
+
         qcp = HostQCP(Pk, Ak, qk, bk, xk, yk, sk, qcp_problem_structure)
-        
+
         loss, *new_data = make_step(qcp, target_x, target_y, target_s,
                                     Pk.data, Ak.data, qk, bk, step_size)
         losses.append(loss)
@@ -98,7 +99,7 @@ def grad_desc(
         data.Acsc.data = np.asarray(Ak.data, copy=True)[Acoo_csc_perm]
         data.q = np.asarray(qk, copy=True)
         data.b = np.asarray(bk, copy=True)
-        
+
         solver.update(P=data.Pupper_csc, q=data.q, A=data.Acsc, b=data.b)
 
         curr_iter += 1
@@ -107,7 +108,7 @@ def grad_desc(
 
 if __name__ == "__main__":
     np.random.seed(28)
-    
+
     # SMALL
     m = 20
     n = 10
@@ -125,7 +126,7 @@ if __name__ == "__main__":
                                           prob_data_cpu.Pupper_coo.col))
     A_coo_to_csc_order = np.lexsort((prob_data_cpu.Acoo.row,
                                      prob_data_cpu.Acoo.col))
-    
+
     cones = prob_data_cpu.clarabel_cones
     settings = clarabel.DefaultSettings()
     settings.verbose = False
@@ -142,7 +143,7 @@ if __name__ == "__main__":
     solution = solver.solve()
     end_solve = time.perf_counter()
     print(f"Clarabel solve took: {end_solve - start_solve} seconds")
-    
+
     target_x = jnp.array(solution.x)
     target_y = jnp.array(solution.z)
     target_s = jnp.array(solution.s)
@@ -194,7 +195,7 @@ if __name__ == "__main__":
                                     prob_data_cpu.b,
                                     cones,
                                     settings)
-    
+
     num_iter = 1000
 
     start_time = time.perf_counter()

@@ -33,9 +33,10 @@ from cupy.sparse import csr_matrix
 from jax.experimental.sparse import BCOO
 from jaxtyping import Array, Float
 
-import experiments.cvx_problem_generator as prob_generator
+import tests.problems as prob_generator
 from diffqcp.qcp import HostQCP, QCPStructureCPU
-from tests.helpers import QCPProbData, scoo_to_bcoo
+from tests.helpers import scoo_to_bcoo
+from tests.problems import QCPProbData
 
 
 def JuliaCuVector2CuPyArray(jl_arr) -> cp.ndarray:

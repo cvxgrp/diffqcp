@@ -17,9 +17,10 @@ from jax.experimental.sparse import BCOO
 from jaxtyping import Array, Float
 from scipy.sparse import csc_array, csc_matrix, sparray, spmatrix
 
-import experiments.cvx_problem_generator as prob_generator
+import tests.problems as prob_generator
 from diffqcp import HostQCP, QCPStructureCPU
-from tests.helpers import QCPProbData, scoo_to_bcoo
+from tests.helpers import scoo_to_bcoo
+from tests.problems import QCPProbData
 
 SP: TypeAlias = spmatrix | sparray
 SCSC: TypeAlias = csc_matrix | csc_array

@@ -18,9 +18,10 @@ from jax.experimental.sparse import BCSR
 from jaxtyping import Array, Float
 from scipy.sparse import csc_array, csc_matrix, sparray, spmatrix, triu
 
-import experiments.cvx_problem_generator as prob_generator
+import tests.problems as prob_generator
 from diffqcp import DeviceQCP, QCPStructureGPU
-from tests.helpers import QCPProbData, scsr_to_bcsr
+from tests.helpers import scsr_to_bcsr
+from tests.problems import QCPProbData
 
 SP: TypeAlias = spmatrix | sparray
 SCSC: TypeAlias = csc_matrix | csc_array

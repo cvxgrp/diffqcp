@@ -23,7 +23,7 @@ from scipy.sparse import (
     spmatrix,
 )
 
-import experiments.cvx_problem_generator as prob_generator
+import tests.problems as prob_generator
 
 SP: TypeAlias = spmatrix | sparray
 SCSR: TypeAlias = csr_matrix | csr_array

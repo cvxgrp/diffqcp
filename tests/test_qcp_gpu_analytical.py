@@ -15,7 +15,8 @@ except ImportError:
 
 from diffqcp import DeviceQCP, QCPStructureGPU
 
-from .helpers import QCPProbData, get_zeros_like_csr, scsr_to_bcsr
+from .helpers import get_zeros_like_csr, scsr_to_bcsr
+from .problems import QCPProbData
 
 
 def test_least_squares(getkey):

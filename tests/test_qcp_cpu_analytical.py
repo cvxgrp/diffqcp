@@ -12,7 +12,8 @@ import scipy.linalg as la
 
 from diffqcp import HostQCP, QCPStructureCPU
 
-from .helpers import QCPProbData, get_zeros_like_coo, scoo_to_bcoo
+from .helpers import get_zeros_like_coo, scoo_to_bcoo
+from .problems import QCPProbData
 
 # TODO(quill): configure so don't run GPU tests when no GPU present
 #   => does require utilizing BCOO vs. BCSR matrices, so probably

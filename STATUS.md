@@ -16,18 +16,23 @@ Make `diffqcp` a high-quality, production-grade JAX library that
 Each wave is one PR-shaped chunk landing on `main`. Tooling and tests come
 before refactors so subsequent waves have a safety net.
 
-| #  | Wave                                | Status      | Branch                       |
-|----|-------------------------------------|-------------|------------------------------|
-| 0  | Branch hygiene                      | done        | (parked: `wip/cones-split`)  |
-| 1  | Tooling floor (lint/type/CI)        | done        | `wave-1/tooling-floor`       |
-| 2  | Test foundation (FD + AD checks)    | pending     | —                            |
-| 3  | Cones cleanup                       | pending     | —                            |
-| 4  | Unify CPU/GPU problem data          | pending     | —                            |
-| 5  | Solver dispatch as typed strategy   | pending     | —                            |
-| 6  | Batching over problem data          | pending     | —                            |
-| 7  | Sparse F + direct-solve diagnosis   | pending     | —                            |
-| 8  | `cvxpylayers` interface             | pending     | —                            |
-| 9  | `cvxcp` extraction                  | pending     | —                            |
+All work lives on the long-running `productionization` branch as wave-shaped
+commits. One PR off it merges into `main` at the end. (The user is sole
+maintainer; this avoids per-wave PR ceremony while preserving wave-shaped
+commits for bisection and inspection.)
+
+| #  | Wave                                | Status      |
+|----|-------------------------------------|-------------|
+| 0  | Branch hygiene                      | done        |
+| 1  | Tooling floor (lint/type/CI)        | done        |
+| 2  | Test foundation (FD + AD checks)    | done        |
+| 3  | Cones cleanup                       | pending     |
+| 4  | Unify CPU/GPU problem data          | pending     |
+| 5  | Solver dispatch as typed strategy   | pending     |
+| 6  | Batching over problem data          | pending     |
+| 7  | Sparse F + direct-solve diagnosis   | pending     |
+| 8  | `cvxpylayers` interface             | pending     |
+| 9  | `cvxcp` extraction                  | pending     |
 
 ### Wave details
 
@@ -57,10 +62,35 @@ before refactors so subsequent waves have a safety net.
   dP, dA, …) so `N802/N803/N806/N815` can be re-enabled. Big touch; defer
   to a dedicated rename PR (likely after Wave 4).
 
-**Wave 2 — Test foundation.** Move `experiments/cvx_problem_generator.py`
-→ `tests/_problems.py`. Parametrized fixtures: LP/QP/SOCP/SDP/EXP/POW/mixed.
-`test_jvp_finite_difference.py`, `test_vjp_adjoint.py` (`<v, J@u> = <Jᵀv, u>`),
-`test_cones_via_autodiff.py` (cross-check `dproj` vs `jax.jacrev(proj)`).
+**Wave 2 — Test foundation (done).** Landed:
+- `tests/problems.py` consolidates the prior `experiments/cvx_problem_generator.py`
+  and the `QCPProbData` dataclass that lived in `tests/helpers.py`.
+  Generators take an `Rng | int | None` and are deterministic.
+- `tests/helpers.py` slimmed to converters + `tree_allclose` + `get_zeros_like_*`.
+- `experiments/cvx_problem_generator.py` deleted; experiments import from
+  `tests.problems` instead.
+- `tests/test_qcp_adjoint.py`: JVP/VJP duality identity
+  `<v, J(u)> = <J*(v), u>` for least-squares CQPs (12×6 and 20×10).
+  Tolerance is `1e-3` relative because `qcp.py` hard-codes LSMR at `1e-8`;
+  Wave 5's typed solver dispatch will let us tighten this.
+- `tests/test_cones_autodiff.py`: 8 tests cross-checking analytical
+  `dproj.mv(dx)` against `jax.jvp` for zero/nonneg/SOC/PSD/product cones.
+  Sampling avoids cone boundaries (kinks). EXP and POW deferred to Wave 3
+  due to NaN-producing branches under autodiff.
+
+**Caveats discovered in Wave 2 (paid down later):**
+- `eqxi.GetKey()` keys are session-scoped, so test ordering can change which
+  RNG sequence each test sees. `test_proj_exp_scs` and `test_product_projector`
+  pass in isolation and pass in the full suite once trivially-redundant
+  `jax.config.update("jax_platform_name", "cpu")` calls are removed from new
+  test modules. Wave 3 will fix the underlying NaN-in-unused-branch issue
+  in `cones/exp.py` so this becomes a non-issue.
+
+**Deferred from Wave 2:**
+- `test_jvp_fd.py` (FD cross-check of QCP solution map). The well-defined
+  Jacobian only exists in active-set-stable regions; FD step too large
+  crosses kinks, too small loses precision. Cleanest implementation is in
+  Wave 7's solver-quality harness, where we already need this kind of test.
 
 **Wave 3 — Cones cleanup.** Land per-cone file split cleanly: every projector
 final + correct `__check_init__`; replace `jnp.ndim` dispatch in operator
@@ -116,7 +146,8 @@ CVXPY → cvxpylayers → diffqcp → gradient.
 - `feature/maintenance-and-hygiene` — parked. Holds in-flight per-cone file
   split + cvxcp scaffold + planning notes (`claude-plan.md`, `patterns.md`).
   Will fold the useful parts into Wave 3 cones cleanup; the rest archives.
-- `wave-1/tooling-floor` — current.
+- `productionization` — long-running integration branch carrying all wave
+  commits. Single PR off this branch lands at the end.
 
 ## Conventions for this effort
 

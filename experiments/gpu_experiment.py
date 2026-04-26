@@ -41,9 +41,10 @@ from cupy.sparse import csr_matrix
 from jax.experimental.sparse import BCSR
 from jaxtyping import Array, Float
 
-import experiments.cvx_problem_generator as prob_generator
+import tests.problems as prob_generator
 from diffqcp.qcp import DeviceQCP, QCPStructureGPU
-from tests.helpers import QCPProbData, scsr_to_bcsr
+from tests.helpers import scsr_to_bcsr
+from tests.problems import QCPProbData
 
 # what auxillary objects can I create to store the CuPy <-> Julia objects?
 

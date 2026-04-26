@@ -333,3 +333,8 @@ def _(op):
 @lx.is_symmetric.register(ObjMatrixGPU)
 def _(op):
     return True
+
+
+class ConstrMatrixCPU(AbstractLinearOperator):
+    A: Float[BCOO, "m n"]
+    

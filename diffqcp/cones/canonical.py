@@ -337,6 +337,7 @@ class SecondOrderConeProjector(AbstractConeProjector):
         projs, dproj_ops = [], []
         start_idx = 0
         # NOTE(quill): the following should be unrolled when (JIT) compiled
+        # TODO(quill): should give user option to not unroll.
         for i, dim_batch in enumerate(self.dims_batches):
             projector = self.projectors[i]
             dim = dim_batch[0]

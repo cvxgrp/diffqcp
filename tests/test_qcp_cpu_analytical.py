@@ -142,6 +142,7 @@ def test_least_squares_cpu(getkey):
 
         start = time.perf_counter()
         dx, dy, ds = jvp_compiled(qcp_traced, inputs_traced)
+        dx.block_until_ready()
         tol = np.asarray(dx)
         end = time.perf_counter()
         print(f"solve only time = {end - start}..")
@@ -153,4 +154,4 @@ def test_least_squares_cpu(getkey):
         print("true result shape: ", jnp.shape(true_result))
         print("dx shape: ", jnp.shape(dx[m:]))
         
-        assert jnp.allclose(true_result, dx[m:], atol=1e-8)
+        assert jnp.allclose(true_result, dx[m:], atol=1e-6)

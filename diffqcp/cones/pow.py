@@ -1,5 +1,6 @@
 """Subroutines for projecting onto power cone and computing JVPs and VJPs with the derivative of the projection.
 """
+from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import jax
@@ -16,6 +17,106 @@ else:
     TOL = 1e-6
 
 MAX_ITER = 20
+
+class PowerConeProjector(AbstractConeProjector):
+
+    # NOTE(quill): while similar, this implementation was a bit more challenging than
+    # the exponential cone projector implementation as the `cone_dims` dictionary
+    # returned by CVXPY has different keys for the exponential cone and its dual, whereas
+    # primal vs dual power cone is encoded within the list of `alphas`.
+
+    alphas: Float[Array, " num_cones"]
+    num_cones: int = eqx.field(static=True)
+    alphas_abs: Float[Array, " num_cones"]
+    signs: Float[Array, " num_cones"]
+    is_dual: Bool[Array, " num_cones"]
+    
+    def __init__(self, alphas: list[float], onto_dual: bool):
+
+        self.alphas = jnp.array(alphas)
+        self.num_cones = jnp.size(self.alphas)
+        self.is_dual = self.alphas < 0
+        self.signs = jnp.where(self.alphas < 0, -1.0, 1.0)
+        if onto_dual:
+            self.signs = -1.0 * self.signs
+            self.is_dual = jnp.logical_not(self.is_dual)
+        self.alphas_abs = jnp.abs(self.alphas)
+
+    def proj_dproj(self, x):
+        batch = jnp.reshape(x, (self.num_cones, 3))
+        # negate points being projected onto dual
+        batch = batch * self.signs[:, None]
+
+        proj_primal, jacs = eqx.filter_vmap(_proj_dproj, in_axes=(0, 0), out_axes=(0, 0))(batch, self.alphas_abs)
+
+        # via Moreau: Pi_K^*(v) = v + Pi_K(-v)
+        proj_dual = batch + proj_primal
+
+        proj = jnp.where(self.is_dual[:, None], proj_dual, proj_primal)
+
+        return jnp.ravel(proj), _PowerConeJacobianOperator(jacs, self.is_dual)
+    
+
+class _PowerConeJacobianOperator(lx.AbstractLinearOperator):
+
+    jacobians: Float[Array, "*num_batches num_cones 3 3"]
+    is_dual: Bool[Array, " num_cones"]
+    num_cones: int = eqx.field(static=True)
+
+    def __init__(
+        self,
+        jacobians: Float[Array, "*num_batches num_cones 3 3"],
+        is_dual: Bool[Array, " num_cones"],
+    ):
+        self.jacobians = jacobians
+        self.is_dual = is_dual
+        self.num_cones = jnp.size(is_dual)
+        ndim = jnp.ndim(jacobians)
+        if ndim not in [3, 4]:
+            raise ValueError("The `jacobians` argument provided to the `_PowerConeJacobianOperator` "
+                             f"is {ndim}D, but it must be 3D or 4D.")
+
+    def mv(self, dx: Float[Array, "*batch num_cones*3"]):
+        ndim = jnp.ndim(dx)
+        if ndim == 1:
+            if jnp.ndim(self.jacobians) == 4:
+                raise ValueError("Batched Power cone Jacobians cannot be applied to a 1D input.")
+            
+            return _pow_cone_jacobian_mv(dx, self.jacobians, self.is_dual, self.num_cones)
+        elif ndim == 2:
+            return eqx.filter_vmap(_pow_cone_jacobian_mv,
+                                   in_axes=(0, 0, None, None),
+                                   out_axes=0)(dx, self.jacobians, self.is_dual, self.num_cones)
+        else:
+            raise ValueError("The `_PowerConeJacobianOperator` can only be applied to 1D or 2D inputs "
+                             f"but the provided vector is {ndim}D.")
+
+    def as_matrix(self):
+        raise NotImplementedError("Power Cone Jacobian `as_matrix` not implemented.")
+    
+    def transpose(self):
+        return self
+
+    def in_structure(self):
+        ndim = jnp.ndim(self.jacobians)
+        shape = jnp.shape(self.jacobians)
+        dtype = self.jacobians.dtype
+        
+        if ndim == 3:
+            # non-batched case
+            return jax.ShapeDtypeStruct(shape=(shape[0] * 3,),
+                                        dtype=dtype)
+        elif ndim == 4:
+            # batched case
+            return jax.ShapeDtypeStruct(shape=(shape[0], shape[1] * 3),
+                                        dtype=dtype)
+
+    def out_structure(self):
+        return self.in_structure()
+    
+@lx.is_symmetric.register(_PowerConeJacobianOperator)
+def _(op):
+    return True
 
 def _pow_calc_xi(
     ri: Float[Array, ""],
@@ -248,103 +349,3 @@ def _pow_cone_jacobian_mv(
     mv_dual = dx_batch - Jdx
     mv = jnp.where(is_dual[:, None], mv_dual, Jdx)
     return jnp.ravel(mv)
-
-
-class _PowerConeJacobianOperator(lx.AbstractLinearOperator):
-
-    jacobians: Float[Array, "*num_batches num_cones 3 3"]
-    is_dual: Bool[Array, " num_cones"]
-    num_cones: int = eqx.field(static=True)
-
-    def __init__(
-        self,
-        jacobians: Float[Array, "*num_batches num_cones 3 3"],
-        is_dual: Bool[Array, " num_cones"],
-    ):
-        self.jacobians = jacobians
-        self.is_dual = is_dual
-        self.num_cones = jnp.size(is_dual)
-        ndim = jnp.ndim(jacobians)
-        if ndim not in [3, 4]:
-            raise ValueError("The `jacobians` argument provided to the `_PowerConeJacobianOperator` "
-                             f"is {ndim}D, but it must be 3D or 4D.")
-
-    def mv(self, dx: Float[Array, "*batch num_cones*3"]):
-        ndim = jnp.ndim(dx)
-        if ndim == 1:
-            if jnp.ndim(self.jacobians) == 4:
-                raise ValueError("Batched Power cone Jacobians cannot be applied to a 1D input.")
-            
-            return _pow_cone_jacobian_mv(dx, self.jacobians, self.is_dual, self.num_cones)
-        elif ndim == 2:
-            return eqx.filter_vmap(_pow_cone_jacobian_mv,
-                                   in_axes=(0, 0, None, None),
-                                   out_axes=0)(dx, self.jacobians, self.is_dual, self.num_cones)
-        else:
-            raise ValueError("The `_PowerConeJacobianOperator` can only be applied to 1D or 2D inputs "
-                             f"but the provided vector is {ndim}D.")
-
-    def as_matrix(self):
-        raise NotImplementedError("Power Cone Jacobian `as_matrix` not implemented.")
-    
-    def transpose(self):
-        return self
-
-    def in_structure(self):
-        ndim = jnp.ndim(self.jacobians)
-        shape = jnp.shape(self.jacobians)
-        dtype = self.jacobians.dtype
-        
-        if ndim == 3:
-            # non-batched case
-            return jax.ShapeDtypeStruct(shape=(shape[0] * 3,),
-                                        dtype=dtype)
-        elif ndim == 4:
-            # batched case
-            return jax.ShapeDtypeStruct(shape=(shape[0], shape[1] * 3),
-                                        dtype=dtype)
-
-    def out_structure(self):
-        return self.in_structure()
-    
-@lx.is_symmetric.register(_PowerConeJacobianOperator)
-def _(op):
-    return True
-
-class PowerConeProjector(AbstractConeProjector):
-
-    # NOTE(quill): while similar, this implementation was a bit more challenging than
-    # the exponential cone projector implementation as the `cone_dims` dictionary
-    # returned by CVXPY has different keys for the exponential cone and its dual, whereas
-    # primal vs dual power cone is encoded within the list of `alphas`.
-
-    alphas: Float[Array, " num_cones"]
-    num_cones: int = eqx.field(static=True)
-    alphas_abs: Float[Array, " num_cones"]
-    signs: Float[Array, " num_cones"]
-    is_dual: Bool[Array, " num_cones"]
-    
-    def __init__(self, alphas: list[float], onto_dual: bool):
-
-        self.alphas = jnp.array(alphas)
-        self.num_cones = jnp.size(self.alphas)
-        self.is_dual = self.alphas < 0
-        self.signs = jnp.where(self.alphas < 0, -1.0, 1.0)
-        if onto_dual:
-            self.signs = -1.0 * self.signs
-            self.is_dual = jnp.logical_not(self.is_dual)
-        self.alphas_abs = jnp.abs(self.alphas)
-
-    def proj_dproj(self, x):
-        batch = jnp.reshape(x, (self.num_cones, 3))
-        # negate points being projected onto dual
-        batch = batch * self.signs[:, None]
-
-        proj_primal, jacs = eqx.filter_vmap(_proj_dproj, in_axes=(0, 0), out_axes=(0, 0))(batch, self.alphas_abs)
-
-        # via Moreau: Pi_K^*(v) = v + Pi_K(-v)
-        proj_dual = batch + proj_primal
-
-        proj = jnp.where(self.is_dual[:, None], proj_dual, proj_primal)
-
-        return jnp.ravel(proj), _PowerConeJacobianOperator(jacs, self.is_dual)

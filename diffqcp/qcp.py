@@ -25,9 +25,9 @@ from diffqcp.linops import _BlockLinearOperator
 from diffqcp.qcp_derivs import (_DuQ, _d_data_Q, _d_data_Q_adjoint_cpu, _d_data_Q_adjoint_gpu)
 
 class AbstractQCP(eqx.Module):
-    """Quadratic Cone Program.
+    """Conic Quadratic Program.
 
-    Represents a (solved) quadratic convex cone program given
+    Represents a (solved) conic quadratic program given
     by the primal-dual problems
 
         (P) minimize    (1/2)x^T P x + q^T x
@@ -52,6 +52,7 @@ class AbstractQCP(eqx.Module):
     y: eqx.AbstractVar[Array]
     s: eqx.AbstractVar[Array]
     problem_structure: eqx.AbstractVar[QCPStructure]
+    batch_size: eqx.AbstractVar[int]
 
     def _form_atoms(self) -> tuple[Float[Array, " n+m+1"], AbstractLinearOperator, AbstractLinearOperator]:
         proj_kstar_v, dproj_kstar_v = self.problem_structure.cone_projector(self.y - self.s)

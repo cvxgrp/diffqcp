@@ -9,7 +9,7 @@ from diffqcp import QCPStructureCPU, QCPStructureGPU
 
 
 def _make_upper_tri_bcoo(n, rng):
-    M = rng.standard_normal(n)
+    M = rng.standard_normal((n, n))
     M = np.triu(M)  # keep upper triangular (including diag)
     Md = jnp.array(M)
     return BCOO.fromdense(Md), Md

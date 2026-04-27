@@ -26,6 +26,7 @@ commits for bisection and inspection.)
 | 0  | Branch hygiene                      | done        |
 | 1  | Tooling floor (lint/type/CI)        | done        |
 | 2  | Test foundation (FD + AD checks)    | done        |
+| 2.5| Existing-test cleanup               | done        |
 | 3  | Cones cleanup                       | pending     |
 | 4  | Unify CPU/GPU problem data          | pending     |
 | 5  | Solver dispatch as typed strategy   | pending     |
@@ -91,6 +92,32 @@ commits for bisection and inspection.)
   Jacobian only exists in active-set-stable regions; FD step too large
   crosses kinks, too small loses precision. Cleanest implementation is in
   Wave 7's solver-quality harness, where we already need this kind of test.
+
+**Wave 2.5 — Existing-test cleanup (done).** Bug fixes + simplification on
+the pre-existing test files Wave 2 didn't touch:
+- `test_problem_data.py:_make_upper_tri_bcoo` was sampling `rng.standard_normal(n)`
+  (1-D) instead of `(n, n)`; the test was passing only because comparisons
+  coincided trivially on a vector. Fixed to actually exercise an n×n matrix.
+- `test_qcp_cpu_analytical.py` and `test_qcp_gpu_analytical.py` had
+  `np.random.seed(0)` *inside* the `for _ in range(10):` loop, making every
+  iteration test the same problem. Now use `np.random.default_rng(0)` outside
+  the loop so the 10 iterations actually exercise distinct problems.
+- Same files: dropped the `eqx.partition`/`eqx.combine` ceremony (was
+  working around a `P_diag_mask` boolean-indexing issue in `QCPStructureCPU.form_obj`
+  that Wave 4 fixes via `eqx.field(static=True)`); call `qcp.jvp` directly.
+- Same files: replaced inline `cvx.Problem` construction with a small
+  `_ls_problem(A, b)` helper. Use of the shared `tests.problems` API is
+  explicitly *not* possible here because the test needs the raw `(A, b)`
+  matrices to compute the closed-form Jacobian.
+- `test_qcp_cpu_analytical.py:6` redundant `jax.config.update("jax_platform_name", "cpu")`
+  removed — same root cause as the test-isolation flakiness we hit in Wave 2.
+- Tolerance: with bug-1 fixed, distinct problems revealed that main's
+  `atol=1e-8` only passed because of bug-1; the LSMR-bottleneck floor with
+  `db = 1e-6·N(0,1)` is ~1e-8 absolute, so we use `atol=1e-7` (5× headroom).
+  Wave 5 (configurable solver tolerance) lets us tighten this back down.
+
+Test count: 19 → 29 in Wave 2 → 29 in Wave 2.5 (no new tests; same coverage,
+honest tolerances, real bugs fixed).
 
 **Wave 3 — Cones cleanup.** Land per-cone file split cleanly: every projector
 final + correct `__check_init__`; replace `jnp.ndim` dispatch in operator

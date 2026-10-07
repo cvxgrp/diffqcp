@@ -31,7 +31,7 @@ commits for bisection and inspection.)
 | 3  | Cones cleanup                       | done (partial; see below) |
 | 4  | Unify CPU/GPU problem data          | bug fixes done; merge needs your call |
 | 5  | Solver dispatch as typed strategy   | done (ahead of 3, 4) |
-| 6  | Batching over problem data          | pending     |
+| 6  | Batching over problem data          | contract done; internal cleanup deferred |
 | 7  | Sparse F + direct-solve diagnosis   | pending     |
 | 8  | `cvxpylayers` interface             | pending     |
 | 9  | `cvxcp` extraction                  | pending     |
@@ -290,9 +290,20 @@ deprecated.
 - Deferred: sparse augmented system for cuDSS (Wave 7); exposing solver
   diagnostics (residual, degeneracy flag) to callers.
 
-**Wave 6 — Batching.** Explicit batching contract; primarily `eqx.filter_vmap`
-over the unbatched class. Drop ad-hoc `ndim`-dispatch in operator `mv`.
-Tests covering batched jvp/vjp consistency vs. per-instance loops.
+**Wave 6 — Batching (contract done; internal cleanup deferred).**
+- The contract is `vmap` at the boundary: (a) many perturbations of one
+  problem, `vmap` over `qcp.jvp` / `qcp.vjp` inputs; (b) many problems with
+  one sparsity pattern, `vmap` over the `data` and `solution` arguments of
+  `differentiable_solution` (structure shared, not batched). Both already
+  worked; `tests/test_batching.py` now pins them (batched vs. looped, both
+  solvers, QP and SDP; agreement ~1e-11). README documents it.
+- Not done: deleting the `jnp.ndim` dispatch inside the cone Jacobian
+  operators. With this contract nothing inside diffqcp needs it any more, but
+  `test_cone_projectors.py` still exercises the old "call `mv` on 2D input
+  outside `vmap`" behaviour, and external callers may rely on it. Removing it
+  is a small, separate, API-visible change.
+- Upstream note: equinox emits `jax.core.mapped_aval` deprecation warnings
+  under `vmap` (harmless today; watch on the next JAX upgrade).
 
 **Wave 7 — Sparse F + direct-solve.** `bench/` harness reporting condition
 number / residual / gradient norm across solvers on fixed problems. Use it

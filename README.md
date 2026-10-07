@@ -166,6 +166,21 @@ grads = jax.jit(jax.grad(loss))((P.data, A.data, q, b))
 For a solution you already have, `differentiable_solution(data, (x, y, s), structure)`
 attaches the derivative without calling a solver (see `diffqcp/autodiff.py`).
 
+## Batching
+
+Batch with `jax.vmap` at the boundary; everything inside `diffqcp` is written for a
+single problem.
+
+- Many perturbations of one problem: `jax.vmap(qcp.jvp)` / `jax.vmap(qcp.vjp)` over
+  the perturbation arguments.
+- Many problems sharing one sparsity pattern (e.g. a CVXPYlayers batch): build one
+  structure, then `vmap` over the stacked `data` and `solution` passed to
+  `differentiable_solution` (or over a `make_differentiable` solve):
+
+```python
+grads = jax.vmap(jax.grad(loss))(batched_data, batched_solutions)
+```
+
 ## Selecting solvers
 
 As detailed in our paper, the JVPs and VJPs are computed via a linear system solve
@@ -231,7 +246,6 @@ note that we're unsure how `nvmath-python[cu12]` will interact with the version
 # Next steps
 
 `diffqcp` is still in development! WIP features and improvements include:
-- Batched problem computations.
 - Not forming dense $F$ when using direct solver methods.
 - Consider JAX's [`spsolve`](https://docs.jax.dev/en/latest/_autosummary/jax.experimental.sparse.linalg.spsolve.html#jax.experimental.sparse.linalg.spsolve).
 - Better performance benchmarking / regression testing.

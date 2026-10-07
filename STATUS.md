@@ -187,6 +187,29 @@ for QPs.
   poor point (complementarity 4e-3 on a dense QP); default tolerances are
   more reliable for fixtures.
 
+**Fix — exponential and power cones (done).** Checking every cone Jacobian
+against central finite differences (with SOC/PSD as controls, ~1e-10) found:
+- **Power cone, four bugs** (power-cone derivatives were wrong essentially
+  everywhere; on an end-to-end power-cone problem the JVP was 77-98% off):
+  - dual projection sign: `PowerConeProjector` returned -v + Pi_K(-v) instead
+    of v + Pi_K(-v). This is the path diffqcp always takes (Pi_{K*}(y - s)
+    with CVXPY's positive alphas). Projection error ~3x the input.
+  - `_proj_dproj`: `gy` used alpha instead of 1 - alpha, and `J[0, 1]` used
+    (1 - alpha)^2 instead of alpha (1 - alpha). Both invisible at alpha = 0.5.
+  - `_in_polar_cone` added the (1 - a)^(1 - a) factor instead of multiplying;
+    ~10% of points in the polar cone fell through to the root-finding branch,
+    whose Jacobian was garbage (errors ~1e10).
+- **Exponential cone:** points whose projection is (0, 0, t) (a
+  positive-measure region with small r > 0 next to a large negative s) made
+  the general Jacobian formula divide 0/0: NaN for ~0.5-3% of random points.
+  Now handled as the s = 0 face. Remaining disagreements (~0.1%) are genuine
+  kinks or FD noise from the projection's 1e-8 internal tolerance.
+- Tests: FD Jacobian checks for exp (both duals, plus the face) and pow
+  (5 alpha sets x both duals), a dual power projection test (the previous
+  one was commented out), and an end-to-end power-cone JVP vs. SCS finite
+  differences (Clarabel's exp/pow solutions are only ~1e-6 accurate, too
+  coarse for this). All fail on the old code.
+
 **Wave 3 — Cones cleanup.** Land per-cone file split cleanly: every projector
 final + correct `__check_init__`; replace `jnp.ndim` dispatch in operator
 `mv` with 1D implementations called via `eqx.filter_vmap` at the boundary;

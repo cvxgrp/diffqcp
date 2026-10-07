@@ -87,10 +87,13 @@ def _in_polar_cone(
     abs_w: Float[Array, ""],
     alpha: Float[Array, ""]
 ) -> bool:
+    # Polar of the power cone: u, v <= 0 and (-u/a)^a (-v/(1-a))^(1-a) >= |w|,
+    # i.e. (-u)^a (-v)^(1-a) >= |w| a^a (1-a)^(1-a). (This used to *add* the
+    # (1-a)^(1-a) factor, misclassifying ~10% of random points.)
     return jnp.logical_and(u <= 0,
                            jnp.logical_and(v <= 0,
                                            TOL + jnp.pow(-u, alpha) * jnp.pow(-v, 1. - alpha) >=
-                                            abs_w * alpha**alpha + jnp.pow(1. - alpha, 1. - alpha)))
+                                            abs_w * alpha**alpha * jnp.pow(1. - alpha, 1. - alpha)))
 
 
 def _proj_dproj(
@@ -197,7 +200,7 @@ def _proj_dproj(
         two_r = 2 * r_star
         sign_z = jnp.sign(z)
         gx = _gi(r_star, x, abs_z, a)
-        gy = _gi(r_star, y, abs_z, a)
+        gy = _gi(r_star, y, abs_z, ac)
         frac_x = (a * x) / gx
         frac_y = (ac * y) / gy
         T = - (frac_x + frac_y)
@@ -210,7 +213,7 @@ def _proj_dproj(
         J = J.at[0, 0].set(0.5 + x / (2 * gx) + (aa * (abs_z - two_r) * rL) / (gx * gx))
         J = J.at[1, 1].set(0.5 + y / (2 * gy) + (acac * (abs_z - two_r) * rL) / (gy * gy))
         J = J.at[2, 2].set(r_star / abs_z + (r_star / abs_z) * T * L)
-        J = J.at[0, 1].set(rL * acac * (abs_z - two_r) / gxgy)
+        J = J.at[0, 1].set(rL * a * ac * (abs_z - two_r) / gxgy)
         J = J.at[1, 0].set(J[0, 1])
         J = J.at[0, 2].set(sign_z * a * rL / gx)
         J = J.at[2, 0].set(J[0, 2])
@@ -338,8 +341,9 @@ class PowerConeProjector(AbstractConeProjector):
 
         proj_primal, jacs = eqx.filter_vmap(_proj_dproj, in_axes=(0, 0), out_axes=(0, 0))(batch, self.alphas_abs)
 
-        # via Moreau: Pi_K^*(v) = v + Pi_K(-v)
-        proj_dual = batch + proj_primal
+        # via Moreau: Pi_K^*(v) = v + Pi_K(-v). For dual cones `batch` already
+        # holds -v (and `proj_primal` is Pi_K(-v)), so v = -batch.
+        proj_dual = -batch + proj_primal
 
         proj = jnp.where(self.is_dual[:, None], proj_dual, proj_primal)
 

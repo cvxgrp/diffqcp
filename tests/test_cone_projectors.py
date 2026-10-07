@@ -300,6 +300,23 @@ def test_proj_pow():
 #         # Moreau: Pi_K^*(v) = v + Pi_K(-v)
 #         assert np.allclose(np.array(proj_jax_dual), x + proj_cvx_dual, atol=1e-4)
 
+def test_proj_pow_dual():
+    """Projection onto the dual power cone, both ways of asking for it:
+    a negative alpha (SCS convention) and `onto_dual=True`. The reference uses
+    Moreau's identity, Pi_{K*}(v) = v + Pi_K(-v). Regression test: the dual
+    projection returned -v + Pi_K(-v)."""
+    rng = np.random.default_rng(0)
+    for alpha in rng.uniform(low=0.05, high=0.95, size=8):
+        for projector in (
+            cone_lib.PowerConeProjector([-alpha], onto_dual=False),
+            cone_lib.PowerConeProjector([alpha], onto_dual=True),
+        ):
+            x = rng.standard_normal(3)
+            expected = x + _proj_pow_via_cvxpy(-x, [alpha])
+            proj_jax, _ = projector(jnp.array(x))
+            assert np.allclose(np.asarray(proj_jax), expected, atol=1e-6, rtol=1e-7)
+
+
 def test_proj_pow_specific():
     n = 3
     x = np.array([1., 2., 3.])

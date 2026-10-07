@@ -16,9 +16,10 @@ Jacobians from two independent angles.
 Cones with kinks (SOC at `||z|| = ±t`, PSD at the eigenvalue-zero hyperplane,
 EXP/POW on their boundary surfaces) are non-differentiable on a measure-zero
 set; we sample interior/exterior points to avoid those. EXP and POW are
-left for Wave 3 — their projector internals contain `jax.lax.cond` branches
-where one branch contains `1/r0`-type singularities that produce NaNs in the
-"unused" branch under autodiff. Wave 3's cones cleanup addresses this.
+checked against central finite differences instead of `jax.jvp` (their
+projector internals contain `jax.lax.cond` branches with `1/r0`-type
+singularities that produce NaNs in the "unused" branch under autodiff); see
+the bottom of this file.
 """
 from __future__ import annotations
 
@@ -203,3 +204,74 @@ def test_product_projector_jacobian_matches_jvp(getkey):
         x = jnp.concatenate([zero_part, nn_part, soc_part])
         dx = jr.normal(getkey(), (total_dim,))
         _check_jvp_matches_dproj(projector, x, dx)
+
+
+# ─── exponential and power cones (finite differences) ─────────────────────
+#
+# `jax.jvp` through these projectors hits NaNs in unused `lax.cond` branches,
+# so these use central finite differences of the projection instead (the
+# projections themselves are checked against Clarabel in
+# `test_cone_projectors.py`). Points within ~1e-7 of a kink, detected by
+# disagreeing one-sided differences, are skipped.
+
+
+def _fd_check_cone(projector, dim, rng, num_points=200, h=1e-6, rtol=1e-5, max_bad_frac=0.0):
+    """`max_bad_frac`: the exp projection is computed to a ~1e-8 tolerance, so
+    with h = 1e-6 a small fraction of points show FD noise of order 1e-3."""
+    proj = jax.jit(lambda v: projector(v)[0])
+    jac_mv = jax.jit(lambda v, dv: projector(v)[1].mv(dv))
+    checked = bad = 0
+    for _ in range(num_points):
+        scale = rng.choice([0.3, 1.0, 3.0])
+        v = jnp.asarray(scale * rng.standard_normal(dim))
+        dv = jnp.asarray(rng.standard_normal(dim))
+        p0 = np.asarray(proj(v))
+        fwd = (np.asarray(proj(v + h * dv)) - p0) / h
+        bwd = (p0 - np.asarray(proj(v - h * dv))) / h
+        if np.linalg.norm(fwd - bwd) > 1e-3 * max(np.linalg.norm(fwd), 1e-8):
+            continue  # kink between v - h dv and v + h dv
+        central = 0.5 * (fwd + bwd)
+        analytical = np.asarray(jac_mv(v, dv))
+        assert np.all(np.isfinite(analytical)), f"non-finite Jacobian at {np.asarray(v)}"
+        checked += 1
+        if not np.allclose(analytical, central, rtol=rtol, atol=1e-7):
+            bad += 1
+    assert checked >= 0.9 * num_points, f"only {checked}/{num_points} points away from kinks"
+    assert bad <= max_bad_frac * checked, f"{bad}/{checked} points disagree with finite differences"
+
+
+@pytest.mark.parametrize("onto_dual", [False, True])
+def test_exp_jacobian_matches_finite_differences(onto_dual):
+    from diffqcp.cones.exp import ExponentialConeProjector
+
+    _fd_check_cone(
+        ExponentialConeProjector(3, onto_dual=onto_dual), 9, np.random.default_rng(0), max_bad_frac=0.02
+    )
+
+
+def test_exp_jacobian_on_s_zero_face():
+    """Points whose projection is (0, 0, t): small r > 0 next to a large
+    negative s. Regression test: the general formula divided 0/0 here."""
+    from diffqcp.cones.exp import ExponentialConeProjector
+
+    projector = ExponentialConeProjector(1, onto_dual=False)
+    for v in ([0.1089, -3.7565, 1.956], [0.0065, -0.2766, 0.1547], [0.028, -0.7137, 0.1323]):
+        p, J = projector(jnp.asarray(v))
+        np.testing.assert_allclose(np.asarray(p), [0.0, 0.0, v[2]], atol=1e-8)
+        dv = jnp.asarray([0.3, -0.7, 1.1])
+        np.testing.assert_allclose(np.asarray(J.mv(dv)), [0.0, 0.0, 1.1], atol=1e-10)
+
+
+@pytest.mark.parametrize("onto_dual", [False, True])
+@pytest.mark.parametrize(
+    "alphas",
+    [[0.5, 0.5], [0.2, 0.35], [0.7, 0.9], [-0.3, 0.6], [-0.8, -0.25]],
+    ids=["half", "small", "large", "mixed_dual", "all_dual"],
+)
+def test_pow_jacobian_matches_finite_differences(alphas, onto_dual):
+    """Regression test for the power cone: alpha/(1 - alpha) mix-ups in the
+    Jacobian (invisible at alpha = 0.5), a wrong polar-cone membership test,
+    and a sign error in the dual projection (negative alphas / onto_dual)."""
+    from diffqcp.cones.pow import PowerConeProjector
+
+    _fd_check_cone(PowerConeProjector(alphas, onto_dual=onto_dual), 3 * len(alphas), np.random.default_rng(1))

@@ -11,15 +11,24 @@ the step is small enough not to change the active set.
 from __future__ import annotations
 
 import clarabel
+import cvxpy as cvx
 import jax.numpy as jnp
 import numpy as np
 import pytest
 import scipy.sparse as sp
+import scs
+from cvxpy.reductions.solvers.conic_solvers.scs_conif import dims_to_solver_dict
 from jax.experimental.sparse import BCOO
 
+from diffqcp import HostQCP, QCPStructureCPU
 from diffqcp.solvers import DenseDirectSolver, LSMRSolver
 
-from .problems import QCPProbData, generate_dense_qp, generate_portfolio_problem
+from .problems import (
+    QCPProbData,
+    generate_dense_qp,
+    generate_portfolio_problem,
+    generate_pow_projection_problem,
+)
 from .test_qcp_adjoint import _build_host_qcp
 
 STEP = 1e-6
@@ -72,3 +81,54 @@ def test_qp_jvp_matches_finite_differences(name, solver):
     for label, actual, expected in zip(("dx", "dy", "ds"), jvp, fd, strict=True):
         rel = np.linalg.norm(np.asarray(actual) - expected) / np.linalg.norm(expected)
         assert rel < RTOL, f"{label}: {rel:.2e}"
+
+
+def _scs_solve(P, A, b, c, cones):
+    solver = scs.SCS(
+        dict(P=sp.csc_matrix(P), A=sp.csc_matrix(A), b=b, c=c), cones,
+        eps_abs=1e-12, eps_rel=1e-12, max_iters=500_000, acceleration_lookback=0, verbose=False,
+    )
+    sol = solver.solve()
+    assert sol["info"]["status"] == "solved", sol["info"]["status"]
+    return sol["x"], sol["y"], sol["s"]
+
+
+def test_power_cone_jvp_matches_finite_differences():
+    """Power cones have no other oracle (diffcp lacks them). Clarabel cannot
+    solve these tightly enough (its solutions satisfy Pi_{K*}(y - s) = y only
+    to ~1e-6), so this uses SCS at eps=1e-12, which reaches ~1e-12, both for
+    the point the derivative is taken at and for the finite differences."""
+    data, _, _ = generate_pow_projection_problem(9, 0).get_problem_data(cvx.SCS)
+    cones = dims_to_solver_dict(data["dims"])
+    assert cones["p"], "expected power cones"
+    A = sp.csc_matrix(data["A"])
+    b, c = data["b"], data["c"]
+    m, n = A.shape
+    P = sp.triu(sp.csc_matrix(data["P"])).tocsc()  # SCS and HostQCP take the upper triangle
+
+    def to_bcoo(M, values=None):
+        M = M.tocoo()
+        vals = M.data if values is None else values
+        return BCOO((jnp.asarray(vals), jnp.stack([jnp.asarray(M.row), jnp.asarray(M.col)], axis=1)), shape=M.shape)
+
+    x, y, s = _scs_solve(P, A, b, c, cones)
+    P_b, A_b = to_bcoo(P), to_bcoo(A)
+    qcp = HostQCP(P_b, A_b, jnp.asarray(c), jnp.asarray(b), jnp.asarray(x), jnp.asarray(y), jnp.asarray(s),
+                  QCPStructureCPU(P_b, A_b, cones))
+
+    rng = np.random.default_rng(1)
+    Pc, Ac = P.tocoo(), A.tocoo()
+    dP_vals, dA_vals = rng.standard_normal(Pc.nnz), rng.standard_normal(Ac.nnz)
+    dc, db = rng.standard_normal(n), rng.standard_normal(m)
+    dP = sp.csc_matrix((dP_vals, (Pc.row, Pc.col)), shape=P.shape)
+    dA = sp.csc_matrix((dA_vals, (Ac.row, Ac.col)), shape=A.shape)
+
+    h = 1e-5
+    plus = _scs_solve(P + h * dP, A + h * dA, b + h * db, c + h * dc, cones)
+    minus = _scs_solve(P - h * dP, A - h * dA, b - h * db, c - h * dc, cones)
+    fd = [(p - q) / (2 * h) for p, q in zip(plus, minus, strict=True)]
+
+    jvp = qcp.jvp(to_bcoo(P, dP_vals), to_bcoo(A, dA_vals), jnp.asarray(dc), jnp.asarray(db))
+    for label, actual, expected in zip(("dx", "dy", "ds"), jvp, fd, strict=True):
+        rel = np.linalg.norm(np.asarray(actual) - expected) / np.linalg.norm(expected)
+        assert rel < 1e-5, f"{label}: {rel:.2e}"

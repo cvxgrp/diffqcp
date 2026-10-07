@@ -702,6 +702,14 @@ def _dproj_exp(
 
         return J_inv[0:3, 1:4]
 
+    def _on_s_zero_face():
+        # The projection lies on the face {(r, 0, t): r <= 0, t >= 0}, where it
+        # is (min(r, 0), 0, max(t, 0)) locally. This happens on a set of
+        # positive measure that includes points with r > 0 (small r next to a
+        # large negative s), so it cannot be detected from the signs of v alone.
+        # The general formula divides by s there (0/0 -> NaN).
+        return jnp.diag(jnp.array([v[0] < 0.0, False, v[2] > 0.0], dtype=v.dtype))
+
     J = jax.lax.cond(
         in_exp(v),
         lambda: jnp.identity(3, dtype=v.dtype),
@@ -711,8 +719,11 @@ def _dproj_exp(
             lambda: jax.lax.cond(
                 (v[0] < 0.0) & (v[1] < 0.0) & (jnp.logical_not(jnp.allclose(v[2], 0.0))),
                 _both_negative,
-                _general_case
-            )))
+                lambda: jax.lax.cond(
+                    proj_v[1] == 0.0,
+                    _on_s_zero_face,
+                    _general_case,
+                ))))
 
     return J
 

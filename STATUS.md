@@ -151,6 +151,21 @@ CVXPY → cvxpylayers → diffqcp → gradient.
 **Wave 9 — `cvxcp` extraction.** Once cones are stable: new repo under
 `healeyq3`; `diffqcp` depends on it.
 
+## Items from the original brief not yet assigned to a wave
+
+From `docs/original-brief.md`; fold into a wave or drop explicitly.
+
+- Batched `jvp`/`vjp` over inputs for a single problem (test that this works
+  today, independent of Wave 6's batching over problem data).
+- `docs/` note on cone architecture patterns, split into: cones that reduce to
+  one dimension, products of cones of differing dimension, and products of 3D
+  cones (EXP/POW). Partially covered by Wave 3's `CONVENTIONS.md`.
+- Consistent, complete docstrings across the package.
+- Decide whether `experiments/` and `tests/` should both exist (Wave 2 made
+  experiments import from `tests.problems`, which couples them).
+- Keep a running learning log: architecture decisions, numerical linear
+  algebra notes, DevOps how-tos (`docs/architecture/` is the intended home).
+
 ## Known issues to fix as we touch their files
 
 - `diffqcp/problem_data.py:295,298,324,326` — `ObjMatrixCPU/GPU.in_structure`
@@ -170,9 +185,10 @@ CVXPY → cvxpylayers → diffqcp → gradient.
 ## Branches
 
 - `main` — clean baseline.
-- `feature/maintenance-and-hygiene` — parked. Holds in-flight per-cone file
-  split + cvxcp scaffold + planning notes (`claude-plan.md`, `patterns.md`).
-  Will fold the useful parts into Wave 3 cones cleanup; the rest archives.
+- `feature/maintenance-and-hygiene` — parked. Holds an in-flight per-cone file
+  split + cvxcp scaffold (mostly empty stubs; not runnable). Its planning notes
+  now live in `docs/original-brief.md` and `docs/patterns.md`, so the branch
+  can be archived once Wave 3 has used its file layout as a sketch.
 - `productionization` — long-running integration branch carrying all wave
   commits. Single PR off this branch lands at the end.
 

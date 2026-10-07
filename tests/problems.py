@@ -19,6 +19,8 @@ import numpy as np
 import scipy.linalg as la
 from scipy import sparse
 
+from diffqcp import clarabel_to_scs_permutation
+
 # Generator type — accept a seed, an existing rng, or None (uses default rng).
 Rng = np.random.Generator
 
@@ -44,7 +46,11 @@ def randn_symm(n: int, rng: Rng) -> np.ndarray:
 
 
 def generate_sdp(n: int, p: int, rng_or_seed: Rng | int | None = None) -> cvx.Problem:
-    """SDP from https://www.cvxpy.org/examples/basic/sdp.html."""
+    """SDP from https://www.cvxpy.org/examples/basic/sdp.html.
+
+    Note: with random data this is frequently infeasible or unbounded, so do not
+    use it where an optimal solution is required; use `generate_feasible_sdp`.
+    """
     rng = _as_rng(rng_or_seed)
     C = randn_symm(n, rng)
     A = [randn_symm(n, rng) for _ in range(p)]
@@ -59,14 +65,22 @@ def generate_sdp(n: int, p: int, rng_or_seed: Rng | int | None = None) -> cvx.Pr
 def generate_feasible_sdp(
     n: int, p: int, rank: int = 3, rng_or_seed: Rng | int | None = None
 ) -> cvx.Problem:
-    """SDP guaranteed strictly feasible (a known X* satisfies the constraints)."""
+    """SDP that is strictly primal *and* dual feasible, so an optimum is attained.
+
+    Primal: a known full-rank X* satisfies the equality constraints.
+    Dual: C = sum_i lambda_i A_i + S with S positive definite, so (lambda, S) is
+    strictly dual feasible. Without the dual construction a random C makes the
+    problem unbounded and the "solution" a certificate of unboundedness.
+    """
     del rank  # historical; not used currently
     rng = _as_rng(rng_or_seed)
     Z = rng.standard_normal((n, n))
     X_star = Z @ Z.T  # PSD, full rank
     A = [randn_symm(n, rng) for _ in range(p)]
     b = [float(np.trace(Ai @ X_star)) for Ai in A]
-    C = randn_symm(n, rng)
+    lambd = rng.standard_normal(p)
+    W = rng.standard_normal((n, n))
+    C = sum(li * Ai for li, Ai in zip(lambd, A, strict=True)) + W @ W.T + np.eye(n)
 
     X = cvx.Variable((n, n), symmetric=True)
     constraints = [X >> 0]
@@ -304,6 +318,8 @@ class QCPProbData:
     x: np.ndarray = field(init=False)
     y: np.ndarray = field(init=False)
     s: np.ndarray = field(init=False)
+    status: str = field(init=False)
+    scs_perm: np.ndarray = field(init=False)
 
     scs_cones: dict = field(init=False)
     clarabel_cones: list = field(init=False)
@@ -355,6 +371,20 @@ class QCPProbData:
             self.Pupper_csc, self.q, self.Acsc, self.b, self.clarabel_cones, solver_settings
         )
         soln = solver.solve()
+        self.status = str(soln.status)
         self.x = np.array(soln.x)
         self.y = np.array(soln.z)
         self.s = np.array(soln.s)
+
+        # Rows above are in Clarabel order (PSD blocks upper-triangular,
+        # column-major); `diffqcp` wants SCS order. See `scs_ordered`.
+        self.scs_perm = clarabel_to_scs_permutation(self.scs_cones)
+
+    def scs_ordered(self) -> tuple[sparse.coo_matrix, np.ndarray, np.ndarray, np.ndarray]:
+        """`(A, b, y, s)` with rows permuted into the SCS order `diffqcp` expects.
+
+        Identical to the stored Clarabel-ordered data unless there are PSD cones.
+        """
+        perm = self.scs_perm
+        A = sparse.coo_matrix(self.Acsr[perm])
+        return A, self.b[perm], self.y[perm], self.s[perm]

@@ -27,6 +27,7 @@ commits for bisection and inspection.)
 | 1  | Tooling floor (lint/type/CI)        | done        |
 | 2  | Test foundation (FD + AD checks)    | done        |
 | 2.5| Existing-test cleanup               | done        |
+| 2.6| diffcp oracle + correctness fixes   | done        |
 | 3  | Cones cleanup                       | pending     |
 | 4  | Unify CPU/GPU problem data          | pending     |
 | 5  | Solver dispatch as typed strategy   | pending     |
@@ -119,6 +120,38 @@ the pre-existing test files Wave 2 didn't touch:
 Test count: 19 → 29 in Wave 2 → 29 in Wave 2.5 (no new tests; same coverage,
 honest tolerances, real bugs fixed).
 
+**Wave 2.6 — diffcp oracle + correctness fixes (done).** `diffcp` is now
+an independent oracle for cone programs (`P = 0`), and pointing it at the
+code immediately found real bugs:
+- **PSD Jacobian bug (since PSD support landed, `f911bd1`; also on `main`).**
+  `_PSDConeProjector`'s analytical Jacobian put an *identity* on the
+  positive-eigenvalue block of `B` where the formula needs a block of *ones*.
+  Correct only when exactly one eigenvalue is positive, so every SDP
+  derivative with >= 2 positive eigenvalues at `y - s` was wrong (40-800%
+  error vs. diffcp and finite differences). Existing tests only sampled
+  definite points, where the Jacobian is trivially I or 0. Fixed, with a
+  mixed-eigenvalue regression test in `test_cones_autodiff.py`.
+- **PSD row order (Clarabel vs. SCS).** `diffqcp` vectorizes PSD blocks in
+  SCS order (lower triangle, column-major); Clarabel uses the upper triangle
+  column-major. The README tells users to canonicalize with `cvx.CLARABEL`,
+  whose data is in Clarabel order, so SDP derivatives from that recipe are
+  wrong. Added `diffqcp.clarabel_to_scs_permutation(cone_dims)` and
+  `QCPProbData.scs_ordered()`. README/API decision deferred to Wave 4.
+- **`DeviceQCP.vjp` defaulted to `solve_method="jax-lu"`** (dense LU of the
+  singular F) while `jvp` defaulted to LSMR. cvxpylayers' CuClarabel
+  interface calls `vjp` without `solve_method`, so its GPU backward pass used
+  the exploding path. Default is now `"jax-lsmr"`.
+- **SDP fixtures were unbounded.** `generate_feasible_sdp` used a random
+  indefinite `C`, so Clarabel returned an unboundedness certificate rather
+  than a solution. Now constructs a strictly dual-feasible `C`.
+- **Flaky `test_nonnegative_projector`** (~1 in 8 runs): FD step crossed the
+  kink at 0. Samples are now kept >= 1e-3 from zero.
+- `tests/test_diffcp_oracle.py`: JVP and VJP vs. diffcp (`dense` mode, SCS at
+  eps=1e-10) on LP, SOCPs, two SDPs and an exp-cone problem, plus an
+  optimality guard. Exp and portfolio are strict-xfail: an *exact* solve of
+  diffqcp's system matches diffcp/FD to ~1e-8, but LSMR at the hard-coded
+  1e-8 tolerances stops 1e-4..1e-3 short. Wave 5 removes the xfails.
+
 **Wave 3 — Cones cleanup.** Land per-cone file split cleanly: every projector
 final + correct `__check_init__`; replace `jnp.ndim` dispatch in operator
 `mv` with 1D implementations called via `eqx.filter_vmap` at the boundary;
@@ -150,6 +183,35 @@ CVXPY → cvxpylayers → diffqcp → gradient.
 
 **Wave 9 — `cvxcp` extraction.** Once cones are stable: new repo under
 `healeyq3`; `diffqcp` depends on it.
+
+## Findings that shape the remaining waves
+
+- **F is structurally singular.** `F z = 0` for `z = (x, y - s, 1)` (the
+  embedding is positively homogeneous), on every problem tested. The output
+  map `dz -> (dx, dy, ds)` annihilates `z`, and the VJP right-hand side is
+  orthogonal to `z`, so the systems are consistent; LSMR copes, but LU on F
+  explodes. Gauge-fixing `dz_N = 0` (drop F's last column, F') removes the
+  null direction: cond(F') was 35..4e4 vs. cond(F) ~1e17, and an exact
+  solve of the symmetric augmented system `[[I, F'], [F'^T, 0]]` matched the
+  truncated pseudo-inverse to 1e-15..1e-6. The same matrix serves the VJP
+  with a different right-hand side. This is the plan for Wave 5.
+- **LSMR at rtol=atol=1e-8 is not accurate enough** on moderately
+  conditioned problems (1e-4..1e-3 relative error on portfolio / exp).
+- diffcp limitations as an oracle: its linear-solve modes reject `P`; it has
+  no power cone; its Clarabel path (1.1.6) returns wrong PSD solutions; its
+  default `lsqr` mode was 0.95 off on the exp problem. Use `mode="dense"`
+  with SCS at tight tolerance.
+
+## Decisions made overnight (review these)
+
+- Kept SCS vectorization as `diffqcp`'s internal PSD convention (matches
+  diffcp and `vec_symm`); converting Clarabel data is the caller's job, via
+  the new public `clarabel_to_scs_permutation`.
+- `QCPProbData` keeps its Clarabel-ordered fields (experiments re-solve with
+  Clarabel from them) and gains `scs_ordered()`; tests build `diffqcp`
+  objects from the SCS-ordered view.
+- Fixed the PSD Jacobian in `canonical.py` now rather than waiting for the
+  Wave 3 file split, since it is a correctness bug.
 
 ## Items from the original brief not yet assigned to a wave
 

@@ -594,15 +594,16 @@ class _PSDConeProjector(AbstractConeProjector):
             lam_neg_full = jnp.where(neg_mask_full, lambd, 0.0)
             lam_pos_full = jnp.where(pos_mask_full, lambd, 0.0)
 
-            # Bottom-right identity block (on indices i>k)
-            eye = jnp.eye(self.size, dtype=x.dtype)
+            # Bottom-right block of ones (on indices i, j > k). This must be all
+            # ones, not the identity: the two only coincide when there is a
+            # single positive eigenvalue.
             br_mask = (pos_mask_full[:, None] & pos_mask_full[None, :])
-            B_br = jnp.where(br_mask, eye, 0.0)
+            B_br = jnp.where(br_mask, 1.0, 0.0).astype(x.dtype)
 
             # Top-right block (shape-stable full (n,n) matrix but with support only at rows<=k, cols>k)
             B_tr_full = form_B_block_full(lam_pos_full, lam_neg_full, pos_mask_full, neg_mask_full)
 
-            # Final B: bottom-right identity + top-right + its transpose (symmetry)
+            # Final B: bottom-right ones + top-right + its transpose (symmetry)
             B = B_br + B_tr_full + B_tr_full.T
 
             return proj_x, _ProjPSDConeJacobian(lambd, Q, B, self.size, self.dim, x)

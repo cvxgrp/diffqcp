@@ -59,7 +59,7 @@ def _make_perturbations(prob_data: QCPProbData, key):
     `dP` shares P's upper-triangular sparsity; `dA` shares A's full sparsity.
     """
     P_upper = scoo_to_bcoo(prob_data.Pupper_coo)
-    A = scoo_to_bcoo(prob_data.Acoo)
+    A = scoo_to_bcoo(prob_data.scs_ordered()[0])
 
     k1, k2, k3, k4, k5, k6, k7 = jr.split(key, 7)
     dP_data = jr.normal(k1, P_upper.data.shape, dtype=P_upper.data.dtype)
@@ -77,16 +77,17 @@ def _make_perturbations(prob_data: QCPProbData, key):
 
 def _build_host_qcp(prob_data: QCPProbData) -> HostQCP:
     P_upper = scoo_to_bcoo(prob_data.Pupper_coo)
-    A = scoo_to_bcoo(prob_data.Acoo)
+    A_scs, b, y, s = prob_data.scs_ordered()  # PSD rows into diffqcp's SCS order
+    A = scoo_to_bcoo(A_scs)
     structure = QCPStructureCPU(P_upper, A, prob_data.scs_cones)
     return HostQCP(
         P_upper,
         A,
         jnp.asarray(prob_data.q),
-        jnp.asarray(prob_data.b),
+        jnp.asarray(b),
         jnp.asarray(prob_data.x),
-        jnp.asarray(prob_data.y),
-        jnp.asarray(prob_data.s),
+        jnp.asarray(y),
+        jnp.asarray(s),
         structure,
     )
 

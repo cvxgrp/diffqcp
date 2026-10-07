@@ -148,6 +148,35 @@ def test_psd_negative_jacobian_matches_jvp(getkey):
         _check_jvp_matches_dproj(projector, x, dx)
 
 
+def _psd_mixed_vec(key, size, num_pos):
+    """Vectorised symmetric matrix with `num_pos` positive and `size - num_pos`
+    negative eigenvalues, all at least 0.5 away from zero (away from the kink)."""
+    k1, k2, k3 = jr.split(key, 3)
+    Q, _ = jnp.linalg.qr(jr.normal(k1, (size, size)))
+    pos = 0.5 + jr.uniform(k2, (num_pos,), maxval=2.0)
+    neg = -(0.5 + jr.uniform(k3, (size - num_pos,), maxval=2.0))
+    lambd = jnp.concatenate([neg, pos])
+    return cone_lib.vec_symm(Q @ (lambd[:, None] * Q.T))
+
+
+@pytest.mark.parametrize(
+    "size,num_pos", [(2, 1), (3, 1), (3, 2), (4, 2), (5, 3), (6, 1), (6, 5)]
+)
+def test_psd_mixed_eigenvalues_jacobian_matches_jvp(getkey, size, num_pos):
+    """Indefinite point: the only case where the PSD Jacobian is non-trivial.
+
+    Regression test: the analytical Jacobian used an identity (instead of a
+    block of ones) on the positive-eigenvalue block, which is only correct
+    when exactly one eigenvalue is positive.
+    """
+    dim = cone_lib.symm_size_to_dim(size)
+    projector = cone_lib._PSDConeProjector(size=size, dim=dim)
+    for _ in range(3):
+        x = _psd_mixed_vec(getkey(), size, num_pos)
+        dx = jr.normal(getkey(), (dim,))
+        _check_jvp_matches_dproj(projector, x, dx)
+
+
 # ─── product projector ────────────────────────────────────────────────────
 
 

@@ -629,7 +629,7 @@ class DeviceQCP(AbstractQCP):
         dx: Float[Array, " n"],
         dy: Float[Array, " m"],
         ds: Float[Array, " m"],
-        solve_method: str = "jax-lu"
+        solve_method: str = "jax-lsmr"
     ) -> tuple[
         Float[BCSR, "n n"], Float[BCSR, "m n"],
         Float[Array, " n"], Float[Array, " m"]]:

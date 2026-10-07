@@ -14,8 +14,12 @@ from .helpers import tree_allclose
 
 
 def _test_dproj_finite_diffs(
-    projection_func: Callable, key_func, dim: int, num_batches: int = 0
+    projection_func: Callable, key_func, dim: int, num_batches: int = 0, min_abs: float = 0.0
 ):
+    """FD check of `dproj`. `min_abs` pushes every entry of `x` at least that far
+    from zero, for cones whose kink is at a coordinate equal to zero (nonnegative
+    orthant): with a 1e-5 step, an entry within ~1e-5 of zero makes the step
+    cross the kink and the check fail spuriously."""
     if num_batches > 0:
         x = jr.normal(key_func(), (num_batches, dim))
         dx = jr.normal(key_func(), (num_batches, dim))
@@ -27,6 +31,7 @@ def _test_dproj_finite_diffs(
         x = jr.normal(key_func(), dim)
         dx = jr.normal(key_func(), dim)
         _projector = jit(projection_func)
+    x = x + min_abs * jnp.sign(x)
 
     dx = 1e-5 * dx
 
@@ -81,13 +86,13 @@ def test_nonnegative_projector(getkey):
         proj_x, _ = nn_projector(x)
         truth = jnp.maximum(x, 0)
         assert tree_allclose(truth, proj_x)
-        _test_dproj_finite_diffs(nn_projector, getkey, dim=n, num_batches=0)
+        _test_dproj_finite_diffs(nn_projector, getkey, dim=n, num_batches=0, min_abs=1e-3)
 
         x = jr.normal(getkey(), (num_batches, n))
         proj_x, _ = batched_nn_projector(x)
         truth = jnp.maximum(x, 0)
         assert tree_allclose(truth, proj_x)
-        _test_dproj_finite_diffs(_nn_projector, getkey, dim=n, num_batches=10)
+        _test_dproj_finite_diffs(_nn_projector, getkey, dim=n, num_batches=10, min_abs=1e-3)
 
 
 def _proj_soc_via_cvxpy(x: np.ndarray) -> np.ndarray:

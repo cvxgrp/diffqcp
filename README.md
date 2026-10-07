@@ -62,6 +62,18 @@ scs_cones = cvx.reductions.solvers.conic_solvers.scs_conif.dims_to_solver_dict(p
 x, y, s = ... # canonicalized solutions to `problem`
 ```
 
+> **PSD cones:** `diffqcp` expects PSD blocks vectorized in SCS order (lower
+> triangle, column-major). Data from `get_problem_data(cvx.CLARABEL)` (and
+> solutions from Clarabel) use the upper triangle instead. If the problem has
+> PSD constraints, permute the rows of `A` and the entries of `b`, `y`, `s`
+> first:
+>
+> ```python
+> from diffqcp import clarabel_to_scs_permutation
+> perm = clarabel_to_scs_permutation(scs_cones)
+> A, b, y, s = A[perm], b[perm], y[perm], s[perm]
+> ```
+
 ## Optimal CPU approach
 
 If computing JVPs and VJPs on a CPU, we recommend using the `equinox.Module`s `HostQCP` and `QCPStructureCPU` as demonstrated in the following pseudo-example.

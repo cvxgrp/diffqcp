@@ -1,3 +1,4 @@
+from .cones.ordering import clarabel_to_scs_permutation as clarabel_to_scs_permutation
 from .problem_data import QCPStructureCPU as QCPStructureCPU
 from .problem_data import QCPStructureGPU as QCPStructureGPU
 from .problem_data import QCPStructureLayers as QCPStructureLayers

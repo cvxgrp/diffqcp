@@ -31,10 +31,10 @@ import numpy as np
 import pytest
 from jax.experimental.sparse import BCOO, BCSR
 
-from diffqcp import HostQCP, QCPStructureCPU
+from diffqcp import DeviceQCP, HostQCP, QCPStructureCPU, QCPStructureGPU
 
-from .helpers import scoo_to_bcoo
-from .problems import QCPProbData, generate_least_squares_eq
+from .helpers import scoo_to_bcoo, scsr_to_bcsr
+from .problems import QCPProbData, generate_dense_qp, generate_least_squares_eq
 
 ATOL = 1e-8
 RTOL = 1e-8
@@ -102,6 +102,12 @@ PROBLEM_GENERATORS = [
         lambda seed: generate_least_squares_eq(m=20, n=10, rng_or_seed=seed),
         id="least_squares_eq_20x10",
     ),
+    # The fixtures above have a diagonal P; this one has a dense P, which
+    # exercises the off-diagonal (factor-of-two) part of the CPU dP adjoint.
+    pytest.param(
+        lambda seed: generate_dense_qp(n=8, m=12, rng_or_seed=seed),
+        id="dense_qp_8x12",
+    ),
 ]
 
 
@@ -136,3 +142,42 @@ def test_jvp_vjp_adjoint_identity_cpu(generator):
     np.testing.assert_allclose(
         np.asarray(forward), np.asarray(backward), atol=ATOL, rtol=RTOL
     )
+
+
+@pytest.mark.parametrize("generator", PROBLEM_GENERATORS)
+def test_jvp_vjp_adjoint_identity_device(generator):
+    """Same identity for `DeviceQCP`, which stores the *full* symmetric P.
+
+    Perturbations to P must be symmetric (they perturb a symmetric matrix),
+    so dP is drawn as a symmetric matrix restricted to P's sparsity pattern.
+    """
+    prob_data = QCPProbData(generator(seed=0))
+    A_scs, b, y, s = prob_data.scs_ordered()
+    P = scsr_to_bcsr(prob_data.Pcsr)
+    A = scsr_to_bcsr(A_scs.tocsr())
+    qcp = DeviceQCP(
+        P, A, jnp.asarray(prob_data.q), jnp.asarray(b),
+        jnp.asarray(prob_data.x), jnp.asarray(y), jnp.asarray(s),
+        QCPStructureGPU(P, A, prob_data.scs_cones),
+    )
+
+    rng = np.random.default_rng(0)
+    n, m = prob_data.n, prob_data.m
+    R = rng.standard_normal((n, n))
+    P_rows, P_cols = np.asarray(qcp.problem_structure.P_nonzero_rows), np.asarray(qcp.problem_structure.P_nonzero_cols)
+    dP = BCSR(
+        (jnp.asarray((R + R.T)[P_rows, P_cols]), P.indices, P.indptr), shape=P.shape
+    )
+    dA = BCSR((jnp.asarray(rng.standard_normal(A.data.shape)), A.indices, A.indptr), shape=A.shape)
+    dq, db = jnp.asarray(rng.standard_normal(n)), jnp.asarray(rng.standard_normal(m))
+    dx, dy, ds = (jnp.asarray(rng.standard_normal(k)) for k in (n, m, m))
+
+    jvp_dx, jvp_dy, jvp_ds = qcp.jvp(dP, dA, dq, db)
+    vjp_dP, vjp_dA, vjp_dq, vjp_db = qcp.vjp(dx, dy, ds)
+
+    forward = jnp.sum(dx * jvp_dx) + jnp.sum(dy * jvp_dy) + jnp.sum(ds * jvp_ds)
+    backward = (
+        _sparse_inner(dP, vjp_dP) + _sparse_inner(dA, vjp_dA)
+        + jnp.sum(dq * vjp_dq) + jnp.sum(db * vjp_db)
+    )
+    np.testing.assert_allclose(np.asarray(forward), np.asarray(backward), atol=ATOL, rtol=RTOL)

@@ -152,6 +152,16 @@ code immediately found real bugs:
   diffqcp's system matches diffcp/FD to ~1e-8, but LSMR at the hard-coded
   1e-8 tolerances stops 1e-4..1e-3 short. Wave 5 removes the xfails.
 
+**Fix — CPU VJP `dP` off-diagonals (done).** `HostQCP.vjp` returned, for
+each stored upper-triangular entry of `P`, the gradient with respect to a
+single entry of the symmetric matrix; the stored value u_ij (i != j) stands
+for both P_ij and P_ji, so its gradient is twice that. Every QP fixture had a
+diagonal P (CVXPY canonicalizes `sum_squares` with auxiliary variables), so
+the adjoint test never saw it; on a dense-P QP the identity was off by 4e-3
+and holds to 5e-12 after the fix. Added `generate_dense_qp` and a
+`DeviceQCP` adjoint test (full symmetric P, symmetric perturbations; that
+path was already correct).
+
 **Wave 3 — Cones cleanup.** Land per-cone file split cleanly: every projector
 final + correct `__check_init__`; replace `jnp.ndim` dispatch in operator
 `mv` with 1D implementations called via `eqx.filter_vmap` at the boundary;

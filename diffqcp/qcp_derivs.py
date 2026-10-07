@@ -178,9 +178,16 @@ def _d_data_Q_adjoint_cpu(
     Float[BCOO, "n n"], Float[BCOO, "m n"], Float[Array, " n"], Float[Array, " m"]
     ]:
     """The vector-Jacobian product D_data(u, data)^T[w].
+
+    On the CPU path `P` is stored as its upper triangle, and each stored
+    off-diagonal value u_ij stands for both P_ij and P_ji. `_adjoint_values`
+    returns the gradient with respect to a single entry of the symmetric
+    matrix, so the gradient with respect to the stored value u_ij (i != j) is
+    twice that.
     """
     dP_values, dA_values, dq, db = _adjoint_values(x, y, tau, w1, w2, w3,
                                                    P_rows, P_cols, A_rows, A_cols)
+    dP_values = jnp.where(P_rows == P_cols, dP_values, 2 * dP_values)
 
     P_indices = jnp.stack([P_rows, P_cols], axis=1)
     dP = BCOO((dP_values, P_indices), shape=(n, n))

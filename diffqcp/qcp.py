@@ -316,9 +316,9 @@ class HostQCP(AbstractQCP):
 
         A four-tuple containing the perturbations to the objective matrix, constraint matrix,
         linear cost function vector, and constraint vector. Note that these perturbation matrices
-        will have the same sparsity patterns as their corresponding problem matrices. (So, importantly,
-        the first matrix will only contain the upper triangular part of the true perturbation to the
-        objective matrix perturbation.)
+        will have the same sparsity patterns as their corresponding problem matrices. In particular
+        the first matrix is upper triangular: it is the gradient with respect to the *stored*
+        upper-triangular values of `P` (so an off-diagonal entry accounts for both P_ij and P_ji).
         """
         # NOTE(quill): This is a similar note to the one I left in this class's `jvp`. That is, this
         #   implementation is identical to `DeviceQCP`'s `vjp` minus the function call at the very bottom.

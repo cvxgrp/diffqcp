@@ -122,6 +122,24 @@ def generate_least_squares_eq(
     return problem
 
 
+def generate_dense_qp(
+    n: int, m: int, rng_or_seed: Rng | int | None = None
+) -> cvx.Problem:
+    """Inequality-constrained QP with a dense objective matrix.
+
+    CVXPY canonicalizes `sum_squares` with auxiliary variables, so the other
+    QP fixtures all have a *diagonal* P; this one exercises off-diagonal P.
+    """
+    rng = _as_rng(rng_or_seed)
+    M = rng.standard_normal((n, n))
+    Q = M @ M.T + 0.1 * np.eye(n)
+    c = rng.standard_normal(n)
+    G = rng.standard_normal((m, n))
+    h = G @ rng.standard_normal(n) + rng.random(m)  # strictly feasible
+    x = cvx.Variable(n)
+    return cvx.Problem(cvx.Minimize(0.5 * cvx.quad_form(x, Q) + c @ x), [G @ x <= h])
+
+
 def generate_LS_problem(m: int, n: int, rng_or_seed: Rng | int | None = None) -> cvx.Problem:
     """Plain least-squares with auxiliary residual variable."""
     rng = _as_rng(rng_or_seed)

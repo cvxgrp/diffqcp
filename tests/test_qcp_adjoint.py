@@ -19,11 +19,9 @@ the perturbed CQP (so the test is fast and doesn't depend on FD step size).
 This is the same canonical adjoint check used in lineax's tests; it catches
 sign errors, transposed matrices, and wrong adjoint formulas instantly.
 
-Tolerance note: `qcp.py` currently hard-codes LSMR at `rtol=atol=1e-8`. With
-that solver budget, the residual contamination of the inner-product check
-runs at roughly `1e-4` relative on modest problems. We use `RTOL=1e-3` here
-to leave headroom; Wave 5 (typed solver dispatch with user-configurable
-tolerance) will let us tighten this back down.
+Tolerance note: with the gauge-fixed system and LSMR's default 1e-12
+tolerance (Wave 5) the identity holds to ~1e-10 here; before, LSMR at a
+hard-coded 1e-8 left ~1e-4 relative contamination and this test used 1e-3.
 """
 from __future__ import annotations
 
@@ -38,8 +36,8 @@ from diffqcp import HostQCP, QCPStructureCPU
 from .helpers import scoo_to_bcoo
 from .problems import QCPProbData, generate_least_squares_eq
 
-ATOL = 1e-4
-RTOL = 1e-3
+ATOL = 1e-8
+RTOL = 1e-8
 
 
 def _sparse_inner(a: BCOO | BCSR, b: BCOO | BCSR) -> jnp.ndarray:

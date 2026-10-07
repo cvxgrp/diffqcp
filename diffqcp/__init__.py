@@ -4,3 +4,6 @@ from .problem_data import QCPStructureGPU as QCPStructureGPU
 from .problem_data import QCPStructureLayers as QCPStructureLayers
 from .qcp import DeviceQCP as DeviceQCP
 from .qcp import HostQCP as HostQCP
+from .solvers import AbstractDerivativeSolver as AbstractDerivativeSolver
+from .solvers import DenseDirectSolver as DenseDirectSolver
+from .solvers import LSMRSolver as LSMRSolver

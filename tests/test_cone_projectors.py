@@ -355,7 +355,7 @@ def test_product_projector(getkey):
                                                proj_x_nn,
                                                proj_x_soc])
             assert tree_allclose(proj_x, proj_x_handmade)
-            _test_dproj_finite_diffs(cone_projector, getkey, dim=total_dim, num_batches=0)
+            _test_dproj_finite_diffs(cone_projector, getkey, dim=total_dim, num_batches=0, min_abs=1e-3)
 
             # --- batched ---
             x = jr.normal(getkey(), (num_batches, total_dim))
@@ -367,7 +367,7 @@ def test_product_projector(getkey):
                                                proj_x_nn,
                                                proj_x_soc], axis=-1)
             assert tree_allclose(proj_x, proj_x_handmade)
-            _test_dproj_finite_diffs(cone_projector, getkey, dim=total_dim, num_batches=num_batches)
+            _test_dproj_finite_diffs(cone_projector, getkey, dim=total_dim, num_batches=num_batches, min_abs=1e-3)
 
 
 def test_in_exp(getkey):

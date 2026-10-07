@@ -6,8 +6,7 @@ The `nvmath-direct` path is only exercised when both nvmath-python is
 importable *and* JAX's first device is a GPU.
 
 See `test_qcp_cpu_analytical.py` for the math motivation; tolerance reasoning
-is identical (LSMR hard-coded at 1e-8 → ~1e-7 absolute floor on dx for
-db = 1e-6·N(0,1) perturbations).
+is identical.
 """
 from __future__ import annotations
 
@@ -74,7 +73,7 @@ def test_least_squares_jvp_db_gpu_lsmr(getkey):
     for _ in range(10):
         qcp, jvp_inputs, true_dx, m = _build_device_qcp_and_perturbations(rng, getkey)
         dx, _, _ = qcp.jvp(*jvp_inputs, solve_method="jax-lsmr")
-        np.testing.assert_allclose(np.asarray(dx[m:]), np.asarray(true_dx), atol=1e-7)
+        np.testing.assert_allclose(np.asarray(dx[m:]), np.asarray(true_dx), atol=1e-9)
 
 
 def test_least_squares_jvp_db_gpu_direct(getkey):
@@ -93,7 +92,7 @@ def test_least_squares_jvp_db_gpu_direct(getkey):
         for _ in range(10):
             qcp, jvp_inputs, true_dx, m = _build_device_qcp_and_perturbations(rng, getkey)
             dx, _, _ = qcp.jvp(*jvp_inputs, solve_method=solve_method)
-            # `jax-lu` on the materialised F currently exhibits a known accuracy
-            # gap (tracked under "exploding gradients" research item); we still
-            # check correctness at the same precision floor as the LSMR test.
-            np.testing.assert_allclose(np.asarray(dx[m:]), np.asarray(true_dx), atol=1e-7)
+            # Direct solves now factor the nonsingular augmented system of the
+            # gauge-fixed F' rather than the singular F (Wave 5), so they meet
+            # the same tolerance as LSMR.
+            np.testing.assert_allclose(np.asarray(dx[m:]), np.asarray(true_dx), atol=1e-9)

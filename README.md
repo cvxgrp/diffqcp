@@ -138,22 +138,35 @@ dP, dA, dq, db = qcp.vjp(f1(x), f2(y), f3(s))
 
 ## Selecting solvers
 
-As detailed in our paper, the JVPs and VJPs are computed via a linear system solve.
-For this solve, `diffqcp` provides three options:
-- LSMR via `lineax`, an indirect method that does not materialize the coefficient matrix.
-- LU via `lineax`, a direct method that materializes the dense coefficient matrix.
-- A direct method via `nvmath-python` / `cuDSS` that materializes the dense coefficient matrix.
+As detailed in our paper, the JVPs and VJPs are computed via a linear system solve
+with an N x N matrix F (N = n + m + 1). F is always singular: the homogeneous
+embedding has a one-dimensional null space spanned by the solution embedding
+`z = (x, y - s, 1)`, which the derivative never sees. `diffqcp` fixes this "gauge"
+by setting the last component of the solution to zero, which leaves an
+N x (N - 1) system of full column rank (away from degenerate points where the
+solution map is not differentiable). See `diffqcp/solvers.py` for details.
 
-The default solve method is `lineax`'s LSMR, aleit it is not packaged in a released
-`lineax` version, so `lineax `must be installed from source (*e.g.*,
-`uv add "lineax @ git+https://github.com/patrick-kidger/lineax.git"`).
-To switch between the solvers, provide `jax-lsmr`, `jax-lu`, or `nvmath-direct` (as strings) to the optional
-`solve_method` parameter of an `AbstractQCP`'s `jvp` and `vjp` methods. 
+Pass a solver object via the `solver` argument of `jvp` / `vjp`:
 
-**Future direction:** 
-1. We're currently debugging why the direct solve methods yield exploding gradients.
-2. We're currently working on materializing the coefficient matrix as a sparse array, not a dense matrix. The `lineax` LU method would still require forming the dense matrix,
-but the cuDSS backed-solve already accepts sparse arrays in CSR layout.
+```python
+from diffqcp.solvers import LSMRSolver, DenseDirectSolver
+
+dx, dy, ds = qcp.jvp(dP, dA, dq, db, solver=LSMRSolver(rtol=1e-12, atol=1e-12))
+```
+
+- `LSMRSolver` (default): matrix-free LSMR via `lineax`. Tolerances default to
+  `1e-12` in float64 and `1e-6` in float32.
+- `DenseDirectSolver`: materializes the gauge-fixed matrix and solves a symmetric
+  augmented system with a dense LU, falling back to an SVD least-squares solve at
+  degenerate points. Intended for small problems and as an accuracy reference.
+
+The older string options are still accepted through `solve_method`:
+`"jax-lsmr"` (= `LSMRSolver()`), `"jax-lu"` (= `DenseDirectSolver()`), and, on
+`DeviceQCP`, `"nvmath-direct"` (cuDSS via `nvmath-python`, on the dense augmented
+system).
+
+**Future direction:** keep the augmented system sparse (CSR) for the cuDSS path
+instead of materializing it densely.
 
 # Installation
 
@@ -190,9 +203,7 @@ note that we're unsure how `nvmath-python[cu12]` will interact with the version
 `diffqcp` is still in development! WIP features and improvements include:
 - Batched problem computations.
 - Not forming dense $F$ when using direct solver methods.
-- Re-incorporate the LSMR solver when `lineax` has a new release.
 - Consider JAX's [`spsolve`](https://docs.jax.dev/en/latest/_autosummary/jax.experimental.sparse.linalg.spsolve.html#jax.experimental.sparse.linalg.spsolve).
-- Provide options to linear system solvers.
 - Better performance benchmarking / regression testing.
 - Migration of tests from our [torch branch](https://github.com/cvxgrp/diffqcp/tree/torch-implementation).
 

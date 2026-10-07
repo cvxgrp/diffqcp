@@ -9,7 +9,7 @@ import lineax as lx
 from jax import eval_shape
 from jax.experimental.sparse import BCOO, BCSR
 from jaxtyping import Array, Float
-from lineax import AbstractLinearOperator, IdentityLinearOperator, linear_solve
+from lineax import AbstractLinearOperator, IdentityLinearOperator
 
 try:
     from cupy import from_dlpack as cp_from_dlpack
@@ -31,6 +31,13 @@ from diffqcp.problem_data import (
     QCPStructureGPU,
 )
 from diffqcp.qcp_derivs import _d_data_Q, _d_data_Q_adjoint_cpu, _d_data_Q_adjoint_gpu, _DuQ
+from diffqcp.solvers import (
+    AbstractDerivativeSolver,
+    augmented_system,
+    gauge_fixed,
+    materialise_gauge_operator,
+    resolve_solver,
+)
 
 
 class AbstractQCP(eqx.Module):
@@ -103,7 +110,7 @@ class AbstractQCP(eqx.Module):
         dAT: Float[BCOO | BCSR, "n m"],
         dq: Float[Array, " n"],
         db: Float[Array, " m"],
-        solve_method: str = "jax-lsmr"
+        solver: AbstractDerivativeSolver,
     ) -> tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]:
         pi_z, F, dproj_kstar_v = self._form_atoms()
 
@@ -112,31 +119,17 @@ class AbstractQCP(eqx.Module):
         d_data_N = _d_data_Q(x=pi_z_n, y=pi_z_m, tau=pi_z_N, dP=dP,
                              dA=dA, dAT=dAT, dq=dq, db=db)
 
-        def zero_case():
-            return jnp.zeros_like(d_data_N)
+        # Solve the gauge-fixed system F' d = -d_data_N; dz = (d, 0).
+        # See `diffqcp.solvers` for why F itself is singular.
+        d = jax.lax.cond(jnp.all(d_data_N == 0),
+                         lambda: jnp.zeros(self.problem_structure.N - 1, dtype=d_data_N.dtype),
+                         lambda: solver.solve(gauge_fixed(F), -d_data_N))
 
-        def nonzero_case():
-            if solve_method == "jax-lsmr":
-                try:
-                    from lineax import LSMR
-                except ImportError as err:
-                    raise ValueError("In your current environment the LSMR solve is not available.") from err
-                soln = linear_solve(F, -d_data_N, solver=LSMR(rtol=1e-8, atol=1e-8))
-                return soln.value
-            else:
-                F_dense = self._jvp_direct_solve_get_F(F)
-                soln = linear_solve(lx.MatrixLinearOperator(F_dense), -d_data_N)
-                return soln.value
-
-        dz = jax.lax.cond(jnp.allclose(d_data_N, 0),
-                          zero_case,
-                          nonzero_case)
-
-        dz_n, dz_m, dz_N = dz[:n], dz[n:n+m], dz[-1]
-        dx = dz_n - self.x * dz_N
+        dz_n, dz_m = d[:n], d[n:n+m]
+        dx = dz_n
         dproj_k_star_v_dz_m = dproj_kstar_v.mv(dz_m)
-        dy = dproj_k_star_v_dz_m - self.y * dz_N
-        ds = dproj_k_star_v_dz_m - dz_m - self.s * dz_N
+        dy = dproj_k_star_v_dz_m
+        ds = dproj_k_star_v_dz_m - dz_m
         return dx, dy, ds
 
     @abstractmethod
@@ -146,7 +139,8 @@ class AbstractQCP(eqx.Module):
         dA: Float[BCOO | BCSR, "m n"],
         dq: Float[Array, " n"],
         db: Float[Array, " m"],
-        solve_method: str = "jax-lsmr"
+        solve_method: str = "jax-lsmr",
+        solver: AbstractDerivativeSolver | None = None,
     ) -> tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]:
         """Apply the derivative of the QCP's solution map to an input perturbation.
         """
@@ -174,7 +168,7 @@ class AbstractQCP(eqx.Module):
         dy: Float[Array, " m"],
         ds: Float[Array, " m"],
         produce_output: Callable,
-        solve_method: str = "jax-lsmr"
+        solver: AbstractDerivativeSolver,
     ) -> tuple[
         Float[BCOO | BCSR, "n n"], Float[BCOO | BCSR, "m n"],
         Float[Array, " n"], Float[Array, " m"]]:
@@ -185,25 +179,12 @@ class AbstractQCP(eqx.Module):
                               - jnp.array([self.x @ dx + self.y @ dy + self.s @ ds])]
                               )
 
-        def zero_case():
-            return jnp.zeros_like(dz)
-
-        def nonzero_case():
-            if solve_method == "jax-lsmr":
-                try:
-                    from lineax import LSMR
-                except ImportError as err:
-                    raise ValueError("In your current environment the LSMR solve is not available.") from err
-                soln = linear_solve(F.T, -dz, solver=LSMR(rtol=1e-8, atol=1e-8))
-                return soln.value
-            else:
-                FT = self._vjp_direct_solve_get_FT(F)
-                soln = linear_solve(lx.MatrixLinearOperator(FT), -dz)
-                return soln.value
-
-        d_data_N = jax.lax.cond(jnp.allclose(dz, 0),
-                                zero_case,
-                                nonzero_case)
+        # Adjoint of the gauge-fixed JVP: the minimum-norm solution of
+        # F'^T w = -dz[:N-1]. It also solves F^T w = -dz exactly, because
+        # dz is orthogonal to the null vector z of F. See `diffqcp.solvers`.
+        d_data_N = jax.lax.cond(jnp.all(dz == 0),
+                                lambda: jnp.zeros_like(dz),
+                                lambda: solver.solve_transpose(gauge_fixed(F), -dz[:-1]))
 
         pi_z_n = pi_z[:n]
         pi_z_m = pi_z[n:n+m]
@@ -221,7 +202,8 @@ class AbstractQCP(eqx.Module):
         dx: Float[Array, " n"],
         dy: Float[Array, " m"],
         ds: Float[Array, " m"],
-        solve_method: str = "jax-lsmr"
+        solve_method: str = "jax-lsmr",
+        solver: AbstractDerivativeSolver | None = None,
     ) -> tuple[
         Float[BCOO | BCSR, "n n"], Float[BCOO | BCSR, "m n"],
         Float[Array, " n"], Float[Array, " m"]]:
@@ -283,7 +265,8 @@ class HostQCP(AbstractQCP):
         dA: Float[BCOO, "m n"],
         dq: Float[Array, " n"],
         db: Float[Array, " m"],
-        solve_method: str = "jax-lsmr"
+        solve_method: str = "jax-lsmr",
+        solver: AbstractDerivativeSolver | None = None,
     ) -> tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]:
         """Apply the derivative of the QCP's solution map to an input perturbation.
 
@@ -307,14 +290,16 @@ class HostQCP(AbstractQCP):
         dAT = dA.T
         dP = self.problem_structure.form_obj(dP)
         # need to wrap dP.
-        return self._jvp_common(dP=dP, dA=dA, dAT=dAT, dq=dq, db=db, solve_method=solve_method)
+        return self._jvp_common(dP=dP, dA=dA, dAT=dAT, dq=dq, db=db,
+                                solver=resolve_solver(solve_method, solver))
 
     def vjp(
         self,
         dx: Float[Array, " n"],
         dy: Float[Array, " m"],
         ds: Float[Array, " m"],
-        solve_method: str = "jax-lsmr"
+        solve_method: str = "jax-lsmr",
+        solver: AbstractDerivativeSolver | None = None,
     ) -> tuple[
         Float[BCSR, "n n"], Float[BCSR, "m n"],
         Float[Array, " n"], Float[Array, " m"]]:
@@ -349,7 +334,7 @@ class HostQCP(AbstractQCP):
 
         return self._vjp_common(dx=dx, dy=dy, ds=ds,
                                 produce_output=partial_d_data_Q_adjoint_cpu,
-                                solve_method=solve_method)
+                                solver=resolve_solver(solve_method, solver))
 
 
 class DeviceQCP(AbstractQCP):
@@ -466,16 +451,20 @@ class DeviceQCP(AbstractQCP):
         dq: Float[Array, " n"],
         db: Float[Array, " m"]
     ):
+        # NOTE: not exercised by CI (needs a GPU with nvmath + CuPy).
         d_data_N_minus, F, dproj_k_star_v = self._jvp_nvmath_form_atoms(dP, dA, dAT, dq, db)
+        N = self.problem_structure.N
 
-        # `_jvp_direct_solve` cannot be jitted, so can use regular
-        # Python control flow
-        # TODO(quill): use a norm tolerance instead?
-        if jnp.allclose(d_data_N_minus, 0):
-            return jnp.zeros_like(d_data_N_minus)
+        # Not jittable (host-side solver), so plain Python control flow is fine.
+        if jnp.all(d_data_N_minus == 0):
+            dz = jnp.zeros_like(d_data_N_minus)
         else:
-            F = self._jvp_direct_solve_get_F(F)
-            dz = self._jvp_nvmath_direct_solve(F, d_data_N_minus)
+            # Factor the nonsingular augmented system of the gauge-fixed F' rather
+            # than the singular F (see `diffqcp.solvers`): K [res; d] = [r; 0].
+            K = _augmented_from_F(F)
+            rhs = jnp.concatenate([d_data_N_minus, jnp.zeros(N - 1, dtype=d_data_N_minus.dtype)])
+            sol = self._jvp_nvmath_direct_solve(K, rhs)
+            dz = jnp.concatenate([sol[N:], jnp.zeros(1, dtype=sol.dtype)])
 
         return self._jvp_nvmath_get_output(dz, dproj_k_star_v)
 
@@ -485,7 +474,8 @@ class DeviceQCP(AbstractQCP):
         dA: Float[BCSR, "m n"],
         dq: Float[Array, " n"],
         db: Float[Array, " m"],
-        solve_method: str = "jax-lsmr"
+        solve_method: str = "jax-lsmr",
+        solver: AbstractDerivativeSolver | None = None,
     ) -> tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]:
         """Apply the derivative of the QCP's solution map to an input perturbation.
 
@@ -505,18 +495,15 @@ class DeviceQCP(AbstractQCP):
         """
         dP = ObjMatrixGPU(dP)
         dAT = eqx.filter_jit(self.problem_structure.form_A_transpose)(dA)
-        if solve_method in ["jax-lsmr", "jax-lu"]:
-            return self._jvp_common(dP=dP, dA=dA, dAT=dAT, dq=dq, db=db, solve_method=solve_method)
-        elif solve_method == "nvmath-direct":
+        if solve_method != "nvmath-direct":
+            return self._jvp_common(dP=dP, dA=dA, dAT=dAT, dq=dq, db=db,
+                                    solver=resolve_solver(solve_method, solver))
+        else:
             if DirectSolver is None:
                 raise ValueError("The `nvmath-direct` option can only be used when "
                                  "`nvmath-python` is installed. Also check that CuPy is "
                                  "installed.")
             return self._jvp_nvmath(dP=dP, dA=dA, dAT=dAT, dq=dq, db=db)
-        else:
-            raise ValueError(f"Solve method \"{solve_method}\" is not specified. "
-                             " The options are \"jax-lsmr\", \"nvmath-direct\", and "
-                             "\"jax-lu\".")
 
     @eqx.filter_jit
     def _vjp_nvmath_form_atoms(
@@ -610,16 +597,19 @@ class DeviceQCP(AbstractQCP):
         dy: Float[Array, " m"],
         ds: Float[Array, " m"]
     ):
+        # NOTE: not exercised by CI (needs a GPU with nvmath + CuPy).
         dz_minus, F, pi_z = self._vjp_nvmath_form_atoms(dx, dy, ds)
+        N = self.problem_structure.N
 
-        # now check if 0 or not. `_vjp_nvmath` cannot be jitted, so we can
-        # just use typical Python control flow
-        if jnp.allclose(dz_minus, 0):
-            return jnp.zeros_like(dz_minus)
+        # Not jittable (host-side solver), so plain Python control flow is fine.
+        if jnp.all(dz_minus == 0):
+            d_data_N = jnp.zeros_like(dz_minus)
         else:
-            # obtain FT
-            FT = self._vjp_direct_solve_get_FT(F)
-            d_data_N = self._vjp_nvmath_direct_solve(FT, dz_minus)
+            # Minimum-norm solution of F'^T w = -dz[:N-1] via K [w; t] = [0; g].
+            K = _augmented_from_F(F)
+            rhs = jnp.concatenate([jnp.zeros(N, dtype=dz_minus.dtype), dz_minus[:-1]])
+            sol = self._vjp_nvmath_direct_solve(K, rhs)
+            d_data_N = sol[:N]
 
         return self._vjp_nvmath_get_output(pi_z, d_data_N)
 
@@ -629,7 +619,8 @@ class DeviceQCP(AbstractQCP):
         dx: Float[Array, " n"],
         dy: Float[Array, " m"],
         ds: Float[Array, " m"],
-        solve_method: str = "jax-lsmr"
+        solve_method: str = "jax-lsmr",
+        solver: AbstractDerivativeSolver | None = None,
     ) -> tuple[
         Float[BCSR, "n n"], Float[BCSR, "m n"],
         Float[Array, " n"], Float[Array, " m"]]:
@@ -653,7 +644,7 @@ class DeviceQCP(AbstractQCP):
         will have the same sparsity patterns as their corresponding problem matrices.
         """
 
-        if solve_method in ["jax-lsmr", "jax-lu"]:
+        if solve_method != "nvmath-direct":
             partial_d_data_Q_adjoint_gpu = ft.partial(_d_data_Q_adjoint_gpu,
                                                   P_rows=self.problem_structure.P_nonzero_rows,
                                                   P_cols=self.problem_structure.P_nonzero_cols,
@@ -666,14 +657,17 @@ class DeviceQCP(AbstractQCP):
                                                   n=self.problem_structure.n,
                                                   m=self.problem_structure.m)
 
-            return self._vjp_common(dx=dx, dy=dy, ds=ds, produce_output=partial_d_data_Q_adjoint_gpu, solve_method=solve_method)
-        elif solve_method == "nvmath-direct":
+            return self._vjp_common(dx=dx, dy=dy, ds=ds, produce_output=partial_d_data_Q_adjoint_gpu,
+                                    solver=resolve_solver(solve_method, solver))
+        else:
             if DirectSolver is None:
                 raise ValueError("The `nvmath-direct` option can only be used when "
                                  "`nvmath-python` is installed. Also check that CuPy is "
                                  "installed.")
             return self._vjp_nvmath(dx=dx, dy=dy, ds=ds)
-        else:
-            raise ValueError(f"Solve method \"{solve_method}\" is not specified. "
-                             " The options are \"jax-lsmr\", \"nvmath-direct\", and "
-                             "\"jax-lu\".")
+
+
+@eqx.filter_jit
+def _augmented_from_F(F: AbstractLinearOperator) -> Float[Array, "2N-1 2N-1"]:
+    """Dense augmented matrix of the gauge-fixed F' (see `diffqcp.solvers`)."""
+    return augmented_system(materialise_gauge_operator(gauge_fixed(F)))

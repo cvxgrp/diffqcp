@@ -37,13 +37,12 @@ from cvxpy.reductions.solvers.conic_solvers.scs_conif import dims_to_solver_dict
 from jax.experimental.sparse import BCOO
 
 from diffqcp import HostQCP, QCPStructureCPU
+from diffqcp.solvers import DenseDirectSolver, LSMRSolver
 
 from . import problems
 
-# Observed agreement is 1e-14..1e-6 relative; the floor is set by
-# `qcp.py`'s hard-coded LSMR tolerance (rtol=atol=1e-8), which Wave 5 makes
-# configurable. Tighten once that lands.
-RTOL = 1e-4
+# Observed agreement with the default solver is 1e-7..1e-14 relative.
+RTOL = 1e-6
 
 
 def _lp(seed: int) -> cvx.Problem:
@@ -66,15 +65,9 @@ PROBLEMS = {
     "logistic_exp": lambda: problems.generate_group_lasso_logistic(10, 3, 0),
 }
 
-# These problems are badly enough conditioned that the fixed LSMR tolerance
-# leaves 1e-4..1e-3 relative error, even though solving diffqcp's own system
-# exactly agrees with diffcp (and with finite differences). Strict, so the
-# marker has to be removed once Wave 5's configurable solver fixes it.
-XFAIL_LSMR = {
-    "logistic_exp": "LSMR at fixed rtol=atol=1e-8 is ~1e-3 off on exp cones; fixed by Wave 5",
-    # An exact solve of diffqcp's system matches central finite differences
-    # to ~7e-10 here; LSMR at the fixed tolerance stops at ~2e-4.
-    "portfolio": "LSMR at fixed rtol=atol=1e-8 is ~2e-4 off; fixed by Wave 5",
+SOLVERS = {
+    "lsmr": LSMRSolver(),
+    "dense": DenseDirectSolver(),
 }
 
 
@@ -131,12 +124,6 @@ def _rel(actual: np.ndarray, expected: np.ndarray) -> float:
     return float(np.linalg.norm(actual - expected) / max(np.linalg.norm(expected), 1e-12))
 
 
-def _params():
-    for name in PROBLEMS:
-        marks = [pytest.mark.xfail(strict=True, reason=XFAIL_LSMR[name])] if name in XFAIL_LSMR else []
-        yield pytest.param(name, id=name, marks=marks)
-
-
 @pytest.mark.parametrize("name", list(PROBLEMS))
 def test_solution_is_optimal(name):
     """Guard: the oracle is meaningless at a non-optimal point (e.g. an
@@ -146,8 +133,9 @@ def test_solution_is_optimal(name):
     assert _rel(np.asarray(proj), case.y) < 1e-9
 
 
-@pytest.mark.parametrize("name", _params())
-def test_jvp_matches_diffcp(name):
+@pytest.mark.parametrize("solver", list(SOLVERS))
+@pytest.mark.parametrize("name", list(PROBLEMS))
+def test_jvp_matches_diffcp(name, solver):
     case = _case(name)
     rng = np.random.default_rng(1)
     A_coo = case.A.tocoo()
@@ -158,14 +146,15 @@ def test_jvp_matches_diffcp(name):
     expected = case.D(sp.csc_matrix((dA_vals, (A_coo.row, A_coo.col)), shape=case.A.shape), db, dc)
 
     dA = BCOO((jnp.asarray(dA_vals), case.A_bcoo.indices), shape=case.A_bcoo.shape)
-    actual = case.qcp.jvp(case.P_zero, dA, jnp.asarray(dc), jnp.asarray(db))
+    actual = case.qcp.jvp(case.P_zero, dA, jnp.asarray(dc), jnp.asarray(db), solver=SOLVERS[solver])
 
     for label, a, e in zip(("dx", "dy", "ds"), actual, expected, strict=True):
         assert _rel(np.asarray(a), e) < RTOL, label
 
 
-@pytest.mark.parametrize("name", _params())
-def test_vjp_matches_diffcp(name):
+@pytest.mark.parametrize("solver", list(SOLVERS))
+@pytest.mark.parametrize("name", list(PROBLEMS))
+def test_vjp_matches_diffcp(name, solver):
     case = _case(name)
     rng = np.random.default_rng(2)
     dx = rng.standard_normal(case.c.size)
@@ -173,7 +162,9 @@ def test_vjp_matches_diffcp(name):
     ds = rng.standard_normal(case.b.size)
 
     e_dA, e_db, e_dc = case.DT(dx, dy, ds)
-    _, a_dA, a_dq, a_db = case.qcp.vjp(jnp.asarray(dx), jnp.asarray(dy), jnp.asarray(ds))
+    _, a_dA, a_dq, a_db = case.qcp.vjp(
+        jnp.asarray(dx), jnp.asarray(dy), jnp.asarray(ds), solver=SOLVERS[solver]
+    )
 
     A_coo = case.A.tocoo()
     e_dA_vals = np.asarray(e_dA.tocsr()[A_coo.row, A_coo.col]).ravel()

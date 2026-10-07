@@ -78,9 +78,7 @@ def test_least_squares_jvp_db_cpu(getkey):
 
         # Canonicalisation prepends m residual vars; the original n variables
         # are at the tail of `dx`.
-        # `qcp.py` hard-codes LSMR at `rtol=atol=1e-8`; with `db = 1e-6·N(0,1)`
-        # the absolute error in `dx` floors at ~1e-8 across random problems
-        # (main's `atol=1e-8` only passed because of a loop-seed bug that made
-        # all 10 iterations test the same problem). Wave 5 makes solver
-        # tolerance call-site-configurable; tighten this back to 1e-8 then.
-        np.testing.assert_allclose(np.asarray(dx[m:]), np.asarray(true_dx), atol=1e-7)
+        # With the gauge-fixed system and LSMR at its 1e-12 default (Wave 5)
+        # the error is far below 1e-9; at the old hard-coded 1e-8 it floored
+        # at ~1e-8 absolute.
+        np.testing.assert_allclose(np.asarray(dx[m:]), np.asarray(true_dx), atol=1e-9)

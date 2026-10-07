@@ -30,7 +30,7 @@ commits for bisection and inspection.)
 | 2.6| diffcp oracle + correctness fixes   | done        |
 | 3  | Cones cleanup                       | pending     |
 | 4  | Unify CPU/GPU problem data          | pending     |
-| 5  | Solver dispatch as typed strategy   | pending     |
+| 5  | Solver dispatch as typed strategy   | done (ahead of 3, 4) |
 | 6  | Batching over problem data          | pending     |
 | 7  | Sparse F + direct-solve diagnosis   | pending     |
 | 8  | `cvxpylayers` interface             | pending     |
@@ -164,10 +164,38 @@ sharing only an `AbstractVar` interface, with all init in finals — no
 as strategy or one-time conversion at construction. Delete
 `QCPStructureLayers` and `ConstrMatrixCPU` stubs (or implement properly).
 
-**Wave 5 — Solver dispatch.** Replace `solve_method: str` with
-`solver: AbstractLinearSolver`. Default = `lx.LSMR(rtol=…, atol=…)`. Move
-nvmath/cuDSS behind a thin `AbstractLinearSolver` adapter. Delete the
-parallel `_jvp_nvmath` / `_vjp_nvmath` paths.
+**Wave 5 — Solver strategy + gauge fixing (done; landed before Waves 3/4).**
+- `diffqcp/solvers.py`: `AbstractDerivativeSolver` with `LSMRSolver`
+  (default) and `DenseDirectSolver`; `jvp`/`vjp` take `solver=`. Legacy
+  `solve_method` strings still work (`"jax-lsmr"`, `"jax-lu"`, and
+  `"nvmath-direct"` on `DeviceQCP`).
+- **Gauge fixing.** Every solve is on `F' = F E` (fix `dz_N = 0`) instead of
+  the singular F. JVP: least-squares solve of `F' d = r`. VJP: minimum-norm
+  solve of `F'^T w = g`, which is exactly the adjoint of the gauge-fixed JVP
+  and also solves `F^T w = -dz` because `dz` is orthogonal to the null
+  vector. Derivation in the module docstring.
+- `LSMRSolver` tolerances default to 1e-12 (float64) / 1e-6 (float32), with
+  `conlim=inf`. 1e-8 left 1e-4..1e-3 error; 1e-12 costs ~5-10% more
+  iterations. (lineax's `conlim=1e8` was ruled out as the cause.)
+- `DenseDirectSolver` LU-factors the symmetric augmented matrix
+  `[[I, F'], [F'^T, 0]]` (one factorization serves JVP and VJP). Degenerate
+  points (F' rank deficient) are detected by an ~epsilon LU pivot or a large
+  residual and fall back to SVD least squares. A residual check alone is not
+  enough: LU on a singular but consistent system returns a valid but
+  non-minimum-norm solution.
+- nvmath path (untested here, no GPU) now factors the dense augmented
+  system instead of F; also fixed its all-zero shortcut, which returned a
+  bare vector instead of the output tuple.
+- Zero-RHS shortcut is now an exact `== 0` test (was `allclose(., 0)`,
+  which zeroed small but legitimate perturbations).
+- Tolerances tightened: diffcp oracle 1e-4 -> 1e-6 with no xfails, under
+  both solvers; adjoint identity 1e-3 -> 1e-8; closed-form LS tests atol
+  1e-7 -> 1e-9 (tighter than main's 1e-8).
+- `tests/test_solvers.py`: `F z = 0`, F' full rank, solvers on full-rank and
+  rank-deficient systems, augmented symmetry, legacy-string mapping, and the
+  `DeviceQCP.vjp` default.
+- Deferred: sparse augmented system for cuDSS (Wave 7); exposing solver
+  diagnostics (residual, degeneracy flag) to callers.
 
 **Wave 6 — Batching.** Explicit batching contract; primarily `eqx.filter_vmap`
 over the unbatched class. Drop ad-hoc `ndim`-dispatch in operator `mv`.
@@ -194,7 +222,7 @@ CVXPY → cvxpylayers → diffqcp → gradient.
   null direction: cond(F') was 35..4e4 vs. cond(F) ~1e17, and an exact
   solve of the symmetric augmented system `[[I, F'], [F'^T, 0]]` matched the
   truncated pseudo-inverse to 1e-15..1e-6. The same matrix serves the VJP
-  with a different right-hand side. This is the plan for Wave 5.
+  with a different right-hand side. Implemented in Wave 5.
 - **LSMR at rtol=atol=1e-8 is not accurate enough** on moderately
   conditioned problems (1e-4..1e-3 relative error on portfolio / exp).
 - diffcp limitations as an oracle: its linear-solve modes reject `P`; it has
@@ -212,6 +240,14 @@ CVXPY → cvxpylayers → diffqcp → gradient.
   objects from the SCS-ordered view.
 - Fixed the PSD Jacobian in `canonical.py` now rather than waiting for the
   Wave 3 file split, since it is a correctness bug.
+- Did Wave 5 before Waves 3 and 4: it carries the accuracy fixes (gauge
+  fixing, tolerances) and does not depend on the refactors.
+- Solver classes are named `LSMRSolver` / `DenseDirectSolver` (not `LSMR`)
+  to avoid clashing with `lineax.LSMR`.
+- Kept `throw=True` (lineax default): LSMR failing to converge raises rather
+  than returning a silently inaccurate derivative.
+- Kept `solve_method` strings for backward compatibility (cvxpylayers and
+  the experiments use them); `solver=` takes precedence when both are given.
 
 ## Items from the original brief not yet assigned to a wave
 
@@ -236,8 +272,9 @@ From `docs/original-brief.md`; fold into a wave or drop explicitly.
   references `self.dims` (typo for `self.dim`).
 - `diffqcp/cones/canonical.py` operator `mv` methods dispatch on `jnp.ndim`
   to handle vmap — fragile; replace with single 1D impl + `vmap` at boundary.
-- `_jvp_nvmath` / `_vjp_nvmath` instrumentation seams in `qcp.py` — fold
-  into solver strategy in Wave 5.
+- `_jvp_nvmath` / `_vjp_nvmath` in `qcp.py` are still a separate,
+  non-jittable path (Wave 5 only switched them to the augmented system).
+  Folding them into an `AbstractDerivativeSolver` needs a GPU to test.
 - `QCPStructureLayers` (`problem_data.py:242-261`) and `ConstrMatrixCPU`
   are stubs — decide in Wave 4.
 - `diffqcp/problem_data.py:129` — `ObjMatrixCPU.__init__(P, P.T, diag)` calls

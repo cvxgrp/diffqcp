@@ -522,6 +522,7 @@ cuclarabel-dev = [
     { name = "juliacall" },
 ]
 dev = [
+    { name = "clarabel" },
     { name = "cvxpy" },
     { name = "diffcp" },
     { name = "matplotlib" },
@@ -531,6 +532,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "scs" },
 ]
 
 [package.metadata]
@@ -550,6 +552,7 @@ provides-extras = ["gpu"]
 [package.metadata.requires-dev]
 cuclarabel-dev = [{ name = "juliacall", specifier = ">=0.9.26" }]
 dev = [
+    { name = "clarabel", specifier = ">=0.11" },
     { name = "cvxpy", specifier = ">=1.6.6" },
     { name = "diffcp", specifier = ">=1.1.4" },
     { name = "matplotlib", specifier = ">=3.10.5" },
@@ -559,6 +562,7 @@ dev = [
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "pytest-cov", specifier = ">=5.0" },
     { name = "ruff", specifier = ">=0.12.0" },
+    { name = "scs", specifier = ">=3.2" },
 ]
 
 [[package]]

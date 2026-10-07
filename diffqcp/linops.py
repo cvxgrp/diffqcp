@@ -5,12 +5,29 @@ to support functionality required by `diffqcp`. They **should not** be accessed 
 were true atoms implemented in `lineax`.
 """
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
 from jax import ShapeDtypeStruct
 
 from diffqcp._helpers import _to_int_list
+
+
+def _dense_from_mv(op: lx.AbstractLinearOperator):
+    """`as_matrix` for an unbatched operator: one `mv` per column.
+
+    Intended for testing and small problems. Operators whose leaves carry a
+    batch axis (from `vmap`ping a projector) have no single matrix; materialise
+    them inside the `vmap` instead.
+    """
+    struct = op.in_structure()
+    if len(struct.shape) != 1:
+        raise NotImplementedError(
+            f"{type(op).__name__}.as_matrix is only defined for unbatched (1D) operators,"
+            f" but its input structure has shape {struct.shape}."
+        )
+    return jax.vmap(op.mv, in_axes=1, out_axes=1)(jnp.eye(struct.shape[0], dtype=struct.dtype))
 
 
 class _BlockLinearOperator(lx.AbstractLinearOperator):
@@ -58,19 +75,7 @@ class _BlockLinearOperator(lx.AbstractLinearOperator):
         return jnp.concatenate(results, axis=-1)
 
     def as_matrix(self):
-        """uses output dtype
-
-        not meant to be efficient.
-        """
-        # dtype = self.blocks[0].out_structure().dtype
-        # zeros_block = jnp.zeros((self._out_size, self._in_size), dtype=dtype)
-        # n, m = 0, 0
-        # for i in range(self.num_blocks):
-        #     ni, mi = self._in_sizes[i], self._out_sizes[i]
-        #     zeros_block.at[m:m+mi, n:n+ni].set(self.blocks[i].as_matrix())
-        #     n += ni
-        #     m += mi
-        raise NotImplementedError("`_BlockLinearOperator`'s `as_matrix` is not implemented.")
+        return _dense_from_mv(self)
 
     def transpose(self):
         return _BlockLinearOperator([block.T for block in self.blocks])

@@ -7,9 +7,11 @@ import jax.numpy as jnp
 import lineax as lx
 from jaxtyping import Array, Bool, Float
 
+from diffqcp.linops import _dense_from_mv
+
 from .abstract_projector import AbstractConeProjector
 
-TOL = 1e-12 if jax.config.jax_enable_x64 else 1e-06
+TOL = 1e-12 if jax.config.read("jax_enable_x64") else 1e-06
 
 MAX_ITER = 20
 
@@ -75,7 +77,7 @@ def _in_cone(
     y: Float[Array, ""],
     abs_z: Float[Array, ""],
     alpha: Float[Array, ""]
-) -> bool:
+) -> Bool[Array, ""]:
     return jnp.logical_and(x >= 0,
                            jnp.logical_and(y >= 0,
                                            TOL + x**alpha * y**(1-alpha) >= abs_z))
@@ -86,7 +88,7 @@ def _in_polar_cone(
     v: Float[Array, ""],
     abs_w: Float[Array, ""],
     alpha: Float[Array, ""]
-) -> bool:
+) -> Bool[Array, ""]:
     # Polar of the power cone: u, v <= 0 and (-u/a)^a (-v/(1-a))^(1-a) >= |w|,
     # i.e. (-u)^a (-v)^(1-a) >= |w| a^a (1-a)^(1-a). (This used to *add* the
     # (1-a)^(1-a) factor, misclassifying ~10% of random points.)
@@ -284,7 +286,7 @@ class _PowerConeJacobianOperator(lx.AbstractLinearOperator):
                              f"but the provided vector is {ndim}D.")
 
     def as_matrix(self):
-        raise NotImplementedError("Power Cone Jacobian `as_matrix` not implemented.")
+        return _dense_from_mv(self)
 
     def transpose(self):
         return self

@@ -96,6 +96,8 @@ ignore = [
 # These modules are slated for refactor in Waves 3–5; existing line lengths are
 # tolerated so we don't churn them now.
 "diffqcp/cones/canonical.py" = ["E501"]
+"diffqcp/cones/soc.py" = ["E501"]
+"diffqcp/cones/psd.py" = ["E501"]
 "diffqcp/cones/exp.py" = ["E501"]
 "diffqcp/qcp.py" = ["E501"]
 
@@ -116,9 +118,6 @@ exclude = [
     # Files slated for refactor in later waves; their existing type debt is
     # tracked in STATUS.md and gets paid down as each wave lands. Adding
     # these back to the include set is part of the wave's PR.
-    "diffqcp/cones/canonical.py",   # Wave 3
-    "diffqcp/cones/exp.py",         # Wave 3
-    "diffqcp/cones/pow.py",         # Wave 3
     "diffqcp/qcp.py",               # Waves 4 + 5
     "diffqcp/problem_data.py",      # Wave 4
     "tests",                        # Wave 2 (test reorganisation)

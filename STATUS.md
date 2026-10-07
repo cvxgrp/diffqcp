@@ -28,7 +28,7 @@ commits for bisection and inspection.)
 | 2  | Test foundation (FD + AD checks)    | done        |
 | 2.5| Existing-test cleanup               | done        |
 | 2.6| diffcp oracle + correctness fixes   | done        |
-| 3  | Cones cleanup                       | pending     |
+| 3  | Cones cleanup                       | done (partial; see below) |
 | 4  | Unify CPU/GPU problem data          | pending     |
 | 5  | Solver dispatch as typed strategy   | done (ahead of 3, 4) |
 | 6  | Batching over problem data          | pending     |
@@ -210,11 +210,26 @@ against central finite differences (with SOC/PSD as controls, ~1e-10) found:
   differences (Clarabel's exp/pow solutions are only ~1e-6 accurate, too
   coarse for this). All fail on the old code.
 
-**Wave 3 — Cones cleanup.** Land per-cone file split cleanly: every projector
-final + correct `__check_init__`; replace `jnp.ndim` dispatch in operator
-`mv` with 1D implementations called via `eqx.filter_vmap` at the boundary;
-fix `ZeroConeProjectorJacobian` static field; implement `as_matrix` for
-testability; fill `cones/CONVENTIONS.md`. Defer `cvxcp` extraction.
+**Wave 3 — Cones cleanup (done, minus the batching redesign).**
+- Per-cone modules: `zero.py`, `nonneg.py`, `soc.py`, `psd.py` (alongside
+  `exp.py`, `pow.py`), plus `_grouping.py`. `canonical.py` keeps the cone
+  keys and `ProductConeProjector` and re-exports everything, so existing
+  imports (`diffqcp.cones.canonical as cone_lib`) keep working.
+- `as_matrix` implemented for every cone Jacobian and `_BlockLinearOperator`
+  via `linops._dense_from_mv` (unbatched operators only); tested for
+  agreement with `mv` and symmetry.
+- `cones/CONVENTIONS.md` written (ordering, PSD vectorization and Jacobian,
+  exp/pow regions and dual conventions, how to test a projector).
+- All of `diffqcp/cones/` is now type-checked by pyright (was excluded):
+  typed the cone-dict branches in `ProductConeProjector`,
+  `jax.config.jax_enable_x64` -> `jax.config.read(...)`, `bool` -> JAX bool
+  returns.
+- Fixed `_SecondOrderConeProjector.__check_init__` (`self.dims` typo).
+- The correctness fixes (PSD, exp, pow) landed separately, above.
+- **Deferred to Wave 6:** replacing the `jnp.ndim` dispatch in operator
+  `mv` with 1D implementations + `vmap` at the boundary. It changes how
+  batched operators are applied (callers would `vmap` over `mv` instead of
+  passing 2D inputs), so it belongs with the batching contract.
 
 **Wave 4 — Unify CPU/GPU problem data.** One final `QCPStructure` (or two
 sharing only an `AbstractVar` interface, with all init in finals — no
@@ -326,10 +341,9 @@ From `docs/original-brief.md`; fold into a wave or drop explicitly.
 
 - `diffqcp/problem_data.py:295,298,324,326` — `ObjMatrixCPU/GPU.in_structure`
   returns `None` (`pass`). Real bug.
-- `diffqcp/cones/canonical.py:295-299` — `_SecondOrderConeProjector.__check_init__`
-  references `self.dims` (typo for `self.dim`).
-- `diffqcp/cones/canonical.py` operator `mv` methods dispatch on `jnp.ndim`
-  to handle vmap — fragile; replace with single 1D impl + `vmap` at boundary.
+- Cone Jacobian operators' `mv` methods (`soc.py`, `psd.py`, `pow.py`,
+  `exp.py`) dispatch on `jnp.ndim` to handle vmap — fragile; replace with
+  single 1D impl + `vmap` at boundary (Wave 6).
 - `_jvp_nvmath` / `_vjp_nvmath` in `qcp.py` are still a separate,
   non-jittable path (Wave 5 only switched them to the augmented system).
   Folding them into an `AbstractDerivativeSolver` needs a GPU to test.

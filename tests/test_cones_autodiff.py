@@ -275,3 +275,37 @@ def test_pow_jacobian_matches_finite_differences(alphas, onto_dual):
     from diffqcp.cones.pow import PowerConeProjector
 
     _fd_check_cone(PowerConeProjector(alphas, onto_dual=onto_dual), 3 * len(alphas), np.random.default_rng(1))
+
+
+# ─── as_matrix ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "make_projector,dim",
+    [
+        (lambda: cone_lib.ZeroConeProjector(onto_dual=False), 5),
+        (lambda: cone_lib.ZeroConeProjector(onto_dual=True), 5),
+        (lambda: cone_lib.SecondOrderConeProjector([3, 4, 4]), 11),
+        (lambda: cone_lib.PSDConeProjector([3, 2, 3]), 15),
+        (lambda: cone_lib.ExponentialConeProjector(2, onto_dual=True), 6),
+        (lambda: cone_lib.PowerConeProjector([0.3, -0.7], onto_dual=True), 6),
+        (
+            lambda: cone_lib.ProductConeProjector(
+                {"z": 2, "l": 3, "q": [3], "s": [2], "ep": 1, "p": [0.4]}, onto_dual=True
+            ),
+            2 + 3 + 3 + 3 + 3 + 3,
+        ),
+    ],
+    ids=["zero", "zero_dual", "soc", "psd", "exp_dual", "pow_dual", "product"],
+)
+def test_jacobian_as_matrix(make_projector, dim):
+    """`as_matrix` agrees with `mv`, and projection Jacobians are symmetric."""
+    rng = np.random.default_rng(0)
+    projector = make_projector()
+    v = jnp.asarray(rng.standard_normal(dim))
+    dv = jnp.asarray(rng.standard_normal(dim))
+    _, J = projector(v)
+    M = np.asarray(J.as_matrix())
+    assert M.shape == (dim, dim)
+    np.testing.assert_allclose(M @ np.asarray(dv), np.asarray(J.mv(dv)), rtol=1e-10, atol=1e-12)
+    np.testing.assert_allclose(M, M.T, rtol=1e-8, atol=1e-10)

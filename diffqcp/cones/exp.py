@@ -18,33 +18,34 @@ import jax
 import jax.numpy as jnp
 import jax.numpy.linalg as jla
 import lineax as lx
-from jaxtyping import Array, Float, Integer
+from jaxtyping import Array, Bool, Float, Integer
 
 from diffqcp.cones.abstract_projector import AbstractConeProjector
+from diffqcp.linops import _dense_from_mv
 
 EXP_CONE_INF_VALUE = 1e15
 CONE_THRESH = 1e-6
 
-if jax.config.jax_enable_x64:
+if jax.config.read("jax_enable_x64"):
     EXP_CONE_INF_VALUE = math.sqrt(EXP_CONE_INF_VALUE)
     CONE_THRESH = 0.001
 
 
-def _is_finite(x: Float[Array, " "]) -> bool:
+def _is_finite(x: Float[Array, " "]) -> Bool[Array, ""]:
     return jnp.abs(x) < EXP_CONE_INF_VALUE
 
 
 def _clip(
     x: Float[Array, "..."],
-    l: Float[Array, " "],
-    u: Float[Array, " "]
-):
+    l: Float[Array, " "] | float,
+    u: Float[Array, " "] | float,
+) -> Float[Array, "..."]:
     return jnp.maximum(l, jnp.minimum(u, x))
 
 
 def hfun(
     v: Float[Array, "3"],
-    rho: Float[Array, " "]
+    rho: Float[Array, " "] | float,
 ):
     r0, s0, t0 = v[0], v[1], v[2]
     exprho = jnp.exp(rho)
@@ -207,7 +208,7 @@ def exp_search_bracket(
     :rtype: tuple[Float[Array, " "], Float[Array, " "]]
     """
     EPS = 1e-12
-    if not jax.config.jax_enable_x64:
+    if not jax.config.read("jax_enable_x64"):
         EPS = math.sqrt(EPS)
 
     r0, s0, t0 = v[0], v[1], v[2]
@@ -302,7 +303,7 @@ def root_search_binary(
     EPS = 1e-12
     MAX_ITER = 40
 
-    if not jax.config.jax_enable_x64:
+    if not jax.config.read("jax_enable_x64"):
         EPS = math.sqrt(EPS)
 
     def _binary_search_body(loop_state):
@@ -384,7 +385,7 @@ def root_search_newton(
     MAX_ITER = 20
     LODAMP = 0.05
     HIDAMP = 0.95
-    if not jax.config.jax_enable_x64:
+    if not jax.config.read("jax_enable_x64"):
         EPS = math.sqrt(EPS)
         DFTOL = math.sqrt(DFTOL)
 
@@ -545,7 +546,7 @@ def proj_sol_polar_exp_cone(
                         case2)
 
 
-def in_exp(v: Float[Array, "3"]) -> bool:
+def in_exp(v: Float[Array, "3"]) -> Bool[Array, ""]:
     """Whether `v` is in the EXP cone.
 
     :param v: Point in R^3.
@@ -562,7 +563,7 @@ def in_exp(v: Float[Array, "3"]) -> bool:
             | (y > 0) & (y * jnp.exp(x / y) - z <= CONE_THRESH))
 
 
-def in_exp_dual(z: Float[Array, "3"]) -> bool:
+def in_exp_dual(z: Float[Array, "3"]) -> Bool[Array, ""]:
     """Whether `z` is in the dual EXP cone.
 
     :param z: Point in R^3.
@@ -589,7 +590,7 @@ def _proj_exp_and_polar(v: Float[Array, "3"]) -> tuple[Float[Array, "3"], Float[
 
     TOL = 1e-8
 
-    if not jax.config.jax_enable_x64:
+    if not jax.config.read("jax_enable_x64"):
         TOL = 1e-4
 
     vp, pdist = proj_primal_exp_cone_heuristic(v)
@@ -766,7 +767,7 @@ class _ExponentialConeJacobianOperator(lx.AbstractLinearOperator):
                              f"but the provided vector is {ndim}D.")
 
     def as_matrix(self):
-        raise NotImplementedError("Exponential Cone Jacobian `as_matrix` not implemented.")
+        return _dense_from_mv(self)
 
     def transpose(self):
         return self

@@ -9,6 +9,7 @@ build/
 .env
 .venv
 *.lock
+!uv.lock
 
 # MyPy & pytest
 .mypy_cache/

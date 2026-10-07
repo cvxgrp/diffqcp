@@ -1,3 +1,5 @@
+from .autodiff import differentiable_solution as differentiable_solution
+from .autodiff import make_differentiable as make_differentiable
 from .cones.ordering import clarabel_to_scs_permutation as clarabel_to_scs_permutation
 from .problem_data import QCPStructureCPU as QCPStructureCPU
 from .problem_data import QCPStructureGPU as QCPStructureGPU

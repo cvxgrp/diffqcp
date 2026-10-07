@@ -168,6 +168,25 @@ QP vs. central differences of tightly solved Clarabel re-solves, under both
 solvers, at 1e-6 relative. This pays down Wave 2's deferred `test_jvp_fd.py`
 for QPs.
 
+**`jax.grad` entry point (done).** `diffqcp/autodiff.py`:
+- `differentiable_solution(data, solution, structure, solver=None)`: an
+  `eqx.filter_custom_vjp` that returns `(x, y, s)` unchanged and applies
+  `vjp` on the backward pass. `data = (P_values, A_values, q, b)` in the
+  structure's sparsity order, so gradients come back as values too.
+- `make_differentiable(solve, structure)`: wraps any JAX-callable solver
+  (e.g. Clarabel via `jax.pure_callback`), applying `stop_gradient` to its
+  inputs (JAX otherwise tries to differentiate the callback and fails).
+- Works under `jit` for both `QCPStructureCPU` and `QCPStructureGPU`. That
+  required replacing `QCPStructureCPU.form_obj`'s boolean-mask indexing
+  (`P_diag_mask`, a tracer under `jit`) with precomputed integer positions:
+  the `eqx.partition` workaround Wave 2.5 noted, fixed ahead of Wave 4.
+- `tests/test_autodiff.py`: grad == vjp; end-to-end jit(grad) through a
+  real Clarabel solve vs. central differences of the loss; GPU structure on
+  CPU agrees with the CPU path.
+- Note: Clarabel at ~1e-13 tolerances can end in `InsufficientProgress` at a
+  poor point (complementarity 4e-3 on a dense QP); default tolerances are
+  more reliable for fixtures.
+
 **Wave 3 — Cones cleanup.** Land per-cone file split cleanly: every projector
 final + correct `__check_init__`; replace `jnp.ndim` dispatch in operator
 `mv` with 1D implementations called via `eqx.filter_vmap` at the boundary;

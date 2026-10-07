@@ -58,6 +58,9 @@ class QCPStructureCPU(QCPStructure):
     P_nonzero_cols: Integer[Array, "..."]
     P_diag_mask: Bool[Array, "..."]
     P_diag_indices: Integer[Array, "..."]
+    # Positions in `P.data` of the diagonal entries. Integer (not boolean)
+    # indexing so `form_obj` works when the structure is traced under `jit`.
+    P_diag_positions: Integer[Array, "..."]
 
     A_nonzero_rows: Integer[Array, "..."]
     A_nonzero_cols: Integer[Array, "..."]
@@ -116,6 +119,7 @@ class QCPStructureCPU(QCPStructure):
         self.P_nonzero_cols = P.indices[:, 1]
         self.P_diag_mask = P.indices[:, 0] == P.indices[:, 1]
         self.P_diag_indices = P.indices[:, 0][self.P_diag_mask]
+        self.P_diag_positions = jnp.nonzero(self.P_diag_mask)[0]
 
     def constr_matrix_init(self, A: Float[BCOO, "m n"]):
         self.m = jnp.shape(A)[0]
@@ -123,7 +127,7 @@ class QCPStructureCPU(QCPStructure):
         self.A_nonzero_cols = A.indices[:, 1]
 
     def form_obj(self, P_like: Float[BCOO, "n n"]) -> ObjMatrixCPU:
-        diag_values = P_like.data[self.P_diag_mask]
+        diag_values = P_like.data[self.P_diag_positions]
         diag = jnp.zeros(self.n)
         diag = diag.at[self.P_diag_indices].set(diag_values)
         return ObjMatrixCPU(P_like, P_like.T, diag)

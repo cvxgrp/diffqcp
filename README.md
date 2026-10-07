@@ -136,6 +136,36 @@ dx, dy, ds = qcp.jvp(dP, dA, dq, db)
 dP, dA, dq, db = qcp.vjp(f1(x), f2(y), f3(s)) 
 ```
 
+## Using `jax.grad`
+
+`jvp` / `vjp` apply the derivative by hand. To let JAX's autodiff flow through a
+conic solve instead, wrap your (non-differentiable) solver with
+`make_differentiable`. Problem data are passed as the *values* of P and A in the
+sparsity pattern of the problem structure:
+
+```python
+import jax
+from diffqcp import QCPStructureCPU, make_differentiable
+
+structure = QCPStructureCPU(P, A, scs_cones)       # fixes the sparsity pattern
+
+def solve(data):                                   # any JAX-callable solver, e.g.
+    P_values, A_values, q, b = data                # Clarabel via jax.pure_callback
+    ...
+    return x, y, s
+
+differentiable_solve = make_differentiable(solve, structure)
+
+def loss(data):
+    x, y, s = differentiable_solve(data)
+    return jax.numpy.sum(x ** 2)
+
+grads = jax.jit(jax.grad(loss))((P.data, A.data, q, b))
+```
+
+For a solution you already have, `differentiable_solution(data, (x, y, s), structure)`
+attaches the derivative without calling a solver (see `diffqcp/autodiff.py`).
+
 ## Selecting solvers
 
 As detailed in our paper, the JVPs and VJPs are computed via a linear system solve

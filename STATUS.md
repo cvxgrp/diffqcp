@@ -162,6 +162,12 @@ and holds to 5e-12 after the fix. Added `generate_dense_qp` and a
 `DeviceQCP` adjoint test (full symmetric P, symmetric perturbations; that
 path was already correct).
 
+**QP finite-difference oracle (done).** `tests/test_qp_finite_differences.py`
+covers what diffcp cannot (P != 0): JVPs on a dense-P QP and the portfolio
+QP vs. central differences of tightly solved Clarabel re-solves, under both
+solvers, at 1e-6 relative. This pays down Wave 2's deferred `test_jvp_fd.py`
+for QPs.
+
 **Wave 3 — Cones cleanup.** Land per-cone file split cleanly: every projector
 final + correct `__check_init__`; replace `jnp.ndim` dispatch in operator
 `mv` with 1D implementations called via `eqx.filter_vmap` at the boundary;

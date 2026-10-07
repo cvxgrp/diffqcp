@@ -3,6 +3,49 @@
 Living document tracking the multi-wave effort to take `diffqcp` from research
 software to production-quality library. Updated at the end of each wave.
 
+## Overnight run summary (2026-10-07) — start here
+
+Branch `claude/compassionate-gauss-87v0j0` = `productionization` + 11 commits.
+Tests: 19 -> 123 (all passing at HEAD); ruff and pyright clean (pyright now covers everything but
+`qcp.py`).
+
+**Correctness bugs found and fixed** (all have regression tests that fail on
+the old code; items 1-8 are also present on `main`):
+1. PSD projection Jacobian wrong whenever >= 2 eigenvalues are positive.
+2. Power cone: dual projection sign error (the path diffqcp always uses),
+   two alpha/(1 - alpha) mix-ups in the Jacobian, and a wrong polar test.
+   Power-cone derivatives were wrong essentially everywhere.
+3. Exponential cone Jacobian NaN on a positive-measure region (s = 0 face).
+4. CPU VJP gradient for off-diagonal entries of P was half what it should be.
+5. `DeviceQCP.vjp` defaulted to dense LU on a singular matrix; cvxpylayers'
+   CuClarabel backend relies on that default (likely its exploding gradients).
+6. F is structurally singular (F z = 0): the root cause of exploding gradients
+   from direct solvers. Fixed by gauge-fixing (Wave 5).
+7. Default LSMR tolerance (1e-8) gave 1e-4..1e-3 error; now 1e-12.
+8. README recipe (Clarabel data) gives wrong SDP derivatives: PSD rows are in
+   Clarabel's order. Added `clarabel_to_scs_permutation` + README note.
+9. Test-fixture bugs: SDP fixtures were unbounded; all QP fixtures had a
+   diagonal P; two flaky FD tests.
+
+**New:** diffcp oracle tests, QP and power-cone finite-difference oracles,
+`diffqcp.solvers` (LSMR / dense direct, `solver=` argument),
+`differentiable_solution` / `make_differentiable` (`jax.grad` through a
+solve, `jit`/`vmap` ok), per-cone modules + `as_matrix`, `CONVENTIONS.md`,
+batching contract + tests.
+
+**Needs your decision:**
+- Wave 4 CPU/GPU class merge (API change; proposal under Wave 4).
+- Remove the `ndim` dispatch inside cone operators (Wave 6 note).
+- Report upstream? diffcp 1.1.6's Clarabel path gives wrong PSD solutions;
+  cvxpylayers' CuClarabel interface passes no `solve_method` (fixed on our
+  side by the default) and may need the PSD permutation if CuClarabel ever
+  passes PSD cones through.
+- Release: the PSD, power-cone and `vjp`-default fixes affect cvxpylayers
+  users, so a patch release of `diffqcp` may be worth it soon.
+
+**Not verified here (no GPU):** the nvmath/cuDSS path (now factors the
+augmented system) and GPU execution in general.
+
 ## Goal
 
 Make `diffqcp` a high-quality, production-grade JAX library that

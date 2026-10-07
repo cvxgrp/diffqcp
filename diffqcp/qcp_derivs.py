@@ -8,6 +8,7 @@ from jax.experimental.sparse import BCOO, BCSR
 from jaxtyping import Array, Float, Integer
 from lineax import AbstractLinearOperator
 
+from diffqcp.linops import _dense_from_mv
 from diffqcp.problem_data import ObjMatrix
 
 # NOTE(quill): the last bit of that would fail since `dtau * self.q` would be 1D array * 2D array
@@ -38,8 +39,7 @@ class _DuQAdjoint(AbstractLinearOperator):
         return jnp.concatenate([out1, out2, jnp.array([out3])])
 
     def as_matrix(self):
-        raise NotImplementedError(f"{self.__class__.__name__}'s `as_matrix` method is"
-                                  + " not yet implemented.")
+        return _dense_from_mv(self)
 
     def transpose(self) -> _DuQ:
         return _DuQ(self.P, self.Px, self.xTPx, self.A, self.AT, self.q,
@@ -79,8 +79,7 @@ class _DuQ(AbstractLinearOperator):
         return jnp.concatenate([out1, out2, jnp.array([out3])])
 
     def as_matrix(self):
-        raise NotImplementedError(f"{self.__class__.__name__}'s `as_matrix` method is"
-                                  + " not yet implemented.")
+        return _dense_from_mv(self)
 
     def transpose(self) -> _DuQAdjoint:
         return _DuQAdjoint(self.P, self.Px, self.xTPx, self.A, self.AT, self.q,

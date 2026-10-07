@@ -5,11 +5,10 @@ __all__ = [
     "ObjMatrixGPU",
     "QCPStructureCPU",
     "QCPStructureGPU",
-    "QCPStructureLayers"
 ]
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TypeAlias, cast
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -19,11 +18,9 @@ from jax.experimental.sparse import BCOO, BCSR
 from jaxtyping import Array, Bool, Float, Integer
 from lineax import AbstractLinearOperator
 
-if TYPE_CHECKING:
-    from cvxpy.reductions.dcp2cone.cone_matrix_stuffing import ParamConeProg
-
 from diffqcp._helpers import _coo_to_csr_transpose_map, _TransposeCSRInfo
 from diffqcp.cones.canonical import ProductConeProjector
+from diffqcp.linops import _dense_from_mv
 
 
 class QCPStructure(eqx.Module):
@@ -130,7 +127,7 @@ class QCPStructureCPU(QCPStructure):
         diag_values = P_like.data[self.P_diag_positions]
         diag = jnp.zeros(self.n)
         diag = diag.at[self.P_diag_indices].set(diag_values)
-        return ObjMatrixCPU(P_like, P_like.T, diag)
+        return ObjMatrixCPU(P_like, cast(BCOO, P_like.T), diag)  # (`.T` is untyped in jax's stubs)
 
 
 class QCPStructureGPU(QCPStructure):
@@ -244,42 +241,20 @@ class QCPStructureGPU(QCPStructure):
                      shape=(self.n, self.m))
 
 
-class QCPStructureLayers(QCPStructure):
-    """Meant to be used with CVXPYlayers."""
-
-    n: int
-    m: int
-    N: int
-    cone_projector: ProductConeProjector
-    is_batched: bool
-
-    def __init__(
-        self,
-        prob: ParamConeProg,
-        cone_dims: dict[str, int | list[int] | list[float]],
-        onto_dual: bool = True
-    ):
-
-        self.cone_projector = ProductConeProjector(cone_dims, onto_dual=onto_dual)
-
-#         # Now we need to obtain
-#         constraint_structure =
-
-
 # `ObjMatrix` is defined below, after `ObjMatrixCPU` and `ObjMatrixGPU`.
 
 
 class ObjMatrixCPU(AbstractLinearOperator):
     P: Float[BCOO, "n n"]
     PT: Float[BCOO, "n n"]
-    diag: Float[BCOO, " n"]
-    in_struc: ShapeDtypeStruct
+    diag: Float[Array, " n"]
+    in_struc: ShapeDtypeStruct = eqx.field(static=True)
 
     def __init__(
         self,
         P: Float[BCOO, "n n"],
         PT: Float[BCOO, "n n"],
-        diag: Float[BCOO, " n"]
+        diag: Float[Array, " n"]
     ):
         self.P, self.PT, self.diag = P, PT, diag
         n = jnp.shape(P)[0]
@@ -293,18 +268,17 @@ class ObjMatrixCPU(AbstractLinearOperator):
         return self
 
     def as_matrix(self):
-        raise NotImplementedError(f"{self.__class__.__name__}'s `as_matrix` method is"
-                                  + " not yet implemented.")
+        return _dense_from_mv(self)
 
     def in_structure(self):
-        pass
+        return self.in_struc
 
     def out_structure(self):
         return self.in_structure()
 
 class ObjMatrixGPU(AbstractLinearOperator):
     P: Float[BCSR, "n n"]
-    in_struc: ShapeDtypeStruct
+    in_struc: ShapeDtypeStruct = eqx.field(static=True)
 
     def __init__(
         self,
@@ -322,11 +296,10 @@ class ObjMatrixGPU(AbstractLinearOperator):
         return self
 
     def as_matrix(self):
-        raise NotImplementedError(f"{self.__class__.__name__}'s `as_matrix` method is"
-                                  + " not yet implemented.")
+        return _dense_from_mv(self)
 
     def in_structure(self):
-        pass
+        return self.in_struc
 
     def out_structure(self):
         return self.in_structure()

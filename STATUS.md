@@ -29,7 +29,7 @@ commits for bisection and inspection.)
 | 2.5| Existing-test cleanup               | done        |
 | 2.6| diffcp oracle + correctness fixes   | done        |
 | 3  | Cones cleanup                       | done (partial; see below) |
-| 4  | Unify CPU/GPU problem data          | pending     |
+| 4  | Unify CPU/GPU problem data          | bug fixes done; merge needs your call |
 | 5  | Solver dispatch as typed strategy   | done (ahead of 3, 4) |
 | 6  | Batching over problem data          | pending     |
 | 7  | Sparse F + direct-solve diagnosis   | pending     |
@@ -231,11 +231,31 @@ against central finite differences (with SOC/PSD as controls, ~1e-10) found:
   batched operators are applied (callers would `vmap` over `mv` instead of
   passing 2D inputs), so it belongs with the batching contract.
 
-**Wave 4 — Unify CPU/GPU problem data.** One final `QCPStructure` (or two
-sharing only an `AbstractVar` interface, with all init in finals — no
-`obj_matrix_init` on the ABC). One `ObjMatrix` type. Bury BCOO/BCSR choice
-as strategy or one-time conversion at construction. Delete
-`QCPStructureLayers` and `ConstrMatrixCPU` stubs (or implement properly).
+**Wave 4 — Unify CPU/GPU problem data (bug fixes done; merge is a proposal).**
+Done:
+- `ObjMatrixCPU/GPU.in_structure` returned `None` (`pass`); now returns the
+  stored structure (marked static). Both now have `as_matrix`, as do `_DuQ` /
+  `_DuQAdjoint`.
+- `ObjMatrixCPU.diag` annotated as the dense array it is (was `BCOO`).
+- Removed the `QCPStructureLayers` stub and its export: its `__init__` never
+  set `n`/`m`/`N`, so it could not be constructed. (cvxpylayers imports only
+  `DeviceQCP` and `QCPStructureGPU`.)
+- `problem_data.py` is now type-checked; `qcp.py` stays excluded (25 errors,
+  mostly the optional GPU imports and BCOO/BCSR unions the merge would remove).
+- The `P_diag_mask` jit issue was already fixed with the autodiff entry point.
+
+**Proposal: the merge (not done; it changes the public API).** One
+`QCPStructure` built from (P, A, cones) in either BCOO or BCSR, storing both
+the COO (row, col) indices and the CSR (indices, indptr) once at
+construction, plus a `P_storage: "upper" | "full"` flag; one `QCP` class whose
+`jvp`/`vjp` pick the BCOO or BCSR adjoint by that flag. `HostQCP`,
+`DeviceQCP`, `QCPStructureCPU` and `QCPStructureGPU` would remain as thin
+constructors for compatibility (cvxpylayers' CuClarabel interface uses
+`DeviceQCP(P, A, q, b, x, y, s, QCPStructureGPU(P, A, cones))` and
+`.vjp(dx, dy, ds)`). `differentiable_solution` already shows the shape this
+takes. Decide: (a) whether to keep both storage conventions for P or
+standardize on one, (b) whether the old names stay as aliases or are
+deprecated.
 
 **Wave 5 — Solver strategy + gauge fixing (done; landed before Waves 3/4).**
 - `diffqcp/solvers.py`: `AbstractDerivativeSolver` with `LSMRSolver`

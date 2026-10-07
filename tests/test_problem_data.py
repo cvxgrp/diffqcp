@@ -6,6 +6,7 @@ import numpy as np
 from jax.experimental.sparse import BCOO, BCSR
 
 from diffqcp import QCPStructureCPU, QCPStructureGPU
+from diffqcp.problem_data import ObjMatrixGPU
 
 
 def _make_upper_tri_bcoo(n, rng):
@@ -79,3 +80,24 @@ def test_qcpstructuregpu_A_transpose_inner_product():
     # additionally, check that form_A_transpose produces a BCSR whose dense equals A.T
     assert jnp.allclose(jnp.array(A_T.todense()), jnp.array(A_dense.T), atol=1e-12)
 
+
+
+def test_obj_matrix_structure_and_matrix():
+    """`ObjMatrixCPU/GPU.in_structure` used to return None (a bare `pass`).
+    Both must report (n,) and materialize to the full symmetric P."""
+    rng = np.random.default_rng(0)
+    n = 5
+    M = rng.standard_normal((n, n))
+    P_full = M @ M.T
+    P_upper = np.triu(P_full)
+
+    upper = BCOO.fromdense(jnp.asarray(P_upper))
+    A = BCOO.fromdense(jnp.asarray(rng.standard_normal((3, n))))
+    obj_cpu = QCPStructureCPU(upper, A, {"z": 3}).form_obj(upper)
+    obj_gpu = ObjMatrixGPU(BCSR.fromdense(jnp.asarray(P_full)))
+
+    for obj in (obj_cpu, obj_gpu):
+        struct = obj.in_structure()
+        assert struct.shape == (n,)
+        assert obj.out_structure().shape == (n,)
+        np.testing.assert_allclose(np.asarray(obj.as_matrix()), P_full, rtol=1e-12, atol=1e-12)

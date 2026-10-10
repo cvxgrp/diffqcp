@@ -26,11 +26,17 @@ into Moreau "direct cones" (`data["dir_cones"]`), but cvxpylayers' MOREAU
 context builds its cones from `dims` only, so those constraints are silently
 dropped and the layer solves a different problem. Layers built on the MOREAU
 canonicalization are therefore built with direct-cone extraction disabled
-(`_slack_cones_only`); `check_forward` verifies every layer against a plain
+(`_slack_cones_only`). Also, building a second CSR-based layer from the same
+`cvx.Problem` object corrupts its data (cvxpylayers permutes the problem's
+cached parametrization matrices in place), so every layer here gets a fresh
+`Problem`. `check_forward` verifies every layer against a plain
 CVXPY solve.
 
 Forward solves are run tight for every backend (Clarabel and Moreau defaults,
 SCS at eps 1e-9), so differences come from the derivatives, not the solves.
+
+Needs `cvxpylayers[jax]==1.2.0` and `moreau==0.4.1` (CPU), which pulls cvxpy 1.9.
+Produced `results/layer_learning_curves.png`.
 
     python experiments/layer_learning_curves.py run <problem> <backend> <out.npz>
     python experiments/layer_learning_curves.py grads <problem>   # forward + gradient agreement at θ₀
@@ -53,25 +59,31 @@ import jax
 jax.config.update("jax_enable_x64", True)
 jax.config.update("jax_platforms", os.environ.get("DIFFQCP_PLATFORM", "cpu"))
 
-import clarabel  # noqa: E402
-import cvxpy as cvx  # noqa: E402
-import jax.numpy as jnp  # noqa: E402
-import numpy as np  # noqa: E402
-import scipy.sparse as sp  # noqa: E402
-from cvxpy.reductions.solvers.conic_solvers.moreau_conif import MOREAU  # noqa: E402
-from cvxpy.reductions.solvers.conic_solvers.scs_conif import dims_to_solver_dict  # noqa: E402
-from cvxpylayers.jax import CvxpyLayer  # noqa: E402
-from cvxpylayers.jax.cvxpylayer import _flatten_and_batch_params, _recover_results  # noqa: E402
-from jax.experimental.sparse import BCSR  # noqa: E402
+import clarabel
+import cvxpy as cvx
+import jax.numpy as jnp
+import numpy as np
+import scipy.sparse as sp
+from cvxpy.reductions.solvers.conic_solvers.moreau_conif import MOREAU
+from cvxpy.reductions.solvers.conic_solvers.scs_conif import dims_to_solver_dict
+from cvxpylayers.jax import CvxpyLayer
+from cvxpylayers.jax.cvxpylayer import _flatten_and_batch_params, _recover_results
+from jax.experimental.sparse import BCSR
 
-from diffqcp import QCPStructureGPU, make_differentiable  # noqa: E402
+from diffqcp import QCPStructureGPU, make_differentiable
 
 BACKENDS = ("diffqcp", "diffcp", "moreau")
+# diffcp 1.1.5's adjoint fails on power cones (shape mismatch in `adjoint_derivative`).
+SKIP = {("pow", "diffcp")}
+
+
+def backends_for(problem: str) -> tuple[str, ...]:
+    return tuple(b for b in BACKENDS if (problem, b) not in SKIP)
 # name -> (number of iterations, step size); identical for every backend.
 SETTINGS = {
-    "pow": (150, 0.5),
-    "logistic": (150, 2.0),
-    "ls_eq": (150, 0.5),
+    "pow": (150, 0.3),
+    "logistic": (150, 0.1),
+    "ls_eq": (150, 1.0),
 }
 SCS_TIGHT = {"eps_abs": 1e-9, "eps_rel": 1e-9, "max_iters": 100_000}
 
@@ -224,9 +236,9 @@ def check_forward(problem_name: str) -> dict:
     x_ref = np.asarray(target_solution(problem, parameters, variable, init))
     params = [jnp.asarray(v) for v in init]
     out = {}
-    for backend in BACKENDS:
-        layer = make_layer(backend, problem, parameters, variable)
-        (x,), _ = jax.vjp(lambda *ps: layer(*ps), *params)  # noqa: B023
+    for backend in backends_for(problem_name):
+        layer = make_layer(backend, *make_problem(problem_name)[:3])  # fresh Problem per layer
+        (x,), _ = jax.vjp(lambda *ps: layer(*ps), *params)
         out[backend] = float(np.max(np.abs(np.asarray(x) - x_ref)))
     return out
 
@@ -258,6 +270,8 @@ def run(problem_name: str, backend: str, num_iter: int | None = None, step: floa
     x_target = target_solution(problem, parameters, variable, target)
     layer = make_layer(backend, problem, parameters, variable)
     value_and_grad = jax.value_and_grad(_loss_fn(layer, x_target))
+    if backend != "diffcp":  # the diffcp layer is not jittable
+        value_and_grad = jax.jit(value_and_grad)
 
     params = [jnp.asarray(v) for v in init]
     losses, grad_norms, param_errs, times, status = [], [], [], [], "ok"
@@ -276,7 +290,7 @@ def run(problem_name: str, backend: str, num_iter: int | None = None, step: floa
             break
         losses.append(loss)
         grad_norms.append(float(np.linalg.norm(g)))
-        param_errs.append(float(np.sqrt(sum(np.sum((np.asarray(p) - t) ** 2) for p, t in zip(params, target)))))
+        param_errs.append(float(np.sqrt(sum(np.sum((np.asarray(p) - t) ** 2) for p, t in zip(params, target, strict=True)))))
         params = [p - step * gi for p, gi in zip(params, grads, strict=True)]
     return dict(losses=np.array(losses), grad_norms=np.array(grad_norms), param_errs=np.array(param_errs),
                 times=np.array(times), status=status, num_iter=num_iter, step=step)
@@ -288,13 +302,14 @@ def gradient_agreement(problem_name: str) -> dict:
     x_target = target_solution(problem, parameters, variable, target)
     params = [jnp.asarray(v) for v in init]
     grads = {}
-    for backend in BACKENDS:
-        layer = make_layer(backend, problem, parameters, variable)
+    backends = backends_for(problem_name)
+    for backend in backends:
+        layer = make_layer(backend, *make_problem(problem_name)[:3])  # fresh Problem per layer
         g = jax.grad(_loss_fn(layer, x_target))(params)
         grads[backend] = np.concatenate([np.ravel(gi) for gi in g])
     out = {}
-    for i, a in enumerate(BACKENDS):
-        for b in BACKENDS[i + 1:]:
+    for i, a in enumerate(backends):
+        for b in backends[i + 1:]:
             ga, gb = grads[a], grads[b]
             out[f"{a} vs {b}"] = dict(
                 rel_diff=float(np.linalg.norm(ga - gb) / max(np.linalg.norm(gb), 1e-300)),
@@ -324,23 +339,30 @@ def plot(out_path: str, runs_dir: str) -> None:
     fig, axes = plt.subplots(len(titles), 2, figsize=(11, 10))
     fig.patch.set_facecolor(bg)
     for i, problem in enumerate(titles):
-        for j, (key, ylabel) in enumerate((("losses", "loss  ½‖x(θ) − x(θ*)‖²"), ("param_errs", "‖θ − θ*‖"))):
+        for j, (key, ylabel) in enumerate((("losses", "loss  ½‖x(θ) − x(θ*)‖²"), ("param_errs", "‖θ − θ*‖"))):  # noqa: RUF001
             ax = axes[i, j]
             ax.set_facecolor(bg)
+            curves = []
             for backend in BACKENDS:
                 path = os.path.join(runs_dir, f"{problem}_{backend}.npz")
                 if not os.path.exists(path):
                     continue
                 r = np.load(path)
                 ys = r[key]
+                curves.append(ys)
                 ms = 1e3 * float(np.median(r["times"])) if r["times"].size else float("nan")
                 ax.plot(np.arange(len(ys)), ys, color=colors[backend], lw=2, solid_capstyle="round",
                         label=f"{labels[backend]} · {ms:.0f} ms/iter")
                 if len(ys) < int(r["num_iter"]) and len(ys):
                     ax.plot(len(ys) - 1, ys[-1], marker="X", ms=10, color=colors[backend], mec=bg, mew=1.5)
-            if key == "losses":
+            both = np.concatenate(curves)
+            if key == "losses" and both.max() / both.min() >= 10:  # under a decade a log axis has no labels
                 ax.set_yscale("log")
                 ax.yaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+            k = min(len(c) for c in curves)
+            if len(curves) > 1 and max(np.max(np.abs(c[:k] / curves[0][:k] - 1)) for c in curves) < 0.01:
+                ax.text(0.98, 0.5, f"all {len(curves)} curves overlap (within 1%)", transform=ax.transAxes,
+                        ha="right", va="center", fontsize=8.5, color=ink2)
             ax.set_title(titles[problem] if j == 0 else "", fontsize=10, color=ink, loc="left")
             ax.grid(True, which="major", color=grid, lw=0.8)
             ax.tick_params(colors=ink2, labelsize=8.5)

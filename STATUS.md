@@ -359,6 +359,28 @@ CVXPY → cvxpylayers → diffqcp → gradient.
 **Wave 9 — `cvxcp` extraction.** Once cones are stable: new repo under
 `healeyq3`; `diffqcp` depends on it.
 
+## Layer learning curves: diffqcp vs. diffcp vs. Moreau (`experiments/layer_learning_curves.py`)
+
+Gradient descent on CVXPYlayers parameters (JAX layer, CPU), 150 iterations, same step for every backend.
+Figure: `experiments/results/layer_learning_curves.png`. diffcp is left out of the power-cone problem.
+
+- `pow`, `ls_eq`: every backend's curve overlaps (within 1%).
+- `logistic`: all converge (final loss ~1e-7). diffqcp and Moreau track each other; diffcp takes a different path.
+  Its gradient at θ₀ has cosine 0.89 with the other two.
+- Speed (median ms/iter, jitted where possible): pow 2 / 7 (diffqcp / Moreau); logistic 53 / 30 / 5
+  (diffqcp / diffcp / Moreau); ls_eq 3 / 26 / 3.
+
+Upstream issues found (cvxpylayers 1.2.0, cvxpy 1.9.3, diffcp 1.1.5, moreau 0.4.1), not yet reported:
+1. cvxpylayers MOREAU silently drops Moreau "direct cones": constraints on bare variables such as `x >= 0`, a
+   power cone on `x[0:3]`, or exp cones. cvxpy's MOREAU interface puts them in `data["dir_cones"]`, and
+   `MOREAU_ctx` builds its cones from `dims` only. Workaround: canonicalize with `MOREAU.DIR_CONE_KINDS = frozenset()`.
+2. A second CSR-based layer built from the same `cvx.Problem` object gets corrupted data. The likely cause is
+   that `get_solver_ctx` permutes the cached `reduced_P/A.reduced_mat` in place. Workaround: a fresh Problem per layer.
+3. The JAX layer cannot use a custom canonical-matrix `SolverInterface`: `_solve_with_custom_vjp` reads
+   `ctx.solver_ctx`, which is `None`. The DIFFCP JAX forward pass without a gradient crashes in `solve_only_batch`
+   (`Ps` is `None`).
+4. The diffcp adjoint crashes on power cones: a shape mismatch in `adjoint_derivative` (35 vs 68).
+
 ## Findings that shape the remaining waves
 
 - **F is structurally singular.** `F z = 0` for `z = (x, y - s, 1)` (the

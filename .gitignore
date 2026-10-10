@@ -19,3 +19,7 @@ build/
 .vscode/
 *.swp
 .DS_Store
+# Output of scripts/gpu_check.sh
+gpu_report.txt
+gpu_pytest.log
+gpu_pytest.log.sync

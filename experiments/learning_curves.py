@@ -30,13 +30,15 @@ interface uses).
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 
 import jax
 
 jax.config.update("jax_enable_x64", True)
-jax.config.update("jax_platforms", "cpu")
+# CPU by default; DIFFQCP_PLATFORM=cuda (or "cuda,cpu") runs the linear algebra on a GPU.
+jax.config.update("jax_platforms", os.environ.get("DIFFQCP_PLATFORM", "cpu"))
 
 import clarabel
 import cvxpy as cvx
@@ -249,8 +251,6 @@ def plot(out_path: str, runs: list[tuple[str, str]]) -> None:
 
 def plot_comparison(out_path: str, runs_dir: str) -> None:
     """Grid: one row per problem, one column per variant; before vs after per panel."""
-    import os
-
     import matplotlib
     import matplotlib.ticker
 

@@ -3,6 +3,10 @@
 Living document tracking the multi-wave effort to take `diffqcp` from research
 software to production-quality library. Updated at the end of each wave.
 
+**Open items now live in [`docs/ROADMAP.md`](docs/ROADMAP.md)** (math review,
+open questions, the PR plan for landing this branch on `main`, and a task
+backlog). This file is the history: what was done and why.
+
 ## Overnight run summary (2026-10-07) — start here
 
 Branch `claude/compassionate-gauss-87v0j0` = `productionization` + 11 commits.
@@ -435,7 +439,12 @@ From `docs/original-brief.md`; fold into a wave or drop explicitly.
 
 ## Known issues to fix as we touch their files
 
-- `diffqcp/problem_data.py:295,298,324,326` — `ObjMatrixCPU/GPU.in_structure`
+Superseded by `docs/ROADMAP.md`. Status at the end of the session:
+`in_structure`, the `QCPStructureLayers` stub and the `diag` annotation are
+fixed (wave 4); the `ndim` dispatch and the nvmath path are roadmap items
+E4 and E3.
+
+- [fixed] `diffqcp/problem_data.py:295,298,324,326` — `ObjMatrixCPU/GPU.in_structure`
   returns `None` (`pass`). Real bug.
 - Cone Jacobian operators' `mv` methods (`soc.py`, `psd.py`, `pow.py`,
   `exp.py`) dispatch on `jnp.ndim` to handle vmap — fragile; replace with

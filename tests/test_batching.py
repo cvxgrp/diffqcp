@@ -20,6 +20,7 @@ import pytest
 from jax.experimental.sparse import BCOO
 
 from diffqcp import DenseDirectSolver, LSMRSolver, differentiable_solution
+from diffqcp.cones.canonical import ProductConeProjector
 
 from .problems import QCPProbData, generate_dense_qp, generate_feasible_sdp
 from .test_autodiff import _cpu_inputs, _make_solve
@@ -103,3 +104,27 @@ def test_vmap_over_problems(solver):
         single = jax.grad(loss)(datas[i], solutions[i])
         for k in range(4):
             assert _max_abs_diff(batched[k][i], single[k]) < 1e-9
+
+
+@pytest.mark.parametrize("onto_dual", [False, True], ids=["primal", "dual"])
+@pytest.mark.parametrize("cones", [
+    {"p": [0.3, 0.6, -0.4]},
+    {"z": 2, "l": 3, "q": [3], "ep": 1, "p": [0.7, -0.25]},
+], ids=["pow_only", "mixed_with_pow"])
+def test_vmap_cone_projector_with_power_cones(cones, onto_dual):
+    """`vmap`ping a projector over a batch of points: the projections and the
+    batched Jacobian operator's `mv` match a loop over the batch. Power cones
+    used to return a (batch, batch * dim) `mv` output here."""
+    projector = ProductConeProjector(cones, onto_dual=onto_dual)
+    dim = sum(projector.dims)
+    rng = np.random.default_rng(0)
+    xs = jnp.asarray(rng.standard_normal((B, dim)))
+    vs = jnp.asarray(rng.standard_normal((B, dim)))
+
+    projs, jac = jax.vmap(projector)(xs)
+    jvs = jac.mv(vs)
+    assert jvs.shape == (B, dim)
+    for i in range(B):
+        proj_i, jac_i = projector(xs[i])
+        assert _max_abs_diff(projs[i], proj_i) < 1e-12
+        assert _max_abs_diff(jvs[i], jac_i.mv(vs[i])) < 1e-12

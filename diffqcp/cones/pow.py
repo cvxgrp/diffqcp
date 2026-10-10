@@ -289,21 +289,22 @@ class _PowerConeJacobianOperator(lx.AbstractLinearOperator):
     - `jacobians`: the Jacobians of the projections onto the primal cones K_alpha,
         each evaluated at the (sign-flipped for dual cones) point, shape
         `(num_cones, 3, 3)` or `(batch, num_cones, 3, 3)`.
-    - `is_dual`: which cones are projected onto their dual.
+    - `is_dual`: which cones are projected onto their dual, shape `(num_cones,)`,
+        or `(batch, num_cones)` when the projector was `vmap`ped.
     """
 
     jacobians: Float[Array, "*num_batches num_cones 3 3"]
-    is_dual: Bool[Array, " num_cones"]
+    is_dual: Bool[Array, "*num_batches num_cones"]
     num_cones: int = eqx.field(static=True)
 
     def __init__(
         self,
         jacobians: Float[Array, "*num_batches num_cones 3 3"],
-        is_dual: Bool[Array, " num_cones"],
+        is_dual: Bool[Array, "*num_batches num_cones"],
     ):
         self.jacobians = jacobians
         self.is_dual = is_dual
-        self.num_cones = jnp.size(is_dual)
+        self.num_cones = jnp.shape(is_dual)[-1]
         ndim = jnp.ndim(jacobians)
         if ndim not in [3, 4]:
             raise ValueError("The `jacobians` argument provided to the `_PowerConeJacobianOperator` "
@@ -317,8 +318,11 @@ class _PowerConeJacobianOperator(lx.AbstractLinearOperator):
 
             return _pow_cone_jacobian_mv(dx, self.jacobians, self.is_dual, self.num_cones)
         elif ndim == 2:
+            # Under `vmap` of the projector every array leaf, `is_dual` included,
+            # gets a batch axis; map over it when present.
+            dual_axis = 0 if jnp.ndim(self.is_dual) == 2 else None
             return eqx.filter_vmap(_pow_cone_jacobian_mv,
-                                   in_axes=(0, 0, None, None),
+                                   in_axes=(0, 0, dual_axis, None),
                                    out_axes=0)(dx, self.jacobians, self.is_dual, self.num_cones)
         else:
             raise ValueError("The `_PowerConeJacobianOperator` can only be applied to 1D or 2D inputs "

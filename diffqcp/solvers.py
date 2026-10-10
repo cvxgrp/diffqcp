@@ -39,7 +39,7 @@ import jax
 import jax.numpy as jnp
 import jax.scipy.linalg
 import lineax as lx
-from jaxtyping import Array, Float
+from jaxtyping import Array, Bool, Float
 
 
 class AbstractDerivativeSolver(eqx.Module):
@@ -58,7 +58,8 @@ class AbstractDerivativeSolver(eqx.Module):
         raise NotImplementedError
 
 
-def _default_tol(dtype) -> float:
+def _default_tol(dtype: jnp.dtype) -> float:
+    """Default LSMR tolerance: 1e-12 in float64, 1e-6 otherwise."""
     # LSMR's stopping test is relative to ||F'|| ||d||; 1e-8 left 1e-4..1e-3
     # relative error in the derivative on moderately conditioned problems,
     # while 1e-12 costs only ~5-10% more iterations (see STATUS.md, Wave 5).
@@ -79,7 +80,7 @@ class LSMRSolver(AbstractDerivativeSolver):
     atol: float | None = None
     max_steps: int | None = None
 
-    def _lsmr(self, dtype) -> lx.LSMR:
+    def _lsmr(self, dtype: jnp.dtype) -> lx.LSMR:
         default = _default_tol(dtype)
         rtol = default if self.rtol is None else self.rtol
         atol = default if self.atol is None else self.atol
@@ -87,10 +88,10 @@ class LSMRSolver(AbstractDerivativeSolver):
         # condition-number stop is not what we want to end the iteration on.
         return lx.LSMR(rtol=rtol, atol=atol, max_steps=self.max_steps, conlim=float("inf"))
 
-    def solve(self, Fg, rhs):
+    def solve(self, Fg: lx.AbstractLinearOperator, rhs: Float[Array, " N"]) -> Float[Array, " N-1"]:
         return lx.linear_solve(Fg, rhs, solver=self._lsmr(rhs.dtype)).value
 
-    def solve_transpose(self, Fg, rhs):
+    def solve_transpose(self, Fg: lx.AbstractLinearOperator, rhs: Float[Array, " N-1"]) -> Float[Array, " N"]:
         return lx.linear_solve(Fg.T, rhs, solver=self._lsmr(rhs.dtype)).value
 
 
@@ -144,7 +145,10 @@ class DenseDirectSolver(AbstractDerivativeSolver):
     pivot_rtol: float | None = None
     residual_rtol: float = 1e-8
 
-    def _solve_augmented(self, Fp, top_rhs, bottom_rhs):
+    def _solve_augmented(
+        self, Fp: Float[Array, "N N-1"], top_rhs: Float[Array, " N"], bottom_rhs: Float[Array, " N-1"]
+    ) -> tuple[Float[Array, " N"], Float[Array, " N-1"], Bool[Array, ""]]:
+        """LU-solve `K [top; bottom] = [top_rhs; bottom_rhs]`; also report whether the pivots look nonsingular."""
         K = augmented_system(Fp)
         lu, piv = jax.scipy.linalg.lu_factor(K)
         sol = jax.scipy.linalg.lu_solve((lu, piv), jnp.concatenate([top_rhs, bottom_rhs]))
@@ -154,17 +158,20 @@ class DenseDirectSolver(AbstractDerivativeSolver):
         N = Fp.shape[0]
         return sol[:N], sol[N:], well_posed
 
-    def _accept(self, well_posed, residual, rhs):
+    def _accept(
+        self, well_posed: Bool[Array, ""], residual: Float[Array, ""], rhs: Float[Array, " k"]
+    ) -> Bool[Array, ""]:
+        """Keep the LU solution if the pivots are fine and the relative residual is small."""
         rel_res = residual / jnp.maximum(jnp.linalg.norm(rhs), jnp.finfo(rhs.dtype).tiny)
         return well_posed & jnp.isfinite(rel_res) & (rel_res <= self.residual_rtol)
 
-    def solve(self, Fg, rhs):
+    def solve(self, Fg: lx.AbstractLinearOperator, rhs: Float[Array, " N"]) -> Float[Array, " N-1"]:
         Fp = materialise_gauge_operator(Fg)
         _, d, well_posed = self._solve_augmented(Fp, rhs, jnp.zeros(Fp.shape[1], dtype=rhs.dtype))
         ok = self._accept(well_posed, jnp.linalg.norm(Fp @ d - rhs), rhs)
         return jax.lax.cond(ok, lambda: d, lambda: jnp.linalg.lstsq(Fp, rhs)[0])
 
-    def solve_transpose(self, Fg, rhs):
+    def solve_transpose(self, Fg: lx.AbstractLinearOperator, rhs: Float[Array, " N-1"]) -> Float[Array, " N"]:
         Fp = materialise_gauge_operator(Fg)
         w, _, well_posed = self._solve_augmented(Fp, jnp.zeros(Fp.shape[0], dtype=rhs.dtype), rhs)
         ok = self._accept(well_posed, jnp.linalg.norm(Fp.T @ w - rhs), rhs)
@@ -183,7 +190,11 @@ def gauge_fixed(F: lx.AbstractLinearOperator) -> lx.AbstractLinearOperator:
 
 
 def resolve_solver(solve_method: str | None, solver: AbstractDerivativeSolver | None) -> AbstractDerivativeSolver:
-    """Map the legacy `solve_method` strings onto solver objects."""
+    """The solver to use: `solver` if given, else the one named by `solve_method`.
+
+    `"jax-lsmr"` (or `None`) -> `LSMRSolver()`, `"jax-lu"` -> `DenseDirectSolver()`.
+    `"nvmath-direct"` is handled by `DeviceQCP` before this is called.
+    """
     if solver is not None:
         return solver
     if solve_method in (None, "jax-lsmr"):

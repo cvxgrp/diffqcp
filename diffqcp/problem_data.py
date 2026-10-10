@@ -1,3 +1,15 @@
+"""Problem structure and objective-matrix operators shared by `HostQCP` and `DeviceQCP`.
+
+A `QCPStructure*` is built once per sparsity pattern (and cone) and reused
+for every problem with that pattern, e.g. across the iterations of a learning
+loop or the members of a CVXPYlayers batch:
+
+- `QCPStructureCPU`: P given as its upper triangle, P and A as BCOO;
+- `QCPStructureGPU`: P given in full, P and A as BCSR.
+
+`ObjMatrixCPU` / `ObjMatrixGPU` wrap the stored P as a symmetric lineax
+operator.
+"""
 from __future__ import annotations
 
 __all__ = [
@@ -8,7 +20,7 @@ __all__ = [
 ]
 
 from abc import abstractmethod
-from typing import TypeAlias, cast
+from typing import Self, TypeAlias, cast
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -24,25 +36,47 @@ from diffqcp.linops import _dense_from_mv
 
 
 class QCPStructure(eqx.Module):
+    """Sparsity patterns, sizes and cone of a family of QCPs.
 
-    # The following are needed for `_form_atoms` in `AbstractQCP`.
+    `n` and `m` are the sizes of x and y, `N = n + m + 1`, and
+    `cone_projector` projects onto the cone K (or its dual, see the concrete
+    classes' `onto_dual`).
+    """
+
     n: eqx.AbstractVar[int]
     m: eqx.AbstractVar[int]
     N: eqx.AbstractVar[int]
     cone_projector: eqx.AbstractVar[ProductConeProjector]
 
     @abstractmethod
-    def obj_matrix_init(self):
-        pass
+    def obj_matrix_init(self, P: BCOO | BCSR) -> None:
+        """Record `n` and the sparsity pattern of the objective matrix `P`."""
 
     @abstractmethod
-    def constr_matrix_init(self):
-        pass
+    def constr_matrix_init(self, A: BCOO | BCSR) -> None:
+        """Record `m` and the sparsity pattern of the constraint matrix `A`."""
 
 
 class QCPStructureCPU(QCPStructure):
-    """
-    `P` is assumed to be the upper triangular part of the matrix in the quadratic form.
+    """Problem structure for `HostQCP`: P as its upper triangle, P and A as BCOO.
+
+    **Arguments:**
+    - `P`: BCOO, shape (n, n) or (batch, n, n). The upper triangle (diagonal
+        included) of the objective matrix. Only its sparsity pattern (and the
+        order of its stored entries) is used; with a batch axis, the first
+        matrix's pattern is used and all must share it.
+    - `A`: BCOO, shape (m, n) or (batch, m, n). The constraint matrix, with
+        the same number of batch axes as `P`.
+    - `cone_dims`: the cone K in SCS format, e.g.
+        `{"z": 3, "l": 2, "q": [3, 4], "s": [2], "ep": 1, "p": [0.3, -0.6]}`
+        (see `diffqcp/cones/CONVENTIONS.md`).
+    - `onto_dual`: if `True` (default; what the derivative needs), the cone
+        projector projects onto the dual cone K^*.
+
+    Every stored entry's (row, column) is kept in `P_nonzero_rows` /
+    `P_nonzero_cols` (likewise for A), in the order of `P.data`; data passed
+    later (to `HostQCP`, as perturbations, or as values to
+    `differentiable_solution`) must use that same order.
     """
 
     n: int
@@ -65,9 +99,9 @@ class QCPStructureCPU(QCPStructure):
     def __init__(
         self,
         P: Float[BCOO, "*batch n n"],
-        A: Float[BCOO, "*batch n n"],
+        A: Float[BCOO, "*batch m n"],
         cone_dims: dict[str, int | list[int] | list[float]],
-        onto_dual: bool = True
+        onto_dual: bool = True,
     ):
 
         # NOTE(quill): checks on `cone_dims` done in `ProductConeProjector.__init__`
@@ -91,7 +125,7 @@ class QCPStructureCPU(QCPStructure):
                              + f" but the provided BCOO matrix has {P.n_batch} dimensions.")
 
         if not isinstance(A, BCOO):
-            raise ValueError("The objective matrix `A` must be a `BCOO` JAX matrix,"
+            raise ValueError("The constraint matrix `A` must be a `BCOO` JAX matrix,"
                              + f" but the provided `A` is a {type(A)}.")
 
         # NOTE(quill): could theoretically allow mismatch and broadcast
@@ -108,9 +142,9 @@ class QCPStructureCPU(QCPStructure):
 
         self.N = self.n + self.m + 1
 
-    def obj_matrix_init(self, P: Float[BCOO, "n n"]):
-        # TODO(quill): checks on P being upper triangular.
-        #   (Might as well do since this structure is formed once.)
+    def obj_matrix_init(self, P: Float[BCOO, "n n"]) -> None:
+        """Record `n`, the (row, col) of each stored entry of `P`, and where its diagonal is."""
+        # TODO(quill): check that P is upper triangular (cheap: the structure is formed once).
         self.n = jnp.shape(P)[0]
         self.P_nonzero_rows = P.indices[:, 0]
         self.P_nonzero_cols = P.indices[:, 1]
@@ -118,12 +152,15 @@ class QCPStructureCPU(QCPStructure):
         self.P_diag_indices = P.indices[:, 0][self.P_diag_mask]
         self.P_diag_positions = jnp.nonzero(self.P_diag_mask)[0]
 
-    def constr_matrix_init(self, A: Float[BCOO, "m n"]):
+    def constr_matrix_init(self, A: Float[BCOO, "m n"]) -> None:
+        """Record `m` and the (row, col) of each stored entry of `A`."""
         self.m = jnp.shape(A)[0]
         self.A_nonzero_rows = A.indices[:, 0]
         self.A_nonzero_cols = A.indices[:, 1]
 
     def form_obj(self, P_like: Float[BCOO, "n n"]) -> ObjMatrixCPU:
+        """Wrap an upper triangle with this structure's pattern (P, or a perturbation of it)
+        as the symmetric operator `ObjMatrixCPU`."""
         diag_values = P_like.data[self.P_diag_positions]
         diag = jnp.zeros(self.n)
         diag = diag.at[self.P_diag_indices].set(diag_values)
@@ -131,8 +168,23 @@ class QCPStructureCPU(QCPStructure):
 
 
 class QCPStructureGPU(QCPStructure):
-    """
-    P is assumed to be the full matrix
+    """Problem structure for `DeviceQCP`: P in full, P and A as BCSR.
+
+    **Arguments:**
+    - `P`: BCSR, shape (n, n) or (batch, n, n). The full symmetric objective
+        matrix; only its sparsity pattern is used. With a batch axis, the
+        first matrix's pattern is used and all must share it.
+    - `A`: BCSR, shape (m, n) or (batch, m, n). The constraint matrix, with
+        the same number of batch axes as `P`.
+    - `cone_dims`: the cone K in SCS format (see `QCPStructureCPU`).
+    - `onto_dual`: if `True` (default; what the derivative needs), the cone
+        projector projects onto the dual cone K^*.
+
+    `P` and `A` must be in canonical CSR form (sorted column indices, no
+    duplicates), so that the order of their stored values matches their COO
+    conversion; a `ValueError` is raised otherwise. The structure also
+    precomputes the permutation that turns A's values into those of A^T in
+    CSR form (`form_A_transpose`).
     """
 
     n: int
@@ -157,7 +209,7 @@ class QCPStructureGPU(QCPStructure):
         P: Float[BCSR, "*batch n n"],
         A: Float[BCSR, "*batch m n"],
         cone_dims: dict[str, int | list[int] | list[float]],
-        onto_dual: bool = True
+        onto_dual: bool = True,
     ):
 
         # NOTE(quill): checks on `cone_dims` done in `ProductConeProjector.__init__`
@@ -166,7 +218,6 @@ class QCPStructureGPU(QCPStructure):
         if not isinstance(P, BCSR):
             raise ValueError("The objective matrix `P` must be a `BCSR` JAX matrix,"
                              + f" but the provided `P` is a {type(P)}.")
-        # check if batched
         if P.n_batch == 0:
             self.is_batched = False
             self.obj_matrix_init(P)
@@ -179,7 +230,7 @@ class QCPStructureGPU(QCPStructure):
                              + f" but the provided BCSR matrix has {P.n_batch} dimensions.")
 
         if not isinstance(A, BCSR):
-            raise ValueError("The objective matrix `A` must be a `BCSR` JAX matrix,"
+            raise ValueError("The constraint matrix `A` must be a `BCSR` JAX matrix,"
                              + f" but the provided `A` is a {type(A)}.")
 
         # NOTE(quill): see note in `QCPStructureCPU`
@@ -196,7 +247,8 @@ class QCPStructureGPU(QCPStructure):
 
         self.N = self.n + self.m + 1
 
-    def obj_matrix_init(self, P: Float[BCSR, "n n"]):
+    def obj_matrix_init(self, P: Float[BCSR, "n n"]) -> None:
+        """Record `n`, the CSR index arrays of `P`, and the (row, col) of each stored entry."""
         self.n = jnp.shape(P)[0]
         P_coo = P.to_bcoo()
         # NOTE(quill): the following assumption is needed for the following
@@ -215,7 +267,8 @@ class QCPStructureGPU(QCPStructure):
         self.P_nonzero_rows  = P_coo.indices[:, 0]
         self.P_nonzero_cols = P_coo.indices[:, 1]
 
-    def constr_matrix_init(self, A: Float[BCSR, "m n"]):
+    def constr_matrix_init(self, A: Float[BCSR, "m n"]) -> None:
+        """Record `m`, the CSR index arrays of `A` and of A^T, and the (row, col) of each stored entry."""
         self.m = jnp.shape(A)[0]
         A_coo = A.to_bcoo()
         # NOTE(quill): see note in `obj_matrix_init`
@@ -234,6 +287,7 @@ class QCPStructureGPU(QCPStructure):
         self.A_transpose_info = _coo_to_csr_transpose_map(A_coo)
 
     def form_A_transpose(self, A_like: Float[BCSR, "m n"]) -> Float[BCSR, "n m"]:
+        """The transpose of a matrix with A's sparsity pattern, as BCSR (no sorting at call time)."""
         transposed_data = A_like.data[self.A_transpose_info.sorting_perm]
         return BCSR((transposed_data,
                      self.A_transpose_info.indices,
@@ -245,6 +299,16 @@ class QCPStructureGPU(QCPStructure):
 
 
 class ObjMatrixCPU(AbstractLinearOperator):
+    """The symmetric matrix `U + U^T - diag(U)` as a lineax operator, given its upper triangle U.
+
+    **Arguments:**
+    - `P`: BCOO, the upper triangle U.
+    - `PT`: BCOO, U^T.
+    - `diag`: shape (n,), the diagonal of U (subtracted so it is not counted twice).
+
+    Build it with `QCPStructureCPU.form_obj`.
+    """
+
     P: Float[BCOO, "n n"]
     PT: Float[BCOO, "n n"]
     diag: Float[Array, " n"]
@@ -261,22 +325,28 @@ class ObjMatrixCPU(AbstractLinearOperator):
         self.in_struc = ShapeDtypeStruct(shape=(n,),
                                          dtype=P.data.dtype)
 
-    def mv(self, vector):
+    def mv(self, vector: Float[Array, " n"]) -> Float[Array, " n"]:
         return self.P @ vector + self.PT @ vector - self.diag*vector
 
-    def transpose(self):
+    def transpose(self) -> Self:
         return self
 
-    def as_matrix(self):
+    def as_matrix(self) -> Float[Array, "n n"]:
         return _dense_from_mv(self)
 
-    def in_structure(self):
+    def in_structure(self) -> ShapeDtypeStruct:
         return self.in_struc
 
-    def out_structure(self):
+    def out_structure(self) -> ShapeDtypeStruct:
         return self.in_structure()
 
 class ObjMatrixGPU(AbstractLinearOperator):
+    """A full symmetric BCSR matrix as a lineax operator.
+
+    **Arguments:**
+    - `P`: BCSR, shape (n, n). Assumed symmetric (not checked).
+    """
+
     P: Float[BCSR, "n n"]
     in_struc: ShapeDtypeStruct = eqx.field(static=True)
 
@@ -289,28 +359,31 @@ class ObjMatrixGPU(AbstractLinearOperator):
         self.in_struc = ShapeDtypeStruct(shape=(n,),
                                          dtype=P.data.dtype)
 
-    def mv(self, vector):
+    def mv(self, vector: Float[Array, " n"]) -> Float[Array, " n"]:
         return self.P @ vector
 
-    def transpose(self):
+    def transpose(self) -> Self:
         return self
 
-    def as_matrix(self):
+    def as_matrix(self) -> Float[Array, "n n"]:
         return _dense_from_mv(self)
 
-    def in_structure(self):
+    def in_structure(self) -> ShapeDtypeStruct:
         return self.in_struc
 
-    def out_structure(self):
+    def out_structure(self) -> ShapeDtypeStruct:
         return self.in_structure()
 
+
 @lx.is_symmetric.register(ObjMatrixCPU)
-def _(op):
+def _(op: ObjMatrixCPU) -> bool:
     return True
 
+
 @lx.is_symmetric.register(ObjMatrixGPU)
-def _(op):
+def _(op: ObjMatrixGPU) -> bool:
     return True
 
 
 ObjMatrix: TypeAlias = ObjMatrixCPU | ObjMatrixGPU
+"""Either objective-matrix operator."""

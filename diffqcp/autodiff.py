@@ -24,6 +24,7 @@ otherwise try to differentiate the solver itself, which fails for
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
 import equinox as eqx
 import jax
@@ -36,10 +37,13 @@ from diffqcp.qcp import DeviceQCP, HostQCP
 from diffqcp.solvers import AbstractDerivativeSolver, LSMRSolver
 
 Data = tuple[Float[Array, " nnz_P"], Float[Array, " nnz_A"], Float[Array, " n"], Float[Array, " m"]]
+"""`(P_values, A_values, q, b)`: the stored values of P and A, and q, b."""
 Solution = tuple[Float[Array, " n"], Float[Array, " m"], Float[Array, " m"]]
+"""`(x, y, s)`: a primal-dual solution."""
 
 
 def _build_qcp(data: Data, solution: Solution, structure: QCPStructureCPU | QCPStructureGPU) -> HostQCP | DeviceQCP:
+    """Rebuild the sparse matrices from their values and wrap everything in the matching QCP class."""
     P_values, A_values, q, b = data
     x, y, s = solution
     n, m = structure.n, structure.m
@@ -79,13 +83,33 @@ def differentiable_solution(
 
 
 @differentiable_solution.def_fwd
-def _fwd(perturbed, data, solution, structure, solver=None):
+def _fwd(
+    perturbed: Any,
+    data: Data,
+    solution: Solution,
+    structure: QCPStructureCPU | QCPStructureGPU,
+    solver: AbstractDerivativeSolver | None = None,
+) -> tuple[Solution, None]:
+    """Forward pass: the identity on `solution`, no residuals."""
     del perturbed, data, structure, solver
     return solution, None
 
 
 @differentiable_solution.def_bwd
-def _bwd(residuals, grad_obj, perturbed, data, solution, structure, solver=None):
+def _bwd(
+    residuals: None,
+    grad_obj: tuple[Float[Array, " n"] | None, Float[Array, " m"] | None, Float[Array, " m"] | None],
+    perturbed: Any,
+    data: Data,
+    solution: Solution,
+    structure: QCPStructureCPU | QCPStructureGPU,
+    solver: AbstractDerivativeSolver | None = None,
+) -> Data:
+    """Backward pass: the QCP's `vjp` at `solution`, returned as cotangents of `data`.
+
+    `grad_obj` entries are `None` for outputs that do not affect the loss
+    (treated as zero). Only `data` receives a cotangent.
+    """
     del residuals, perturbed
     x, y, s = solution
     dx, dy, ds = (jnp.zeros_like(v) if g is None else g for g, v in zip(grad_obj, (x, y, s), strict=True))
@@ -105,6 +129,14 @@ def make_differentiable(
     wrapped in `jax.pure_callback`. The returned function solves at `data` and
     attaches the solution map's derivative, so `jax.grad` / `jax.vjp` of any
     function of its output reach `data = (P_values, A_values, q, b)`.
+
+    **Arguments:**
+    - `solve`: maps `data` to a solution `(x, y, s)`. It receives
+        `jax.lax.stop_gradient(data)`, so it is never differentiated.
+    - `structure`: the problem structure whose sparsity pattern `data` uses.
+    - `solver`: derivative solver; defaults to `LSMRSolver()`.
+
+    **Returns:** `differentiable_solve(data) -> (x, y, s)`.
     """
 
     def differentiable_solve(data: Data) -> Solution:

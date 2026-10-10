@@ -116,7 +116,6 @@ exclude = [
     ".pytest_cache",
     ".ruff_cache",
     "experiments",
-    "diffqcp/qcp.py",               # CPU/GPU merge (Wave 4 proposal); optional GPU imports
     "**/*.ipynb",
     # Files slated for refactor in later waves; their existing type debt is
     # tracked in STATUS.md and gets paid down as each wave lands. Adding

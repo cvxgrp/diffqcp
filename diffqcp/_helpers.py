@@ -1,4 +1,4 @@
-"""Helper/Utility functions used """
+"""Small internal helpers shared across `diffqcp`."""
 
 import equinox as eqx
 import numpy as np
@@ -8,25 +8,31 @@ from jaxtyping import Array, Float, Integer
 
 
 def _to_int_list(v: np.ndarray) -> list[int]:
-    """
-    Utility function to ensure eqx.filter_{...} TODO(quill): finish
+    """Convert an integer array to a list of Python ints.
 
-    Parameters
-    ----------
-    v : np.ndarray
-        Should only contain intgers
+    Used for split indices stored as static Equinox fields: static fields must
+    be hashable Python values, not NumPy/JAX scalars.
     """
     return [int(val) for val in v]
 
+
 class _TransposeCSRInfo(eqx.Module):
+    """How to form A^T in CSR form from A's stored values.
+
+    `A^T` has CSR index arrays `indices` / `indptr`, and its stored values are
+    `A_values[sorting_perm]`.
+    """
+
     indices: Integer[Array, "..."]
     indptr: Integer[Array, "..."]
     sorting_perm: Integer[Array, "..."]
 
 
 def _coo_to_csr_transpose_map(mat: Float[BCOO, "_m _n"]) -> _TransposeCSRInfo:
-    """
-    we need `sorting_perm`, otherwise could just .T the BCOO array.
+    """Precompute `_TransposeCSRInfo` for a matrix with `mat`'s sparsity pattern.
+
+    Transposing a COO matrix only swaps its index columns; the CSR form of the
+    transpose also needs the values reordered row-major, which `sorting_perm` does.
     """
     num_rows = mat.shape[0]
     rowsT, colsT = mat.indices[:, 1], mat.indices[:, 0]

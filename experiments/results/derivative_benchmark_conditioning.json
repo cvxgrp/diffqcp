@@ -1,0 +1,240 @@
+[
+ {
+  "t": 0,
+  "N": 52,
+  "clarabel_status": "Solved",
+  "cond_Fp": 23.600987023621173,
+  "cond_Fbar": 20.840372703605464,
+  "cond_K": 140.10691572254456,
+  "methods": {
+   "diffqcp-lsmr": {
+    "grad_err": 1.2841732403431292e-12
+   },
+   "diffqcp-augmented-lu": {
+    "grad_err": 2.1169455808532783e-15
+   },
+   "diffqcp-reduced-lu": {
+    "grad_err": 1.1782350892995563e-16
+   },
+   "svd (dense lstsq)": {
+    "grad_err": 1.4713600143358094e-15
+   },
+   "diffcp-lsqr": {
+    "grad_err": 1.7122772514193224e-07,
+    "forward_err": 0.0
+   },
+   "diffcp-dense": {
+    "grad_err": 2.814869921592467e-09,
+    "forward_err": 0.0
+   },
+   "moreau": {
+    "grad_err": 4.0633309632782485e-07,
+    "forward_err": 3.236854043662501e-07
+   }
+  }
+ },
+ {
+  "t": 1,
+  "N": 52,
+  "clarabel_status": "Solved",
+  "cond_Fp": 119.23223073279496,
+  "cond_Fbar": 96.70762393175772,
+  "cond_K": 597.4447886564452,
+  "methods": {
+   "diffqcp-lsmr": {
+    "grad_err": 7.674552156962527e-11
+   },
+   "diffqcp-augmented-lu": {
+    "grad_err": 2.010163904718524e-15
+   },
+   "diffqcp-reduced-lu": {
+    "grad_err": 1.772273116545146e-16
+   },
+   "svd (dense lstsq)": {
+    "grad_err": 3.4068579267547366e-15
+   },
+   "diffcp-lsqr": {
+    "grad_err": 1.537673427544376e-06,
+    "forward_err": 0.0
+   },
+   "diffcp-dense": {
+    "grad_err": 3.338042992045008e-08,
+    "forward_err": 0.0
+   },
+   "moreau": {
+    "grad_err": 5.376956528939099e-07,
+    "forward_err": 1.3815131939224936e-06
+   }
+  }
+ },
+ {
+  "t": 2,
+  "N": 52,
+  "clarabel_status": "Solved",
+  "cond_Fp": 1119.873409903551,
+  "cond_Fbar": 919.990067338902,
+  "cond_K": 5454.390123387825,
+  "methods": {
+   "diffqcp-lsmr": {
+    "grad_err": 6.459497724889943e-11
+   },
+   "diffqcp-augmented-lu": {
+    "grad_err": 1.2690007137756658e-15
+   },
+   "diffqcp-reduced-lu": {
+    "grad_err": 2.1942413727992782e-16
+   },
+   "svd (dense lstsq)": {
+    "grad_err": 2.746366311267316e-15
+   },
+   "diffcp-lsqr": {
+    "grad_err": 0.0013589012321132254,
+    "forward_err": 0.0
+   },
+   "diffcp-dense": {
+    "grad_err": 4.808349827106634e-10,
+    "forward_err": 0.0
+   },
+   "moreau": {
+    "grad_err": 1.2766278278421297e-06,
+    "forward_err": 1.3426927512223749e-06
+   }
+  }
+ },
+ {
+  "t": 3,
+  "N": 52,
+  "clarabel_status": "Solved",
+  "cond_Fp": 10980.875413705151,
+  "cond_Fbar": 9149.241743658917,
+  "cond_K": 53295.01646485686,
+  "methods": {
+   "diffqcp-lsmr": {
+    "grad_err": 1.975789601522507e-08
+   },
+   "diffqcp-augmented-lu": {
+    "grad_err": 2.761616283393658e-15
+   },
+   "diffqcp-reduced-lu": {
+    "grad_err": 1.256341096880197e-16
+   },
+   "svd (dense lstsq)": {
+    "grad_err": 1.3142441674687144e-14
+   },
+   "diffcp-lsqr": {
+    "grad_err": 0.20063132771326767,
+    "forward_err": 0.0
+   },
+   "diffcp-dense": {
+    "grad_err": 5.7232207181604224e-08,
+    "forward_err": 0.0
+   },
+   "moreau": {
+    "grad_err": 4.198129918236998e-05,
+    "forward_err": 8.598786990449827e-07
+   }
+  }
+ },
+ {
+  "t": 4,
+  "N": 52,
+  "clarabel_status": "Solved",
+  "cond_Fp": 108829.30719045697,
+  "cond_Fbar": 91373.92641649631,
+  "cond_K": 527902.1757656911,
+  "methods": {
+   "diffqcp-lsmr": {
+    "grad_err": 3.768986535257668e-07
+   },
+   "diffqcp-augmented-lu": {
+    "grad_err": 2.909663347922828e-15
+   },
+   "diffqcp-reduced-lu": {
+    "grad_err": 1.34369873678961e-16
+   },
+   "svd (dense lstsq)": {
+    "grad_err": 1.22805191507583e-13
+   },
+   "diffcp-lsqr": {
+    "grad_err": 0.5631955296128522,
+    "forward_err": 0.0
+   },
+   "diffcp-dense": {
+    "grad_err": 2.4430318201001104e-06,
+    "forward_err": 0.0
+   },
+   "moreau": {
+    "grad_err": 0.0027891276225148844,
+    "forward_err": 9.422884949213055e-07
+   }
+  }
+ },
+ {
+  "t": 5,
+  "N": 52,
+  "clarabel_status": "Solved",
+  "cond_Fp": 1083082.12322468,
+  "cond_Fbar": 913338.4211929471,
+  "cond_K": 5252952.241010434,
+  "methods": {
+   "diffqcp-lsmr": {
+    "error": "ValueError: INTERNAL: CpuCallback error calling callback: Traceback (most recent call last):"
+   },
+   "diffqcp-augmented-lu": {
+    "grad_err": 2.037283301676627e-15
+   },
+   "diffqcp-reduced-lu": {
+    "grad_err": 2.0465853153765483e-16
+   },
+   "svd (dense lstsq)": {
+    "grad_err": 7.25792818504911e-13
+   },
+   "diffcp-lsqr": {
+    "grad_err": 0.9032549055388374,
+    "forward_err": 0.0
+   },
+   "diffcp-dense": {
+    "grad_err": 4.365862302869202e-06,
+    "forward_err": 0.0
+   },
+   "moreau": {
+    "grad_err": 0.14991621577562758,
+    "forward_err": 2.174523329547699e-07
+   }
+  }
+ },
+ {
+  "t": 6,
+  "N": 52,
+  "clarabel_status": "Solved",
+  "cond_Fp": 10800533.654004028,
+  "cond_Fbar": 9131697.568465538,
+  "cond_K": 52379056.569381125,
+  "methods": {
+   "diffqcp-lsmr": {
+    "error": "ValueError: INTERNAL: CpuCallback error calling callback: Traceback (most recent call last):"
+   },
+   "diffqcp-augmented-lu": {
+    "grad_err": 2.7201128403363543e-15
+   },
+   "diffqcp-reduced-lu": {
+    "grad_err": 2.5857434459080457e-16
+   },
+   "svd (dense lstsq)": {
+    "grad_err": 7.994226829401657e-12
+   },
+   "diffcp-lsqr": {
+    "grad_err": 0.9745727325679642,
+    "forward_err": 0.0
+   },
+   "diffcp-dense": {
+    "grad_err": 0.00010318628476659213,
+    "forward_err": 0.0
+   },
+   "moreau": {
+    "grad_err": 0.7541523442143432,
+    "forward_err": 3.0634423051164334e-07
+   }
+  }
+ }
+]

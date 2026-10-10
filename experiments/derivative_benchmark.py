@@ -387,8 +387,11 @@ def conditioning_sweep() -> list[dict]:
         row = dict(t=t, N=c.N, clarabel_status=status, **cond, methods={})
         for name, solver in (("diffqcp-lsmr", LSMRSolver()), ("diffqcp-augmented-lu", DenseDirectSolver()),
                              ("diffqcp-reduced-lu", ReducedDirectSolver()), ("svd (dense lstsq)", SVDSolver())):
-            g, _ = diffqcp_vjp(c, point, cot, solver)
-            row["methods"][name] = dict(grad_err=_rel(g, g_hp))
+            try:
+                g, _ = diffqcp_vjp(c, point, cot, solver)
+                row["methods"][name] = dict(grad_err=_rel(g, g_hp))
+            except Exception as err:  # e.g. lineax raising on a non-finite LSMR result
+                row["methods"][name] = dict(error=f"{type(err).__name__}: {str(err).splitlines()[0][:200]}")
         mask = np.r_[np.zeros(c.P_up.nnz, bool), np.ones(c.A.nnz + c.n + c.m, bool)]
         for name, fn in (("diffcp-lsqr", lambda: diffcp_vjp(c, cot, "lsqr")),
                          ("diffcp-dense", lambda: diffcp_vjp(c, cot, "dense")),
@@ -477,12 +480,12 @@ def report(run_path: str, cond_path: str, out_png: str) -> None:
     ax2.grid(True, which="major", color=grid, lw=0.8)
     ax2.legend(frameon=False, fontsize=8.5)
     handles, labels = axes[0, 0].get_legend_handles_labels()
-    for a in axes[0, 1:]:
+    for a in [*axes[0, 1:], ax]:
         for h, lab in zip(*a.get_legend_handles_labels(), strict=True):
             if lab not in labels:
                 handles.append(h)
                 labels.append(lab)
-    fig.legend(handles, labels, loc="upper center", ncol=6, frameon=False, fontsize=9, bbox_to_anchor=(0.5, 0.985))
+    fig.legend(handles, labels, loc="upper center", ncol=7, frameon=False, fontsize=9, bbox_to_anchor=(0.5, 0.985))
     fig.suptitle("QCP derivative (VJP): accuracy and speed, CPU float64", fontsize=12, color=ink, y=0.998)
     fig.tight_layout(rect=(0, 0, 1, 0.95))
     fig.savefig(out_png, dpi=140, facecolor=bg)

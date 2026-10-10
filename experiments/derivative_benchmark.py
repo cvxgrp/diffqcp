@@ -81,12 +81,15 @@ def make_problem(family: str, k: int, seed: int = 0) -> cvx.Problem:
     if family == "socp":  # min c^T x, ||A_i x + b_i|| <= d_i, box
         n, nc = k, max(2, k // 4)
         x = cvx.Variable(n)
+        x0 = rng.uniform(-0.5, 0.5, n)  # strictly feasible point
         cons = [x >= -1, x <= 1]
         for _ in range(nc):
             Ai = sp.random(4, n, density=min(1.0, 6 / n), random_state=rng.integers(1 << 30))
+            bi = rng.standard_normal(4)
+            radius = np.linalg.norm(Ai @ x0 + bi) + 0.5 + rng.uniform()
             # `cvx.SOC` directly: `norm(.) <= d` adds an epigraph variable that is
             # not unique when the cone is inactive (a degenerate problem).
-            cons.append(cvx.SOC(cvx.Constant(2.0 + rng.uniform()), Ai @ x + rng.standard_normal(4)))
+            cons.append(cvx.SOC(cvx.Constant(radius), Ai @ x + bi))
         return cvx.Problem(cvx.Minimize(rng.standard_normal(n) @ x), cons)
     if family == "exp":  # l1-regularized logistic regression
         m, p = 4 * k, k
@@ -156,6 +159,8 @@ class Canon:
         s.max_iter = 400
         P = sp.csc_matrix((self.P_up.data, (self.P_up.row, self.P_up.col)), shape=(self.n, self.n))
         sol = clarabel.DefaultSolver(P, self.q, sp.csc_matrix(self.A), self.b, self.clarabel_cones(), s).solve()
+        if str(sol.status) != "Solved" and tol < 1e-8:  # e.g. InsufficientProgress: retry at the default
+            return self.solve_clarabel(tol=1e-8)
         return str(sol.status), np.array(sol.x), np.array(sol.z), np.array(sol.s)
 
 

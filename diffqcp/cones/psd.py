@@ -1,6 +1,8 @@
 """Projection onto (products of) PSD cones (self-dual), SCS vectorization.
 
-See `CONVENTIONS.md` for the vectorization and the Jacobian formula.
+Also holds the helpers that convert between a symmetric matrix and its SCS
+vectorization. See `CONVENTIONS.md` for the vectorization and the Jacobian
+formula.
 """
 from typing import cast
 
@@ -8,7 +10,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import lineax as lx
-from jaxtyping import Array, Float
+from jaxtyping import Array, Bool, Float
 from lineax import AbstractLinearOperator
 
 from diffqcp.linops import _BlockLinearOperator, _dense_from_mv
@@ -18,25 +20,33 @@ from .abstract_projector import AbstractConeProjector
 
 
 def symm_size_to_dim(size: int) -> int:
+    """Length `k (k + 1) / 2` of the vectorization of a `k x k` symmetric matrix."""
     return int(size * (size + 1) // 2)
 
 
 def symm_dim_to_size(dim: int) -> int:
+    """Inverse of `symm_size_to_dim`: the matrix size `k` for a vector length `dim`."""
     return int((jnp.sqrt(8 * dim + 1) - 1) // 2)
 
 
-def jax_symm_dim_to_size(dim: int) -> jnp.ndarray:
+def jax_symm_dim_to_size(dim: int | Array) -> Array:
+    """`symm_dim_to_size` returning an `int32` JAX array (usable on traced `dim`)."""
     return jnp.floor_divide(jnp.sqrt(8 * dim + 1) - 1, 2).astype(jnp.int32)
 
 
-def vec_symm(X: jnp.ndarray) -> jnp.ndarray:
-    """Vectorize a symmetric matrix X (per SCS convention)."""
+def vec_symm(X: Float[Array, "k k"]) -> Float[Array, " k*(k+1)/2"]:
+    """Vectorize a symmetric `k x k` matrix `X` in the SCS convention.
+
+    The lower triangle is stacked column-major (equivalently, the upper triangle
+    row-major) and off-diagonal entries are scaled by sqrt(2), so that
+    `vec_symm(X) @ vec_symm(Y) == trace(X @ Y)`. Inverse of `unvec_symm`.
+    """
     assert X.ndim == 2, "vec_symm requires that X is a 2-D array."
 
     size = X.shape[0]
     row_idx, col_idx = jnp.triu_indices(size)
 
-    # Grab upper-triangular elements (equivalent to lower-triangular in column-major order)
+    # Upper triangle, row-major (equivalent to the lower triangle, column-major)
     vec = X[row_idx, col_idx]
 
     # Scale off-diagonals by sqrt(2)
@@ -46,7 +56,12 @@ def vec_symm(X: jnp.ndarray) -> jnp.ndarray:
     return vec * scale
 
 
-def unvec_symm(x: Float[Array, " d"], size: int) -> Float[Array, "k k"]:
+def unvec_symm(x: Float[Array, " k*(k+1)/2"], size: int) -> Float[Array, "k k"]:
+    """Inverse of `vec_symm`: rebuild the symmetric `size x size` matrix from `x`.
+
+    Off-diagonal entries of `x` are divided by sqrt(2) and mirrored into both
+    triangles; diagonal entries are copied as is.
+    """
     sqrt2 = jnp.sqrt(jnp.array(2.0, dtype=x.dtype))
     X = jnp.zeros((size, size), dtype=x.dtype)
     idxs = jnp.triu_indices(size)
@@ -58,13 +73,32 @@ def unvec_symm(x: Float[Array, " d"], size: int) -> Float[Array, "k k"]:
 
 
 def form_B_block(v1: Float[Array, " n"], v2: Float[Array, " m"]) -> Float[Array, "m n"]:
+    """The `(m, n)` matrix with entries `v1[j] / (v1[j] - v2[i])`.
+
+    With `v1` the nonnegative and `v2` the negative eigenvalues, this is the
+    off-diagonal block of the PSD Jacobian's `B` matrix (see `CONVENTIONS.md`).
+    Superseded inside the projector by the shape-stable `form_B_block_full`.
+    """
     v1 = jnp.expand_dims(v1, 0).repeat(v2.shape[0], axis=0)
     block = v1 - jnp.expand_dims(v2, 1)
     block = v1 / block
     return block
 
 
-def _psd_jacobian_one_dimensional_mv(dx, lambd, Q, B, size):
+def _psd_jacobian_one_dimensional_mv(
+    dx: Float[Array, " d"],
+    lambd: Float[Array, " k"],
+    Q: Float[Array, "k k"],
+    B: Float[Array, "k k"],
+    size: int,
+) -> Float[Array, " d"]:
+    """Apply the PSD-projection Jacobian at `X = Q diag(lambd) Q^T` to `dx`.
+
+    Identity if `X` is PSD, zero if `X` is negative definite, and otherwise
+    `vec(Q (B o (Q^T dX Q)) Q^T)` with `dX = unvec_symm(dx)` and `o` the
+    elementwise product. Kept separate from the operator class so it can be
+    `vmap`ped.
+    """
 
     def identity_case():
         return dx
@@ -89,6 +123,24 @@ def _psd_jacobian_one_dimensional_mv(dx, lambd, Q, B, size):
 
 
 class _ProjPSDConeJacobian(AbstractLinearOperator):
+    """Jacobian of the projection onto one PSD cone, at the vectorized point `x`.
+
+    With `unvec_symm(x) = Q diag(lambd) Q^T` (ascending eigenvalues), `mv`
+    computes `vec(Q (B o (Q^T dX Q)) Q^T)` (see `_psd_jacobian_one_dimensional_mv`).
+    When built under `vmap` (several same-sized cones, and possibly an outer batch
+    axis), every array carries the corresponding leading axes and `mv` accepts a
+    2D or 3D `dx` to match.
+
+    **Arguments:**
+    - `lambd`: the eigenvalues of `unvec_symm(x)`, in ascending order.
+    - `Q`: the corresponding orthonormal eigenvectors (as columns).
+    - `B`: the `size x size` weight matrix of the Jacobian formula (see
+        `CONVENTIONS.md`).
+    - `size`: the matrix size `k`.
+    - `dim`: the vector length `k (k + 1) / 2`.
+    - `x`: the vectorized point itself; used for `in_structure`.
+    """
+
     lambd: Float[Array, " k"]
     Q: Float[Array, "k k"]
     B: Float[Array, "k k"]
@@ -96,7 +148,15 @@ class _ProjPSDConeJacobian(AbstractLinearOperator):
     dim: int = eqx.field(static=True)
     x: Float[Array, " d"]
 
-    def __init__(self, lambd, Q, B, size, dim, x):
+    def __init__(
+        self,
+        lambd: Float[Array, " k"],
+        Q: Float[Array, "k k"],
+        B: Float[Array, "k k"],
+        size: int,
+        dim: int,
+        x: Float[Array, " d"],
+    ):
         self.lambd = lambd
         self.Q = Q
         self.B = B
@@ -104,7 +164,7 @@ class _ProjPSDConeJacobian(AbstractLinearOperator):
         self.dim = dim
         self.x = x
 
-    def mv(self, dx: Float[Array, "*B d"]):
+    def mv(self, dx: Float[Array, "*batch d"]) -> Float[Array, "*batch d"]:
         dx_num_dims = jnp.ndim(dx)
         x_num_dims = jnp.ndim(self.x)
 
@@ -123,34 +183,47 @@ class _ProjPSDConeJacobian(AbstractLinearOperator):
         else:
             raise ValueError(f"The vector `dx` must be 1D or 2D. The supplied vector is {dx_num_dims}D.")
 
-    def as_matrix(self):
+    def as_matrix(self) -> Float[Array, "d d"]:
         return _dense_from_mv(self)
 
-    def transpose(self):
+    def transpose(self) -> "_ProjPSDConeJacobian":
         return self
 
-    def in_structure(self):
+    def in_structure(self) -> jax.ShapeDtypeStruct:
         return jax.eval_shape(lambda: self.x)
 
-    def out_structure(self):
+    def out_structure(self) -> jax.ShapeDtypeStruct:
         # symmetric
         return self.in_structure()
 
 @lx.is_symmetric.register(_ProjPSDConeJacobian)
-def _(op):
+def _(op: _ProjPSDConeJacobian) -> bool:
     return True
 
 class _BatchedProjPSDConeJacobian(AbstractLinearOperator):
+    """Jacobian of the projection onto `num` consecutive PSD cones of the same size.
+
+    Wraps the `vmap`ped `_ProjPSDConeJacobian` (whose arrays have a leading axis
+    of length `num`) so that it acts on the flat `num * d` slice of the cone
+    vector: `mv` reshapes `dx` to `(num, d)`, applies each cone's Jacobian, and
+    flattens the result. If the projector itself was `vmap`ped over an outer
+    batch, `dx` is 2D, `(batch, num * d)`.
+
+    **Arguments:**
+    - `batched_jacobians`: the per-cone Jacobians, built under `vmap`.
+    - `original_point`: the vectorized points that were projected, shape `(num, d)`.
+    """
+
     batched_jacobians: _ProjPSDConeJacobian
-    original_point: Float[Array, "*batch Bd"]
+    original_point: Float[Array, "*batch num d"]
     original_point_two_d_shape: tuple[int, ...] = eqx.field(static=True)
 
-    def __init__(self, batched_jacobians, original_point):
+    def __init__(self, batched_jacobians: _ProjPSDConeJacobian, original_point: Float[Array, "num d"]):
         self.batched_jacobians = batched_jacobians
         self.original_point = original_point
         self.original_point_two_d_shape = jnp.shape(original_point)
 
-    def mv(self, dx: Float[Array, "*batch Bd"]):
+    def mv(self, dx: Float[Array, "*batch num*d"]) -> Float[Array, "*batch num*d"]:
         dx_dim = jnp.ndim(dx)
         if dx_dim == 2:
             dx_shape = jnp.shape(dx)
@@ -164,13 +237,13 @@ class _BatchedProjPSDConeJacobian(AbstractLinearOperator):
         else:
             raise ValueError("Batched PSD Jacobian expects 1D or 2D input.")
 
-    def as_matrix(self):
+    def as_matrix(self) -> Float[Array, "num*d num*d"]:
         return _dense_from_mv(self)
 
-    def transpose(self):
+    def transpose(self) -> "_BatchedProjPSDConeJacobian":
         return self
 
-    def in_structure(self):
+    def in_structure(self) -> jax.ShapeDtypeStruct:
         curr_shape_dtype = jax.eval_shape(lambda: self.original_point)
         curr_shape = curr_shape_dtype.shape
         curr_dtype = curr_shape_dtype.dtype
@@ -179,33 +252,37 @@ class _BatchedProjPSDConeJacobian(AbstractLinearOperator):
         else:
             return jax.ShapeDtypeStruct(shape=(curr_shape[0] * curr_shape[1],), dtype=curr_dtype)
 
-    def out_structure(self):
+    def out_structure(self) -> jax.ShapeDtypeStruct:
         return self.in_structure()
 
 @lx.is_symmetric.register(_BatchedProjPSDConeJacobian)
-def _(op):
+def _(op: _BatchedProjPSDConeJacobian) -> bool:
     return True
 
 
-def form_B_block_full(lam_pos_full: Array,
-                      lam_neg_full: Array,
-                      pos_mask: Array,
-                      neg_mask: Array,
-                      eps: float = 1e-12) -> Array:
-    """
-    Shape-stable replacement for form_B_block(lam_pos, lam_neg).
-    - lam_pos_full, lam_neg_full: length-n arrays where entries not in the mask are zeroed.
-    - pos_mask, neg_mask: boolean masks of length n (pos_mask True => pos eigen)
-    Returns an (n, n) matrix whose nonzeros live only at rows where neg_mask and cols where pos_mask.
-    The original form_B_block returned a (n_pos, n_neg) block computed as:
-        v1 = expand(v1)  # repeated rows
-        block = v1 - expand(v2)
-        block = v1 / block
-    which is equivalent to block_ij = lam_pos[j] / (lam_pos[j] - lam_neg[i]).
+def form_B_block_full(lam_pos_full: Float[Array, " n"],
+                      lam_neg_full: Float[Array, " n"],
+                      pos_mask: Bool[Array, " n"],
+                      neg_mask: Bool[Array, " n"],
+                      eps: float = 1e-12) -> Float[Array, "n n"]:
+    """Shape-stable (jit-friendly) replacement for `form_B_block(lam_pos, lam_neg)`.
+
+    **Arguments:**
+    - `lam_pos_full`, `lam_neg_full`: length-`n` eigenvalue vectors, zeroed
+        outside `pos_mask` and `neg_mask` respectively.
+    - `pos_mask`, `neg_mask`: complementary boolean masks of length `n` marking
+        the nonnegative and negative eigenvalues.
+    - `eps`: added to the denominator to avoid an exact division by zero.
+
+    **Returns:**
+
+    The `(n, n)` matrix with entries `lam_pos[j] / (lam_pos[j] - lam_neg[i] + eps)`
+    where `neg_mask[i]` and `pos_mask[j]`, and zero elsewhere. Its nonzero block is
+    `form_B_block(lam_pos, lam_neg)` (an `(n_neg, n_pos)` block), up to `eps`.
     """
     # Broadcast to (n_rows, n_cols): rows use lam_neg, cols use lam_pos
     # row i, col j -> lam_pos[j] / (lam_pos[j] - lam_neg[i])
-    # Add tiny eps to avoid exact divide-by-zero (adjust/remove if you require exact)
+    # Add tiny eps to avoid exact divide-by-zero
     denom = (lam_pos_full[None, :] - lam_neg_full[:, None]) + eps
     block = lam_pos_full[None, :] / denom  # shape (n, n)
 
@@ -215,18 +292,33 @@ def form_B_block_full(lam_pos_full: Array,
 
 
 class _PSDConeProjector(AbstractConeProjector):
+    """Projector onto a single PSD cone of `size x size` matrices.
+
+    See `PSDConeProjector` for the cone. `proj_dproj` takes a 1D `x` of length
+    `dim`; it is `vmap`ped to project several cones at once.
+
+    **Arguments:**
+    - `size`: the matrix size `k`.
+    - `dim`: the vector length `k (k + 1) / 2`.
+    """
+
     size: int
     dim: int
 
-    def proj_dproj(self, x: jnp.ndarray):
-        """
-        Assumes x is the vectorized symmetric input (SCS ordering) and returns (proj_x, dproj_obj).
+    def proj_dproj(self, x: Float[Array, " d"]) -> tuple[Float[Array, " d"], _ProjPSDConeJacobian]:
+        """Project the SCS-vectorized symmetric matrix `x` onto the PSD cone.
+
+        **Returns:**
+
+        A 2-tuple of the vectorized projection `vec(Q diag(max(lambd, 0)) Q^T)`
+        (where `unvec_symm(x) = Q diag(lambd) Q^T`) and its Jacobian at `x` as a
+        `_ProjPSDConeJacobian`.
         """
         # Reconstruct symmetric matrix
         X = unvec_symm(x, self.size)
 
         # eigh (returns ascending eigenvalues)
-        lambd, Q = jnp.linalg.eigh(X)  # (n,), (n,n)
+        lambd, Q = jnp.linalg.eigh(X)  # (k,), (k, k)
 
         def identity_case():
             B = jnp.zeros((self.size, self.size), dtype=x.dtype)
@@ -262,7 +354,7 @@ class _PSDConeProjector(AbstractConeProjector):
             br_mask = (pos_mask_full[:, None] & pos_mask_full[None, :])
             B_br = jnp.where(br_mask, 1.0, 0.0).astype(x.dtype)
 
-            # Top-right block (shape-stable full (n,n) matrix but with support only at rows<=k, cols>k)
+            # Top-right block (shape-stable full (size, size) matrix but with support only at rows<=k, cols>k)
             B_tr_full = form_B_block_full(lam_pos_full, lam_neg_full, pos_mask_full, neg_mask_full)
 
             # Final B: bottom-right ones + top-right + its transpose (symmetry)
@@ -288,6 +380,23 @@ class _PSDConeProjector(AbstractConeProjector):
 
 
 class PSDConeProjector(AbstractConeProjector):
+    """Projector onto a product of positive semidefinite cones.
+
+    Each cone is the set of symmetric positive semidefinite `k x k` matrices,
+
+        K_psd = {X in S^k : v^T X v >= 0 for all v},
+
+    stored as its SCS vectorization (lower triangle, column-major, off-diagonal
+    entries scaled by sqrt(2); see `vec_symm` and `CONVENTIONS.md`), a vector of
+    length `k (k + 1) / 2`. The PSD cone is self-dual, so there is no `onto_dual`
+    flag. The input is the `s` block of the cone vector: the vectorized cones
+    concatenated in the order given by `sizes`.
+
+    **Arguments:**
+    - `sizes`: the matrix size `k` of each cone, in order (the `s` entry of the
+        SCS cone dictionary).
+    """
+
     sizes: list[int] = eqx.field(static=True)
     dims: list[int] = eqx.field(static=True)
     size_batches: list[tuple[int, int]] = eqx.field(static=True)
@@ -298,10 +407,24 @@ class PSDConeProjector(AbstractConeProjector):
         self.sizes = sizes
         self.dims = [symm_size_to_dim(s) for s in sizes]
         self.size_batches = _collect_cone_batch_info(_group_cones_in_order(sizes))
-        self.dim_batches = _collect_cone_batch_info(_group_cones_in_order(self.dims)) # NOTE(quill): this is lazy
+        # NOTE(quill): this is lazy; it groups exactly as `size_batches` does.
+        self.dim_batches = _collect_cone_batch_info(_group_cones_in_order(self.dims))
         self.projectors = [_PSDConeProjector(size=size_batch[0], dim=symm_size_to_dim(size_batch[0])) for size_batch in self.size_batches]
 
-    def proj_dproj(self, x: Float[Array, "*B n"]) -> tuple[Float[Array, "*B n"], AbstractLinearOperator]:
+    def proj_dproj(self, x: Float[Array, " n"]) -> tuple[Float[Array, " n"], AbstractLinearOperator]:
+        """Project `x` onto the product of PSD cones.
+
+        **Arguments:**
+        - `x`: a 1D array of length `sum(k (k + 1) / 2 for k in sizes)`. To
+            project a batch of points, `vmap` this method; the returned operator
+            then accepts the matching 2D input.
+
+        **Returns:**
+
+        A 2-tuple of the projection (same shape as `x`) and its Jacobian, a block
+        diagonal `_BlockLinearOperator` with one block per group of consecutive
+        same-sized cones.
+        """
         projs, dproj_ops = [], []
         start_idx = 0
         # NOTE(quill): the following should be unrolled when (JIT) compiled
@@ -314,7 +437,8 @@ class PSDConeProjector(AbstractConeProjector):
             if num_batches == 1:
                 proj_x, dproj_x = projector(xi)
             else:
-                # TODO(quill): ensure this is ordering xi the correct way
+                # Row `j` of `xi` is the `j`-th cone of the group (row-major
+                # reshape of the contiguous slice).
                 xi = jnp.reshape(xi, (num_batches, dim))
                 proj_xi, dproj_xi = eqx.filter_vmap(projector)(xi)
                 proj_x = jnp.ravel(proj_xi)

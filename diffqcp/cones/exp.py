@@ -1,13 +1,13 @@
-"""
-Projection onto exponential cone and the derivative of the projection.
+"""Projection onto (products of) exponential cones, or their duals, and its derivative.
 
 The projection routines are from
 
     Projection onto the exponential cone: a univariate root-finding problem,
-        by Henrik A. Fridberg, 2021.
+        by Henrik A. Friberg, 2021.
 
-And even more specifically, the routines are a port from SCS's implementation
-of Fridberg's routines (see exp_cone.c).
+More specifically, they are a port of SCS's implementation of Friberg's
+routines (see SCS's `exp_cone.c`). The projection is found from a root `rho` of
+the univariate function `hfun`.
 
 The derivative of the projection is taken from https://github.com/cvxgrp/diffcp/blob/master/cpp/src/cones.cpp.
 """
@@ -32,6 +32,7 @@ if jax.config.read("jax_enable_x64"):
 
 
 def _is_finite(x: Float[Array, " "]) -> Bool[Array, ""]:
+    """Whether `|x|` is below the large sentinel value `EXP_CONE_INF_VALUE`."""
     return jnp.abs(x) < EXP_CONE_INF_VALUE
 
 
@@ -40,13 +41,19 @@ def _clip(
     l: Float[Array, " "] | float,
     u: Float[Array, " "] | float,
 ) -> Float[Array, "..."]:
+    """Clip `x` elementwise to the interval `[l, u]`."""
     return jnp.maximum(l, jnp.minimum(u, x))
 
 
 def hfun(
     v: Float[Array, "3"],
     rho: Float[Array, " "] | float,
-):
+) -> Float[Array, " "]:
+    """Friberg's univariate function whose root `rho` determines the projection of `v`.
+
+    `h(rho) = ((rho - 1) r0 + s0) exp(rho) - (r0 - rho s0) exp(-rho)
+    - (rho (rho - 1) + 1) t0`, for `v = (r0, s0, t0)`.
+    """
     r0, s0, t0 = v[0], v[1], v[2]
     exprho = jnp.exp(rho)
     expnegrho = jnp.exp(-rho)
@@ -60,7 +67,8 @@ def hfun(
 def hfun_and_grad_hfun(
     v: Float[Array, "3"],
     rho: Float[Array, " "]
-):
+) -> tuple[Float[Array, " "], Float[Array, " "]]:
+    """Return `hfun(v, rho)` and its derivative with respect to `rho`."""
     r0, s0, t0 = v[0], v[1], v[2]
     exprho = jnp.exp(rho)
     expnegrho = jnp.exp(-rho)
@@ -72,16 +80,28 @@ def hfun_and_grad_hfun(
 
 
 def pomega(rho: Float[Array, " "]) -> Float[Array, " "]:
+    """Primal-side helper `exp(rho) / (rho (rho - 1) + 1)` for `exp_search_bracket`.
+
+    Clipped to at most `exp(2) / 3` for `rho < 2` (port of SCS's `pomega`).
+    """
     val = jnp.exp(rho) / (rho * (rho - 1) + 1.0)
     return jnp.where(rho < 2.0, jnp.minimum(val, jnp.exp(2.0) / 3.0), val)
 
 
 def domega(rho: Float[Array, " "]) -> Float[Array, " "]:
+    """Dual-side helper `-exp(-rho) / (rho (rho - 1) + 1)` for `exp_search_bracket`.
+
+    Clipped to at least `-exp(1) / 3` for `rho > -1` (port of SCS's `domega`).
+    """
     val = -jnp.exp(-rho) / (rho * (rho - 1) + 1.0)
     return jnp.where(rho > -1.0, jnp.maximum(val, -jnp.exp(1.0) / 3.0), val)
 
 
-def ppsi(v: Float[Array, " "]) -> Float[Array, " "]:
+def ppsi(v: Float[Array, "3"]) -> Float[Array, " "]:
+    """Primal-side helper for the bracket on the root of `hfun` when `t0 > 0`.
+
+    Port of SCS's `ppsi`; only `r0, s0 = v[0], v[1]` are used.
+    """
     r0, s0 = v[0], v[1]
     sqrt_arg = r0 * r0 + s0 * s0 - r0 * s0
     sqrt_term = jnp.sqrt(sqrt_arg)
@@ -93,7 +113,11 @@ def ppsi(v: Float[Array, " "]) -> Float[Array, " "]:
     return ((psi - 1.0) * r0 + s0) / (psi * (psi - 1.0) + 1.0)
 
 
-def dpsi(v: Float[Array, "3"]):
+def dpsi(v: Float[Array, "3"]) -> Float[Array, " "]:
+    """Dual-side helper for the bracket on the root of `hfun` when `t0 < 0`.
+
+    Port of SCS's `dpsi`; only `r0, s0 = v[0], v[1]` are used.
+    """
     r0, s0 = v[0], v[1]
 
     def case1():
@@ -108,13 +132,18 @@ def dpsi(v: Float[Array, "3"]):
     return (r0 - psi*s0) / (psi * (psi - 1.0) + 1.0)
 
 
-def proj_primal_exp_cone_heuristic(v: Float[Array, " "]) -> tuple[Float[Array, "3"], Float[Array, " "]]:
-    """Computes heuristic (cheap) projection onto EXP cone.
+def proj_primal_exp_cone_heuristic(v: Float[Array, "3"]) -> tuple[Float[Array, "3"], Float[Array, " "]]:
+    """Compute a heuristic (cheap) projection of `v` onto the exponential cone.
 
-    :param v: Point to (heuristically) project onto the (primal) exponential cone.
-    :type v: Float[Array, " "]
-    :return: Heuristic projection and distance between this projection and provided point.
-    :rtype: tuple[Float[Array, "3"], Float[Array, " "]]
+    The candidate is the better of `(min(r0, 0), 0, max(t0, 0))` and, when
+    `s0 > 0`, `(r0, s0, max(t0, s0 exp(r0 / s0)))`.
+
+    **Arguments:**
+    - `v`: the point `(r0, s0, t0)` to (heuristically) project.
+
+    **Returns:**
+
+    The heuristic projection and its distance to `v`.
     """
     r0, s0, t0 = v[0], v[1], v[2]
 
@@ -151,12 +180,17 @@ def proj_primal_exp_cone_heuristic(v: Float[Array, " "]) -> tuple[Float[Array, "
 
 
 def proj_polar_exp_cone_heuristic(v: Float[Array, "3"]) -> tuple[Float[Array, "3"], Float[Array, " "]]:
-    """Computes heuristic (cheap) projection onto polar EXP cone.
+    """Compute a heuristic (cheap) projection of `v` onto the polar exponential cone.
 
-    :param v: 1D array of size three to heuristically project onto EXP cone.
-    :type v: Float[Array, "3"]
-    :return: Heuristic projection and distance between this projection and provided point.
-    :rtype: tuple[Float[Array, "3"], Float[Array, " "]]
+    The candidate is the better of `(0, min(s0, 0), min(t0, 0))` and, when
+    `r0 > 0`, `(r0, s0, min(t0, -r0 exp(s0 / r0 - 1)))`.
+
+    **Arguments:**
+    - `v`: the point `(r0, s0, t0)` to (heuristically) project.
+
+    **Returns:**
+
+    The heuristic projection onto the polar cone and its distance to `v`.
     """
     r0, s0, t0 = v[0], v[1], v[2]
 
@@ -196,16 +230,20 @@ def exp_search_bracket(
     pdist: Float[Array, " "],
     ddist: Float[Array, " "]
 ) -> tuple[Float[Array, " "], Float[Array, " "]]:
-    """Generate upper and lower search bounds for root of `hfun`.
+    """Generate lower and upper search bounds for the root of `hfun`.
 
-    :param v: Point in R^3 being projected.
-    :type v: Float[Array, "3"]
-    :param pdist: Distance between point and its heuristic projection onto EXP cone.
-    :type pdist: Float[Array, " "]
-    :param ddist: Distance between point and its heuristic projection onto polar EXP cone.
-    :type ddist: Float[Array, " "]
-    :return: Lower and upper `hfun` search bounds, respectively.
-    :rtype: tuple[Float[Array, " "], Float[Array, " "]]
+    **Arguments:**
+    - `v`: the point in R^3 being projected.
+    - `pdist`: distance between `v` and its heuristic projection onto the
+        exponential cone.
+    - `ddist`: distance between `v` and its heuristic projection onto the polar
+        exponential cone.
+
+    **Returns:**
+
+    The lower and upper bounds, respectively. If the signs of `hfun` at the two
+    ends do not bracket a root, both are set to the endpoint with the smaller
+    `|hfun|`.
     """
     EPS = 1e-12
     if not jax.config.read("jax_enable_x64"):
@@ -280,24 +318,21 @@ def root_search_binary(
     x: Float[Array, " "],
     perform_search: Integer[Array, " "] = jnp.array(0)  # noqa: B008  (jnp scalar constant)
 ) -> Float[Array, " "]:
-    """Binary search method for finding root of `hfun`.
+    """Binary search for the root of `hfun`.
 
-    :param v: Point in R^3 being projected.
-    :type v: Float[Array, "3"]
-    :param xl: Lower search bound for the root of `hfun`.
-    :type xl: Float[Array, " "]
-    :param xu: Upper search bound for the root of `hfun`.
-    :type xu: Float[Array, " "]
-    :param x: The intial guess for the root of `hfun`. (A scalar.)
-    :type x: Float[Array, " "]
-    :param perform_search: Whether the binary search should be performed or not.
-        If `perform_search == 0`, the binary search is performed; otherwise it is not.
-        This parameter is included to avoid unnecessarily binary searching after
-        the Newton search due to wrapping the newton method in `vmap`.
-        (See https://kidger.site/thoughts/torch2jax/)
-    :type perform_search: Integer[Array, " "], optional, Default to 0.
-    :return: The root of `hfun`. (A scalar.)
-    :rtype: Float[Array, " "]
+    **Arguments:**
+    - `v`: the point in R^3 being projected.
+    - `xl`: lower search bound for the root.
+    - `xu`: upper search bound for the root.
+    - `x`: the initial guess for the root.
+    - `perform_search`: the search runs only if this is `0`; any other value
+        returns `x` unchanged. This avoids needlessly searching when the call is
+        `vmap`ped, since `vmap` turns a `lax.cond` into a select that evaluates
+        both branches (see https://kidger.site/thoughts/torch2jax/).
+
+    **Returns:**
+
+    The (approximate) root of `hfun`, a scalar.
     """
 
     EPS = 1e-12
@@ -359,25 +394,26 @@ def root_search_newton(
     xu: Float[Array, " "],
     x: Float[Array, " "],
     perform_search: Integer[Array, " "] = jnp.array(0)  # noqa: B008  (jnp scalar constant)
-) -> Float[Array, "3"]:
-    """Univariate damped Newton method for finding the root of `hfun`.
+) -> Float[Array, " "]:
+    """Univariate damped Newton method for the root of `hfun`.
 
-    :param v: The point in R^3 being projected.
-    :type v: Float[Array, "3"]
-    :param xl: A lower bound on the root.
-    :type xl: Float[Array, " "]
-    :param xu: An upper bound on the root.
-    :type xu: Float[Array, " "]
-    :param x: Initial guess of the root.
-    :type x: Float[Array, " "]
-    :param perform_search: Whether the Newton search should be performed or not.
-        If `perform_search == 0`, the newton search is performed; otherwise it is not.
-        This parameter is included to avoid unnecessarily Newton searching
-        due to wrapping the `_proj_exp_and_polar` in `vmap`.
-        (See https://kidger.site/thoughts/torch2jax/)
-    :type perform_search: Integer[Array, " "], optional, Default to 0.
-    :return: The root of `hfun` (a scalar).
-    :rtype: Float[Array, " "]
+    Falls back to `root_search_binary` if Newton's method uses up its iteration
+    budget.
+
+    **Arguments:**
+    - `v`: the point in R^3 being projected.
+    - `xl`: a lower bound on the root.
+    - `xu`: an upper bound on the root.
+    - `x`: the initial guess for the root.
+    - `perform_search`: the search runs only if this is `0`; any other value
+        returns `x` (clipped to `[xl, xu]`). This avoids needlessly searching
+        when `_proj_exp_and_polar` is `vmap`ped, since `vmap` turns a `lax.cond`
+        into a select that evaluates both branches
+        (see https://kidger.site/thoughts/torch2jax/).
+
+    **Returns:**
+
+    The (approximate) root of `hfun`, a scalar.
     """
 
     EPS = 1e-15
@@ -473,14 +509,18 @@ def proj_sol_primal_exp_cone(
     v: Float[Array, "3"],
     rho: Float[Array, " "]
 ) -> tuple[Float[Array, "3"], Float[Array, " "]]:
-    """Project point onto EXP cone using root of Fridberg function.
+    """Recover the projection of `v` onto the exponential cone from a root of `hfun`.
 
-    :param v: Point to project onto the EXP cone.
-    :type v: Float[Array, "3"]
-    :param rho: Root of the Fridberg function.
-    :type rho: Float[Array, " "]
-    :return: The projection of `v` onto the EXP cone and the distance between the point and projection.
-    :rtype: tuple[Array, Array]
+    **Arguments:**
+    - `v`: the point to project.
+    - `rho`: a root of Friberg's function `hfun(v, .)`.
+
+    **Returns:**
+
+    The candidate projection and its distance to `v`. If it is not well defined
+    (`(rho - 1) r0 + s0 <= 0` or `exp(rho)` overflows), returns
+    `(0, 0, EXP_CONE_INF_VALUE)` with distance `EXP_CONE_INF_VALUE` so the caller
+    keeps its heuristic projection.
     """
 
     linrho = (rho - 1) * v[0] + v[1]
@@ -510,14 +550,18 @@ def proj_sol_polar_exp_cone(
     v: Float[Array, "3"],
     rho: Float[Array, " "]
 ) -> tuple[Float[Array, "3"], Float[Array, " "]]:
-    """Project point onto polar EXP cone using root of Fridberg function.
+    """Recover the projection of `v` onto the polar exponential cone from a root of `hfun`.
 
-    :param v: Point to project onto the polar EXP cone.
-    :type v: Float[Array, "3"]
-    :param rho: Root of the Fridberg function.
-    :type rho: Float[Array, " "]
-    :return: Projection of `v` onto the polar cone and the distance between the point and projection.
-    :rtype: tuple[Array, Array]
+    **Arguments:**
+    - `v`: the point to project.
+    - `rho`: a root of Friberg's function `hfun(v, .)`.
+
+    **Returns:**
+
+    The candidate projection onto the polar cone and its distance to `v`. If it is
+    not well defined (`r0 - rho s0 <= 0` or `exp(-rho)` overflows), returns
+    `(0, 0, -EXP_CONE_INF_VALUE)` with distance `EXP_CONE_INF_VALUE` so the
+    caller keeps its heuristic projection.
     """
 
     linrho = v[0] - rho * v[1]
@@ -547,15 +591,13 @@ def proj_sol_polar_exp_cone(
 
 
 def in_exp(v: Float[Array, "3"]) -> Bool[Array, ""]:
-    """Whether `v` is in the EXP cone.
+    """Whether `v = (x, y, z)` is in the exponential cone, up to `CONE_THRESH`.
 
-    :param v: Point in R^3.
-    :type v: Float[Array, "3"]
-    :return: Whether `v` is in the EXP cone.
-    :rtype: bool
+    Tests `y > 0 and y exp(x / y) - z <= CONE_THRESH`, or the closure face
+    `x <= 0, |y| <= CONE_THRESH, z >= 0`.
     """
     x, y, z = v[0], v[1], v[2]
-    # NOTE(quill): yes, all the parethesis are necessary.
+    # NOTE(quill): yes, all the parentheses are necessary.
     #   Otherwise we get:
     #   `TypeError: and does not accept dtype float64 at position 0.`
     #   `Accepted dtypes at position 0 are subtypes of integer, bool`
@@ -564,12 +606,11 @@ def in_exp(v: Float[Array, "3"]) -> Bool[Array, ""]:
 
 
 def in_exp_dual(z: Float[Array, "3"]) -> Bool[Array, ""]:
-    """Whether `z` is in the dual EXP cone.
+    """Whether `z = (u, v, w)` is in the dual exponential cone, up to `CONE_THRESH`.
 
-    :param z: Point in R^3.
-    :type z: Float[Array, "3"]
-    :return: Whether `z` is in the dual EXP cone.
-    :rtype: bool
+    K_exp^* = closure{(u, v, w) : u < 0, -u exp(v / u) <= e w}; the test is
+    `u < -CONE_THRESH and -u exp(v / (u + CONE_THRESH)) - e w <= CONE_THRESH`,
+    or the closure face `|u| <= CONE_THRESH, v >= 0, w >= 0`.
     """
     u, v, w = z[0], z[1], z[2]
     return ((jnp.abs(u) <= CONE_THRESH) & (v >= 0) & (w >= 0)
@@ -577,15 +618,22 @@ def in_exp_dual(z: Float[Array, "3"]) -> Bool[Array, ""]:
 
 
 def _proj_exp_and_polar(v: Float[Array, "3"]) -> tuple[Float[Array, "3"], Float[Array, "3"]]:
-    """Project `v` onto the exponential cone and its polar cone.
+    """Project `v` onto the exponential cone and onto its polar cone.
+
+    Starts from the cheap heuristic projections and, unless they are already
+    optimal, refines them with Friberg's root search on `hfun`.
 
     To use this subroutine for projecting onto the dual cone, negate `v` before
-    passing it and then negate the polar projection output.
+    passing it and then negate the polar projection output
+    (Pi_{K^*}(v) = -Pi_{K^o}(-v), with K^o the polar cone).
 
-    :param v: Point in R^3 to project.
-    :type v: Float[Array, "3"],
-    :return: Projection of `v` onto the EXP cone and its polar cone, respectively.
-    :rtype: tuple[Float[Array, "3"], Float[Array, "3"]]
+    **Arguments:**
+    - `v`: the point in R^3 to project.
+
+    **Returns:**
+
+    The projections of `v` onto the exponential cone and onto its polar cone,
+    respectively.
     """
 
     TOL = 1e-8
@@ -642,22 +690,32 @@ def _dproj_exp(
     v: Float[Array, "3"],
     proj_v: Float[Array, "3"],
 ) -> Float[Array, "3 3"]:
-    """Form the Jacobian of the projection onto the exponential cone.
+    """Form the 3 x 3 Jacobian of the projection onto the exponential cone at `v`.
 
-    To use this subroutine to form the derivative of the projection onto the dual
-    cone, be sure
+    The regions are: `v` in the cone (identity), `v` in the polar cone (zero),
+    `r < 0` and `s < 0` (projection `(r, 0, max(t, 0))`), the projection on the
+    face `s = 0`, and the general case, which reads the Jacobian off the inverse
+    of a 4 x 4 matrix (as in diffcp).
 
-    1. To negate `v` before passing it to this function.
+    To use this subroutine for the derivative of the projection onto the dual
+    cone,
 
-    2. That the provided `proj_v` is in fact the projection of the negated `v`
-    onto the (primal) EXP cone.
+    1. negate `v` before passing it to this function,
 
-    :param v: Point in R^3 being projected.
-    :type v: Float[Array, "3"]
-    :param proj_v: The projection of `v` onto the EXP cone.
-        (**NOT** onto the dual or polar EXP cone.)
-    :type proj_v: Float[Array, "3"]
-    :return: The Jacobian of the projection of `v` onto the EXP cone.
+    2. pass as `proj_v` the projection of the negated `v` onto the (primal)
+    exponential cone,
+
+    3. and use `I - J` for the result `J`
+    (since Pi_{K^*}(v) = v + Pi_K(-v)).
+
+    **Arguments:**
+    - `v`: the point in R^3 being projected.
+    - `proj_v`: the projection of `v` onto the exponential cone
+        (**not** onto the dual or polar cone).
+
+    **Returns:**
+
+    The Jacobian of the projection onto the exponential cone, evaluated at `v`.
     """
     def _both_negative():
         J = jnp.zeros((3, 3), dtype=v.dtype)
@@ -697,8 +755,8 @@ def _dproj_exp(
         J = J.at[3, 3].set(-1.0)
 
         # NOTE(quill): obviously it's best to avoid explicitly inverting matrices,
-        # but in this 3x3 case I'll just be lazy for now.
-        # (Do note that clicking through `inv` shows that we are just computing J_inv = solve(J, eye(3)).)
+        # but in this 4x4 case I'll just be lazy for now.
+        # (Do note that clicking through `inv` shows that we are just computing J_inv = solve(J, eye(4)).)
         J_inv = jla.inv(J)
 
         return J_inv[0:3, 1:4]
@@ -730,9 +788,10 @@ def _dproj_exp(
 
 
 def _exp_cone_jacobian_mv(
-    dx: Float[Array, "num_cones 3"],
+    dx: Float[Array, " num_cones*3"],
     jacobians: Float[Array, "num_cones 3 3"],
-):
+) -> Float[Array, " num_cones*3"]:
+    """Apply the block diagonal matrix with 3 x 3 blocks `jacobians` to the flat `dx`."""
     num_cones = jnp.shape(jacobians)[0]
     dx = jnp.reshape(dx, (num_cones, 3))
     Jdx = eqx.filter_vmap(lambda jac, y: jac @ y, in_axes=(0, 0), out_axes=0)(jacobians, dx)
@@ -740,17 +799,27 @@ def _exp_cone_jacobian_mv(
 
 
 class _ExponentialConeJacobianOperator(lx.AbstractLinearOperator):
+    """Jacobian of the projection onto a product of exponential cones (or their duals).
+
+    Block diagonal with one dense 3 x 3 block per cone, acting on the flat
+    `3 * num_cones` vector. If the projector was `vmap`ped over a batch,
+    `jacobians` is 4D and `mv` takes a 2D `(batch, 3 * num_cones)` input.
+
+    **Arguments:**
+    - `jacobians`: the per-cone 3 x 3 Jacobians, shape `(num_cones, 3, 3)` or
+        `(batch, num_cones, 3, 3)`.
+    """
 
     jacobians: Float[Array, "*num_batches num_cones 3 3"]
 
-    def __check_init__(self):
+    def __check_init__(self) -> None:
         ndim = jnp.ndim(self.jacobians)
         if ndim not in [3, 4]:
             raise ValueError("The `jacobians` argument provided to the `_ExponentialConeJacobianOperator` "
                              f"is {ndim}D, but it must be 3D or 4D.")
 
 
-    def mv(self, dx: Float[Array, "*num_batches num_cones*3"]):
+    def mv(self, dx: Float[Array, "*num_batches num_cones*3"]) -> Float[Array, "*num_batches num_cones*3"]:
 
         ndim = jnp.ndim(dx)
 
@@ -766,13 +835,14 @@ class _ExponentialConeJacobianOperator(lx.AbstractLinearOperator):
             raise ValueError("The `_ExponentialConeJacobianOperator` can only be applied to 1D or 2D inputs "
                              f"but the provided vector is {ndim}D.")
 
-    def as_matrix(self):
+    def as_matrix(self) -> Float[Array, "num_cones*3 num_cones*3"]:
         return _dense_from_mv(self)
 
-    def transpose(self):
+    def transpose(self) -> "_ExponentialConeJacobianOperator":
         return self
 
-    def in_structure(self):
+    # The implicit `None` path is unreachable: `__check_init__` ensures `jacobians` is 3D or 4D.
+    def in_structure(self) -> jax.ShapeDtypeStruct:  # pyright: ignore[reportReturnType]
 
         ndim = jnp.ndim(self.jacobians)
         shape = jnp.shape(self.jacobians)
@@ -787,15 +857,33 @@ class _ExponentialConeJacobianOperator(lx.AbstractLinearOperator):
             return jax.ShapeDtypeStruct(shape=(shape[0], shape[1] * 3),
                                         dtype=dtype)
 
-    def out_structure(self):
+    def out_structure(self) -> jax.ShapeDtypeStruct:
         return self.in_structure()
 
 @lx.is_symmetric.register(_ExponentialConeJacobianOperator)
-def _(op):
+def _(op: _ExponentialConeJacobianOperator) -> bool:
     return True
 
 
 class ExponentialConeProjector(AbstractConeProjector):
+    """Projector onto a product of exponential cones, or of their duals.
+
+    Each cone is
+
+        K_exp = closure{(r, s, t) : s > 0, s exp(r / s) <= t},
+
+    and its dual is
+
+        K_exp^* = closure{(u, v, w) : u < 0, -u exp(v / u) <= e w}.
+
+    The input is `num_cones` consecutive `(r, s, t)` triples (the `ep` or `ed`
+    block of the cone vector). Dual projections use Moreau's decomposition,
+    Pi_{K^*}(v) = v + Pi_K(-v), with Jacobian I - DPi_K(-v).
+
+    **Arguments:**
+    - `num_cones`: the number of exponential cones.
+    - `onto_dual`: if `True`, project onto K_exp^* instead of K_exp.
+    """
 
     num_cones: int = eqx.field(static=True)
     # NOTE(quill): `onto_dual` being static is what allows us to
@@ -807,7 +895,19 @@ class ExponentialConeProjector(AbstractConeProjector):
         self.num_cones = num_cones
         self.onto_dual = onto_dual
 
-    def proj_dproj(self, x):
+    def proj_dproj(self, x: Float[Array, " num_cones*3"]) -> tuple[Float[Array, " num_cones*3"], _ExponentialConeJacobianOperator]:
+        """Project `x` onto the product of exponential (or dual exponential) cones.
+
+        **Arguments:**
+        - `x`: a 1D array of length `3 * num_cones`. Higher-dimensional inputs
+            raise an error; to project a batch, `vmap` this method (the returned
+            operator then accepts the matching 2D input).
+
+        **Returns:**
+
+        A 2-tuple of the projection (same shape as `x`) and its Jacobian, an
+        `_ExponentialConeJacobianOperator`.
+        """
 
         ndimx = jnp.ndim(x)
         if ndimx > 1:

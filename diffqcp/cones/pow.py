@@ -1,4 +1,8 @@
-"""Subroutines for projecting onto power cone and computing JVPs and VJPs with the derivative of the projection.
+"""Projection onto (products of) power cones, or their duals, and its derivative.
+
+The projection follows Hien's Newton method on the scalar `r = |z|` of the
+projected point (see `_pow_calc_xi`); the Jacobian is formed in closed form.
+Negative alphas denote dual cones (SCS convention); see `CONVENTIONS.md`.
 """
 
 import equinox as eqx
@@ -21,7 +25,11 @@ def _pow_calc_xi(
     abs_z: Float[Array, ""],
     alpha: Float[Array, ""]
 ) -> Float[Array, ""]:
-    """x_i from eq 4. from Hien paper"""
+    """x_i from eq. 4 of the Hien paper: the projected `x` coordinate for a given `r`.
+
+    Here `x` is the original coordinate; the result is clipped below at `TOL`.
+    Also used for the `y` coordinate with `1 - alpha` in place of `alpha`.
+    """
     x = 0.5 * (x + jnp.sqrt(x*x + 4. * alpha * (abs_z - ri) * ri))
     return jnp.maximum(x, TOL)
 
@@ -32,7 +40,11 @@ def _gi(
     abs_z: Float[Array, ""],
     alpha: Float[Array, ""]
 ) -> Float[Array, ""]:
-    """gi from diffqcp paper."""
+    """g_i from the diffqcp paper: `2 x_i(r) - x = sqrt(x^2 + 4 alpha (|z| - r) r)`.
+
+    Note that the `xi` argument is the *original* coordinate (`x` or `y`), not an
+    iterate.
+    """
     return 2. * _pow_calc_xi(ri, xi, abs_z, alpha) - xi
 
 
@@ -42,7 +54,7 @@ def _pow_calc_f(
     yi: Float[Array, ""],
     alpha: Float[Array, ""]
 ) -> Float[Array, ""]:
-    """Phi from Hien paper."""
+    """Phi from the Hien paper, `x_i^alpha y_i^(1 - alpha) - r`; its root is the optimal `r`."""
     return xi**alpha * yi**(1.-alpha) - ri
 
 
@@ -53,9 +65,10 @@ def _pow_calc_dxi_dr(
     abs_z: Float[Array, ""],
     alpha: Float[Array, ""]
 ) -> Float[Array, ""]:
-    """
-    `xi` is an iterate toward the projection of `x` or `y` in `(x, y, z)` toward
-    the first element or second element, respectively, in `proj(v)`.
+    """Derivative of `_pow_calc_xi` with respect to `r`, `alpha (|z| - 2 r) / (2 x_i - x)`.
+
+    `xi` is the current iterate for the projected `x` (or `y`) coordinate and `x`
+    the original coordinate.
     """
     return alpha * (abs_z - 2.0 * ri) / (2.0 * xi - x)
 
@@ -67,8 +80,8 @@ def _pow_calc_fp(
     dyidri: Float[Array, ""],
     alpha: Float[Array, ""]
 ) -> Float[Array, ""]:
+    """Derivative of Phi (`_pow_calc_f`) with respect to `r`, for the Newton step."""
     alphac = 1 - alpha
-    # return xi**alpha + yi**alphac * (alpha * dxidri / xi + alphac * dyidri / yi) - 1
     return (xi**alpha) * (yi**alphac) * (alpha * dxidri / xi + alphac * dyidri / yi) - 1.0
 
 
@@ -78,6 +91,7 @@ def _in_cone(
     abs_z: Float[Array, ""],
     alpha: Float[Array, ""]
 ) -> Bool[Array, ""]:
+    """Whether `(x, y, z)` is in the power cone K_alpha, up to `TOL`."""
     return jnp.logical_and(x >= 0,
                            jnp.logical_and(y >= 0,
                                            TOL + x**alpha * y**(1-alpha) >= abs_z))
@@ -89,6 +103,7 @@ def _in_polar_cone(
     abs_w: Float[Array, ""],
     alpha: Float[Array, ""]
 ) -> Bool[Array, ""]:
+    """Whether `(u, v, w)` is in the polar of the power cone K_alpha, up to `TOL`."""
     # Polar of the power cone: u, v <= 0 and (-u/a)^a (-v/(1-a))^(1-a) >= |w|,
     # i.e. (-u)^a (-v)^(1-a) >= |w| a^a (1-a)^(1-a). (This used to *add* the
     # (1-a)^(1-a) factor, misclassifying ~10% of random points.)
@@ -102,6 +117,12 @@ def _proj_dproj(
     v: Float[Array, " 3"],
     alpha: Float[Array, ""]
 ) -> tuple[Float[Array, " 3"], Float[Array, "3 3"]]:
+    """Project `v = (x, y, z)` onto the power cone K_alpha and form the 3 x 3 Jacobian.
+
+    Cases: `v` in the cone (identity), `v` in the polar cone (zero), `|z| <= TOL`
+    (projection `(max(x, 0), max(y, 0), 0)`), and otherwise Hien's Newton solve
+    for `r = |z_proj|` followed by the closed-form Jacobian.
+    """
     x, y, z = v
     abs_z = jnp.abs(z)
 
@@ -120,16 +141,16 @@ def _proj_dproj(
         J = J.at[0, 0].set(0.5 * (jnp.sign(x) + 1.0))
         J = J.at[1, 1].set(0.5 * (jnp.sign(y) + 1.0))
 
-        def case1():  # (x > 0 and y0 < 0 and a_device > 0.5) or (y0 > 0 and x < 0 and alpha < 0.5)
+        def case1():  # (x > 0 and y < 0 and alpha > 0.5) or (y > 0 and x < 0 and alpha < 0.5)
             return 1.0
 
         def case2():  # (x > 0 and y < 0 and alpha < 0.5) or (y > 0 and x < 0 and alpha > 0.5)
             return 0.0
 
-        def case3():  # a_device == 0.5 and x0 > 0 and y0 < 0
+        def case3():  # alpha == 0.5 and x > 0 and y < 0
             return x / (2 * jnp.abs(y) + x)
 
-        def case4():
+        def case4():  # otherwise (e.g. alpha == 0.5 and y > 0 and x < 0)
             return y / (2 * jnp.abs(x) + y)
 
         cond1 = ((x > 0) & (y < 0) & (alpha > 0.5)) | ((y > 0) & (x < 0) & (alpha < 0.5))
@@ -158,7 +179,7 @@ def _proj_dproj(
             # NOTE(quill): we're purposefully using both `i` and `j`.
             #   The former (which is in the function names) is denoting
             #   an element in a vector while the latter is being used to denote
-            #   an interation count.
+            #   an iteration count.
             loop_state["xj"] = _pow_calc_xi(loop_state["rj"], x, abs_z, alpha)
             loop_state["yj"] = _pow_calc_xi(loop_state["rj"], y, abs_z, 1.0 - alpha)
             fj = _pow_calc_f(loop_state["rj"], loop_state["xj"], loop_state["yj"], alpha)
@@ -237,11 +258,16 @@ def _proj_dproj(
 
 
 def _pow_cone_jacobian_mv(
-    dx: Float[Array, "num_cones 3"],
+    dx: Float[Array, " num_cones*3"],
     jacobians: Float[Array, "num_cones 3 3"],
     is_dual: Bool[Array, " num_cones"],
     num_cones: int,
-):
+) -> Float[Array, " num_cones*3"]:
+    """Apply the power-cone Jacobian blocks to the flat `dx`.
+
+    Block `i` is `jacobians[i]`, or `I - jacobians[i]` where `is_dual[i]` (the
+    Moreau form; there `jacobians[i]` was evaluated at the negated point).
+    """
     # num cones could be 1.
     dx_batch = jnp.reshape(dx, (num_cones, 3))
     Jdx = eqx.filter_vmap(lambda jac, y: jac @ y,
@@ -252,6 +278,19 @@ def _pow_cone_jacobian_mv(
 
 
 class _PowerConeJacobianOperator(lx.AbstractLinearOperator):
+    """Jacobian of the projection onto a product of power cones (some possibly dual).
+
+    Block diagonal with one dense 3 x 3 block per cone, acting on the flat
+    `3 * num_cones` vector: block `i` is `jacobians[i]` for a primal cone and
+    `I - jacobians[i]` for a dual one. If the projector was `vmap`ped over a
+    batch, `jacobians` is 4D and `mv` takes a 2D `(batch, 3 * num_cones)` input.
+
+    **Arguments:**
+    - `jacobians`: the Jacobians of the projections onto the primal cones K_alpha,
+        each evaluated at the (sign-flipped for dual cones) point, shape
+        `(num_cones, 3, 3)` or `(batch, num_cones, 3, 3)`.
+    - `is_dual`: which cones are projected onto their dual.
+    """
 
     jacobians: Float[Array, "*num_batches num_cones 3 3"]
     is_dual: Bool[Array, " num_cones"]
@@ -270,7 +309,7 @@ class _PowerConeJacobianOperator(lx.AbstractLinearOperator):
             raise ValueError("The `jacobians` argument provided to the `_PowerConeJacobianOperator` "
                              f"is {ndim}D, but it must be 3D or 4D.")
 
-    def mv(self, dx: Float[Array, "*batch num_cones*3"]):
+    def mv(self, dx: Float[Array, "*batch num_cones*3"]) -> Float[Array, "*batch num_cones*3"]:
         ndim = jnp.ndim(dx)
         if ndim == 1:
             if jnp.ndim(self.jacobians) == 4:
@@ -285,13 +324,14 @@ class _PowerConeJacobianOperator(lx.AbstractLinearOperator):
             raise ValueError("The `_PowerConeJacobianOperator` can only be applied to 1D or 2D inputs "
                              f"but the provided vector is {ndim}D.")
 
-    def as_matrix(self):
+    def as_matrix(self) -> Float[Array, "num_cones*3 num_cones*3"]:
         return _dense_from_mv(self)
 
-    def transpose(self):
+    def transpose(self) -> "_PowerConeJacobianOperator":
         return self
 
-    def in_structure(self):
+    # The implicit `None` path is unreachable: `__init__` ensures `jacobians` is 3D or 4D.
+    def in_structure(self) -> jax.ShapeDtypeStruct:  # pyright: ignore[reportReturnType]
         ndim = jnp.ndim(self.jacobians)
         shape = jnp.shape(self.jacobians)
         dtype = self.jacobians.dtype
@@ -305,14 +345,36 @@ class _PowerConeJacobianOperator(lx.AbstractLinearOperator):
             return jax.ShapeDtypeStruct(shape=(shape[0], shape[1] * 3),
                                         dtype=dtype)
 
-    def out_structure(self):
+    def out_structure(self) -> jax.ShapeDtypeStruct:
         return self.in_structure()
 
 @lx.is_symmetric.register(_PowerConeJacobianOperator)
-def _(op):
+def _(op: _PowerConeJacobianOperator) -> bool:
     return True
 
 class PowerConeProjector(AbstractConeProjector):
+    """Projector onto a product of power cones, some of which may be dual cones.
+
+    For `alpha` in (0, 1) the power cone is
+
+        K_alpha = {(x, y, z) : x >= 0, y >= 0, x^alpha y^(1 - alpha) >= |z|},
+
+    and its dual is
+
+        K_alpha^* = {(u, v, w) : u >= 0, v >= 0,
+                     (u / alpha)^alpha (v / (1 - alpha))^(1 - alpha) >= |w|}.
+
+    Following SCS, a *negative* entry `-alpha` of `alphas` denotes the dual cone
+    K_alpha^*. The input is `len(alphas)` consecutive `(x, y, z)` triples (the `p`
+    block of the cone vector). Dual projections use Moreau's decomposition,
+    Pi_{K^*}(v) = v + Pi_K(-v), with Jacobian I - DPi_K(-v).
+
+    **Arguments:**
+    - `alphas`: one alpha per cone, with `|alpha|` in (0, 1); a negative value
+        means the dual cone with parameter `|alpha|`.
+    - `onto_dual`: if `True`, every cone is replaced by its dual (so an entry
+        `-alpha` then means K_alpha again).
+    """
 
     # NOTE(quill): while similar, this implementation was a bit more challenging than
     # the exponential cone projector implementation as the `cone_dims` dictionary
@@ -336,7 +398,20 @@ class PowerConeProjector(AbstractConeProjector):
             self.is_dual = jnp.logical_not(self.is_dual)
         self.alphas_abs = jnp.abs(self.alphas)
 
-    def proj_dproj(self, x):
+    def proj_dproj(
+        self, x: Float[Array, " num_cones*3"]
+    ) -> tuple[Float[Array, " num_cones*3"], _PowerConeJacobianOperator]:
+        """Project `x` onto the product of (primal or dual) power cones.
+
+        **Arguments:**
+        - `x`: a 1D array of length `3 * len(alphas)`. To project a batch, `vmap`
+            this method.
+
+        **Returns:**
+
+        A 2-tuple of the projection (same shape as `x`) and its Jacobian, a
+        `_PowerConeJacobianOperator`.
+        """
         batch = jnp.reshape(x, (self.num_cones, 3))
         # negate points being projected onto dual
         batch = batch * self.signs[:, None]

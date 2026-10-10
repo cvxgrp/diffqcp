@@ -4,8 +4,9 @@ Conventions (ordering, PSD vectorization, dual cones) are in `CONVENTIONS.md`.
 Design notes:
 - Projectors follow the abstract/final pattern
   (https://docs.kidger.site/equinox/pattern/).
-- The Jacobian operators' `mv` methods handle 2D (and 3D) inputs because
-  `vmap`ping `proj_dproj` gives operators whose leaves carry a batch axis.
+- `proj_dproj` takes a 1D cone vector. The Jacobian operators' `mv` methods
+  also handle 2D (and 3D) inputs because `vmap`ping `proj_dproj` gives
+  operators whose leaves carry a batch axis.
   Replacing this with 1D operators + `vmap` at the boundary is deferred to the
   batching wave (it changes how batched operators are applied).
 """
@@ -15,6 +16,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jaxtyping import Array, Float
 
 from diffqcp._helpers import _to_int_list
 from diffqcp.linops import _BlockLinearOperator
@@ -77,6 +79,7 @@ EXP_DUAL = "ed"
 POW = 'p'
 # Note we don't define a POW_DUAL cone as we stick with SCS convention
 # and use -alpha to create a dual power cone.
+# (These are the keys of the SCS-style cone dictionary; see `CONVENTIONS.md`.)
 
 # The ordering of _CONES matches SCS.
 _CONES = [ZERO, NONNEGATIVE, SOC, PSD, EXP, EXP_DUAL, POW]
@@ -85,6 +88,25 @@ EPS = 1e-12 if jax.config.read("jax_enable_x64") else 1e-06
 
 
 class ProductConeProjector(AbstractConeProjector):
+    """Projector onto a Cartesian product of cones, described by an SCS cone dictionary.
+
+    The cone vector is the concatenation of one block per cone type, in SCS order
+    (`z`, `l`, `q`, `s`, `ep`, `ed`, `p`; see `_CONES` and `CONVENTIONS.md`):
+    zero cone, nonnegative orthant, second-order cones, PSD cones (SCS
+    vectorization), exponential cones, dual exponential cones and power cones
+    (negative alpha = dual power cone). Cone types missing from the dictionary,
+    and empty lists or zero counts for `q`, `s`, `ep`, `ed` and `p`, contribute
+    no block.
+
+    **Arguments:**
+    - `cones`: the SCS-style cone dictionary. `z` and `l` map to a dimension,
+        `q` to a list of SOC dimensions, `s` to a list of matrix sizes, `ep` and
+        `ed` to a number of cones, and `p` to a list of alphas in (-1, 1).
+    - `onto_dual`: if `True`, project onto the dual of the product cone, i.e.
+        onto the product of the dual cones (R^n for `z`; the self-dual `l`, `q`
+        and `s` are unchanged; `ep` and `ed` swap; every power cone is dualized).
+    """
+
     projectors: list[AbstractConeProjector]
     dims: list[int] = eqx.field(static=True)
     split_indices: list[int] = eqx.field(static=True)
@@ -124,7 +146,7 @@ class ProductConeProjector(AbstractConeProjector):
                     dims.append(3 * num_exp_dual)
             elif cone_key == POW:
                 # Power cone: val is a list of floats in (-1, 1), which are the defining alphas.
-                #   val[i] < 0 corresponds to projecting onto the dual exponential cone with
+                #   val[i] < 0 corresponds to projecting onto the dual power cone with
                 #   abs(val[i]) as the defining alpha.
                 alphas = [float(a) for a in cast(list, val)]
                 if len(alphas) > 0:
@@ -143,7 +165,19 @@ class ProductConeProjector(AbstractConeProjector):
         self.dims = dims
         self.split_indices = _to_int_list(np.cumsum(dims[:-1]))
 
-    def proj_dproj(self, x):
+    def proj_dproj(self, x: Float[Array, " n"]) -> tuple[Float[Array, " n"], _BlockLinearOperator]:
+        """Project the cone vector `x` onto the product cone (or its dual).
+
+        **Arguments:**
+        - `x`: a 1D array whose length is the total dimension `sum(self.dims)`.
+            To project a batch of points, `vmap` this method; the returned
+            operator then accepts the matching 2D input.
+
+        **Returns:**
+
+        A 2-tuple of the projection (same shape as `x`) and its Jacobian, a block
+        diagonal `_BlockLinearOperator` with one block per cone type present.
+        """
         chunks = jnp.split(x, self.split_indices, axis=-1)
 
         projs, dproj_ops = [], []

@@ -21,7 +21,7 @@ from cvxpy.reductions.solvers.conic_solvers.scs_conif import dims_to_solver_dict
 from jax.experimental.sparse import BCOO
 
 from diffqcp import HostQCP, QCPStructureCPU
-from diffqcp.solvers import DenseDirectSolver, LSMRSolver
+from diffqcp.solvers import DenseDirectSolver, LSMRSolver, ReducedDirectSolver
 
 from .problems import (
     QCPProbData,
@@ -51,7 +51,9 @@ PROBLEMS = {
 }
 
 
-@pytest.mark.parametrize("solver", [LSMRSolver(), DenseDirectSolver()], ids=["lsmr", "dense"])
+@pytest.mark.parametrize(
+    "solver", [LSMRSolver(), DenseDirectSolver(), ReducedDirectSolver()], ids=["lsmr", "dense", "reduced"]
+)
 @pytest.mark.parametrize("name", list(PROBLEMS))
 def test_qp_jvp_matches_finite_differences(name, solver):
     pd = QCPProbData(PROBLEMS[name]())

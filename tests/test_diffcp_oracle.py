@@ -37,7 +37,7 @@ from cvxpy.reductions.solvers.conic_solvers.scs_conif import dims_to_solver_dict
 from jax.experimental.sparse import BCOO
 
 from diffqcp import HostQCP, QCPStructureCPU
-from diffqcp.solvers import DenseDirectSolver, LSMRSolver
+from diffqcp.solvers import DenseDirectSolver, LSMRSolver, ReducedDirectSolver
 
 from . import problems
 
@@ -68,6 +68,7 @@ PROBLEMS = {
 SOLVERS = {
     "lsmr": LSMRSolver(),
     "dense": DenseDirectSolver(),
+    "reduced": ReducedDirectSolver(),
 }
 
 

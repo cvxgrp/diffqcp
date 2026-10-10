@@ -278,8 +278,9 @@ class HostQCP(AbstractQCP):
         - `dA`: BCOO with the sparsity pattern of `A`.
         - `dq`: shape (n,).
         - `db`: shape (m,).
-        - `solve_method`: `"jax-lsmr"` (default, `LSMRSolver()`) or `"jax-lu"`
-            (`DenseDirectSolver()`). Ignored when `solver` is given.
+        - `solve_method`: `"jax-lsmr"` (default, `LSMRSolver()`), `"jax-lu"`
+            (`DenseDirectSolver()`) or `"jax-lu-reduced"` (`ReducedDirectSolver()`).
+            Ignored when `solver` is given.
         - `solver`: an `AbstractDerivativeSolver` for the derivative system.
 
         **Returns:**
@@ -388,9 +389,10 @@ class DeviceQCP(AbstractQCP):
         - `dq`: shape (n,).
         - `db`: shape (m,).
         - `solve_method`: `"jax-lsmr"` (default, `LSMRSolver()`), `"jax-lu"`
-            (`DenseDirectSolver()`), or `"nvmath-direct"` (a cuDSS factorization
+            (`DenseDirectSolver()`), `"jax-lu-reduced"` (`ReducedDirectSolver()`),
+            or `"nvmath-direct"` (a cuDSS factorization
             of the dense augmented system; needs `nvmath-python` and CuPy, and
-            is not jittable). `solver` takes precedence over the first two.
+            is not jittable). `solver` takes precedence over the first three.
         - `solver`: an `AbstractDerivativeSolver` for the derivative system.
 
         **Returns:**

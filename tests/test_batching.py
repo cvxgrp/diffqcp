@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 from jax.experimental.sparse import BCOO
 
-from diffqcp import DenseDirectSolver, LSMRSolver, differentiable_solution
+from diffqcp import DenseDirectSolver, LSMRSolver, ReducedDirectSolver, differentiable_solution
 from diffqcp.cones.canonical import ProductConeProjector
 
 from .problems import QCPProbData, generate_dense_qp, generate_feasible_sdp
@@ -71,7 +71,9 @@ def test_vmap_over_perturbations(name):
         assert _max_abs_diff(batched_vjp[3][i], single[3]) < 1e-9
 
 
-@pytest.mark.parametrize("solver", [LSMRSolver(), DenseDirectSolver()], ids=["lsmr", "dense"])
+@pytest.mark.parametrize(
+    "solver", [LSMRSolver(), DenseDirectSolver(), ReducedDirectSolver()], ids=["lsmr", "dense", "reduced"]
+)
 def test_vmap_over_problems(solver):
     """A batch of distinct problems (perturbed data, each solved) sharing one
     sparsity pattern: vmap(grad) over (data, solution) matches a loop."""

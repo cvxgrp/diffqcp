@@ -10,6 +10,7 @@ from diffqcp import qcp as qcp_module
 from diffqcp.solvers import (
     DenseDirectSolver,
     LSMRSolver,
+    ReducedDirectSolver,
     augmented_system,
     gauge_fixed,
     materialise_gauge_operator,
@@ -97,6 +98,7 @@ def test_resolve_solver_legacy_strings():
     assert isinstance(resolve_solver("jax-lsmr", None), LSMRSolver)
     assert isinstance(resolve_solver(None, None), LSMRSolver)
     assert isinstance(resolve_solver("jax-lu", None), DenseDirectSolver)
+    assert isinstance(resolve_solver("jax-lu-reduced", None), ReducedDirectSolver)
     custom = LSMRSolver(rtol=1e-9)
     assert resolve_solver("jax-lu", custom) is custom
     with pytest.raises(ValueError, match="Unknown solve_method"):
@@ -110,3 +112,52 @@ def test_device_qcp_vjp_defaults_to_lsmr():
 
     sig = inspect.signature(qcp_module.DeviceQCP.vjp)
     assert sig.parameters["solve_method"].default == "jax-lsmr"
+
+
+def _with_left_null_vector(N, seed, rank=None):
+    """A random N x (N-1) "F'" whose left null space contains u = (u_1, ..., u_{N-1}, 1),
+    like the real F' (left null vector Pi z = (x, y, 1))."""
+    rng = np.random.default_rng(seed)
+    rank = N - 1 if rank is None else rank
+    Fp = rng.standard_normal((N, rank)) @ rng.standard_normal((rank, N - 1))
+    u = np.concatenate([rng.standard_normal(N - 1), [1.0]])
+    return Fp - np.outer(u, u @ Fp) / (u @ u), u
+
+
+@pytest.mark.parametrize("perturb", [0.0, 1e-7], ids=["exact_null_vector", "inexact_solution"])
+def test_reduced_direct_on_full_rank_system(perturb):
+    """Same answers as the least-squares / minimum-norm contract, including when
+    u = (..., 1) is only approximately a left null vector (an inexact solution):
+    the solver uses the exact left null vector of F', not u."""
+    N = 12
+    Fp, _ = _with_left_null_vector(N, seed=4)
+    Fp = Fp + perturb * np.random.default_rng(8).standard_normal(Fp.shape)
+    op = lx.MatrixLinearOperator(jnp.asarray(Fp))
+    rng = np.random.default_rng(5)
+    r = Fp @ rng.standard_normal(N - 1) + perturb * rng.standard_normal(N)
+    d = ReducedDirectSolver().solve(op, jnp.asarray(r))
+    np.testing.assert_allclose(np.asarray(d), np.linalg.lstsq(Fp, r, rcond=None)[0], rtol=1e-9, atol=1e-11)
+    g = rng.standard_normal(N - 1)
+    w = ReducedDirectSolver().solve_transpose(op, jnp.asarray(g))
+    np.testing.assert_allclose(np.asarray(w), np.linalg.pinv(Fp.T) @ g, rtol=1e-9, atol=1e-11)
+
+
+def test_reduced_direct_falls_back_when_rank_deficient():
+    N = 12
+    Fp, _ = _with_left_null_vector(N, seed=6, rank=N - 3)
+    op = lx.MatrixLinearOperator(jnp.asarray(Fp))
+    rng = np.random.default_rng(7)
+    r = Fp @ rng.standard_normal(N - 1)
+    g = Fp.T @ rng.standard_normal(N)
+    d = np.asarray(ReducedDirectSolver().solve(op, jnp.asarray(r)))
+    w = np.asarray(ReducedDirectSolver().solve_transpose(op, jnp.asarray(g)))
+    np.testing.assert_allclose(d, np.linalg.pinv(Fp) @ r, rtol=1e-6, atol=1e-8)
+    np.testing.assert_allclose(w, np.linalg.pinv(Fp.T) @ g, rtol=1e-6, atol=1e-8)
+
+
+@pytest.mark.parametrize("name", STRUCTURE_PROBLEMS)
+def test_real_F_has_left_null_vector_pi_z(name):
+    """(Pi z)^T F = 0 with Pi z = (x, y, 1): why the reduced system drops a redundant row."""
+    qcp, _, F_dense = _dense_F(name)
+    pi_z = np.concatenate([np.asarray(qcp.x), np.asarray(qcp.y), [1.0]])
+    assert np.linalg.norm(pi_z @ F_dense) <= 1e-8 * np.linalg.norm(F_dense) * np.linalg.norm(pi_z)

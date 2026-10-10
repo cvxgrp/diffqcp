@@ -178,6 +178,73 @@ class DenseDirectSolver(AbstractDerivativeSolver):
         return jax.lax.cond(ok, lambda: w, lambda: jnp.linalg.lstsq(Fp.T, rhs)[0])
 
 
+class ReducedDirectSolver(AbstractDerivativeSolver):
+    """Materializes F' and LU-factors the square reduced system F-bar = F'[:N-1, :].
+
+    F-bar is F without its last row and column. At an exact solution the left
+    null vector of F is `Pi z = (x, y, 1)`, whose last entry is 1, so F's last
+    row is a combination of the others and can be dropped. Away from degenerate
+    points F-bar is nonsingular and cond(F-bar) is about cond(F') (within a
+    factor `sqrt(1 + ||x||^2 + ||y||^2)`), whereas the augmented system that
+    `DenseDirectSolver` factors has cond about cond(F')^2 / ||F'||.
+
+    At a solution computed to finite accuracy, `Pi z` is a left null vector
+    of F' only up to the solver's residual, so simply dropping the last row
+    would add an error of order (residual x cond). Instead, the same LU gives
+    the exact left null vector `l = (l-bar, 1)` of F' (`F-bar^T l-bar = -f_N`,
+    with `f_N` the last row of F'), and
+
+    - JVP: `d = F-bar^{-1} r_p[:N-1]` with `r_p = r - (l^T r / l^T l) l`, the
+      least-squares solution of `F' d = r` (range(F') is the complement of l),
+    - VJP: `w = (F-bar^{-T} g, 0) - c l`, with c chosen so that w is
+      orthogonal to l: the minimum-norm solution of `F'^T w = g`,
+
+    i.e. exactly what `DenseDirectSolver` and `LSMRSolver` return. One LU of
+    the (N-1) x (N-1) F-bar serves both; cost is O(N^3) time and O(N^2) memory
+    (about 1/8 of the flops of the augmented LU). Falls back to an SVD
+    least-squares / minimum-norm solve on F' when the smallest LU pivot is
+    below `pivot_rtol` times the largest (default 1000 machine epsilons) or the
+    relative residual of the normal equations exceeds `residual_rtol`.
+    """
+
+    pivot_rtol: float | None = None
+    residual_rtol: float = 1e-8
+
+    def _factor(
+        self, Fp: Float[Array, "N N-1"]
+    ) -> tuple[tuple[Array, Array], Float[Array, " N"], Bool[Array, ""]]:
+        """LU of F-bar, the left null vector l of F', and whether the pivots look nonsingular."""
+        lu, piv = jax.scipy.linalg.lu_factor(Fp[:-1, :])
+        pivots = jnp.abs(jnp.diag(lu))
+        pivot_rtol = 1000 * jnp.finfo(Fp.dtype).eps if self.pivot_rtol is None else self.pivot_rtol
+        l_bar = jax.scipy.linalg.lu_solve((lu, piv), -Fp[-1, :], trans=1)
+        null = jnp.concatenate([l_bar, jnp.ones(1, dtype=Fp.dtype)])
+        return (lu, piv), null, jnp.min(pivots) > pivot_rtol * jnp.max(pivots)
+
+    def _accept(
+        self, well_posed: Bool[Array, ""], residual: Float[Array, ""], rhs: Float[Array, " k"]
+    ) -> Bool[Array, ""]:
+        rel_res = residual / jnp.maximum(jnp.linalg.norm(rhs), jnp.finfo(rhs.dtype).tiny)
+        return well_posed & jnp.isfinite(rel_res) & (rel_res <= self.residual_rtol)
+
+    def solve(self, Fg: lx.AbstractLinearOperator, rhs: Float[Array, " N"]) -> Float[Array, " N-1"]:
+        Fp = materialise_gauge_operator(Fg)
+        lu_piv, null, well_posed = self._factor(Fp)
+        rhs_p = rhs - null * (null @ rhs) / (null @ null)
+        d = jax.scipy.linalg.lu_solve(lu_piv, rhs_p[:-1])
+        # Least-squares optimality: F'^T (F' d - rhs) = 0.
+        ok = self._accept(well_posed, jnp.linalg.norm(Fp.T @ (Fp @ d - rhs)), Fp.T @ rhs)
+        return jax.lax.cond(ok, lambda: d, lambda: jnp.linalg.lstsq(Fp, rhs)[0])
+
+    def solve_transpose(self, Fg: lx.AbstractLinearOperator, rhs: Float[Array, " N-1"]) -> Float[Array, " N"]:
+        Fp = materialise_gauge_operator(Fg)
+        lu_piv, null, well_posed = self._factor(Fp)
+        w = jnp.concatenate([jax.scipy.linalg.lu_solve(lu_piv, rhs, trans=1), jnp.zeros(1, dtype=rhs.dtype)])
+        w = w - null * (null @ w) / (null @ null)
+        ok = self._accept(well_posed, jnp.linalg.norm(Fp.T @ w - rhs), rhs)
+        return jax.lax.cond(ok, lambda: w, lambda: jnp.linalg.lstsq(Fp.T, rhs)[0])
+
+
 def gauge_fixed(F: lx.AbstractLinearOperator) -> lx.AbstractLinearOperator:
     """`F' = F E`, where E appends a zero (fixing `dz_N = 0`)."""
     struct = F.in_structure()
@@ -192,7 +259,8 @@ def gauge_fixed(F: lx.AbstractLinearOperator) -> lx.AbstractLinearOperator:
 def resolve_solver(solve_method: str | None, solver: AbstractDerivativeSolver | None) -> AbstractDerivativeSolver:
     """The solver to use: `solver` if given, else the one named by `solve_method`.
 
-    `"jax-lsmr"` (or `None`) -> `LSMRSolver()`, `"jax-lu"` -> `DenseDirectSolver()`.
+    `"jax-lsmr"` (or `None`) -> `LSMRSolver()`, `"jax-lu"` -> `DenseDirectSolver()`,
+    `"jax-lu-reduced"` -> `ReducedDirectSolver()`.
     `"nvmath-direct"` is handled by `DeviceQCP` before this is called.
     """
     if solver is not None:
@@ -201,7 +269,9 @@ def resolve_solver(solve_method: str | None, solver: AbstractDerivativeSolver | 
         return LSMRSolver()
     if solve_method == "jax-lu":
         return DenseDirectSolver()
+    if solve_method == "jax-lu-reduced":
+        return ReducedDirectSolver()
     raise ValueError(
-        f'Unknown solve_method "{solve_method}". Options: "jax-lsmr", "jax-lu"'
+        f'Unknown solve_method "{solve_method}". Options: "jax-lsmr", "jax-lu", "jax-lu-reduced"'
         ' (and "nvmath-direct" on DeviceQCP), or pass `solver=`.'
     )

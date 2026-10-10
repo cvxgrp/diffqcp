@@ -20,9 +20,16 @@ arithmetic (mpmath).
 
 Speed: median wall time of one VJP after warm-up (jitted for diffqcp; the
 backward pass only for Moreau, which reuses state from its forward solve; the
-`adjoint_derivative` call for diffcp). CPU, float64.
+`adjoint_derivative` call for diffcp). float64.
 
-    python experiments/derivative_benchmark.py run <out.json>
+GPU: with `DIFFQCP_BENCH_DEVICE=device` (and `DIFFQCP_PLATFORM=cuda,cpu`) the
+diffqcp methods run as `DeviceQCP` (full P, BCSR) on the default JAX device,
+plus `solve_method="nvmath-direct"` (cuDSS) when nvmath-python is installed,
+and Moreau runs on CUDA when `moreau.device_available("cuda")`. diffcp always
+runs on the CPU. References are always computed on the CPU with `HostQCP`, so
+GPU results compare directly with CPU ones. Each JSON row records the devices.
+
+    python experiments/derivative_benchmark.py run <out.json> [families] [sizes]
     python experiments/derivative_benchmark.py conditioning <out.json>
     python experiments/derivative_benchmark.py report <run.json> <conditioning.json> <out.png>
 """
@@ -49,13 +56,29 @@ import moreau.jax
 import numpy as np
 import scipy.sparse as sp
 from cvxpy.reductions.solvers.conic_solvers.scs_conif import dims_to_solver_dict
-from jax.experimental.sparse import BCOO
+from jax.experimental.sparse import (
+    BCOO,
+    BCSR,
+)
 
-from diffqcp import DenseDirectSolver, HostQCP, LSMRSolver, QCPStructureCPU, ReducedDirectSolver
+from diffqcp import (
+    DenseDirectSolver,
+    DeviceQCP,
+    HostQCP,
+    LSMRSolver,
+    QCPStructureCPU,
+    QCPStructureGPU,
+    ReducedDirectSolver,
+)
 from diffqcp.solvers import AbstractDerivativeSolver, gauge_fixed, materialise_gauge_operator
 
 DENSE_MAX_N = 3200  # dense methods (and the SVD reference) only up to this N
 REPS = 5
+# "host": HostQCP (P upper triangle, BCOO). "device": DeviceQCP (full P, BCSR) on the default JAX device.
+QCP_KIND = os.environ.get("DIFFQCP_BENCH_DEVICE", "host")
+assert QCP_KIND in ("host", "device"), QCP_KIND
+CPU = jax.devices("cpu")[0]
+MOREAU_DEVICE = "cuda" if QCP_KIND == "device" and moreau.device_available("cuda") else "cpu"
 FAMILIES = ("lp", "socp", "exp", "qp", "pow")
 P_ZERO_FAMILIES = ("lp", "socp", "exp")
 SIZES = {  # family -> size parameter per size class
@@ -192,20 +215,88 @@ def _vjp(qcp, dx, dy, ds, solver):
     return jnp.concatenate([dP.data, dA.data, dq, db])
 
 
-def diffqcp_vjp(c: Canon, point, cot, solver) -> tuple[np.ndarray, float]:
-    qcp = build_qcp(c, *point)
-    args = (qcp, *map(jnp.asarray, cot), solver)
-    g = np.asarray(jax.block_until_ready(_vjp(*args)))  # compile + warm up
+class DeviceLayout:
+    """Full-P / A CSR layout for `DeviceQCP`, and the maps from its gradients to our (COO) order."""
+
+    def __init__(self, c: Canon):
+        n, m = c.n, c.m
+        up = sp.csr_matrix((c.P_up.data, (c.P_up.row, c.P_up.col)), shape=(n, n))
+        self.P_full = (up + sp.triu(up, 1).T).tocsr()
+        self.P_full.sort_indices()
+        self.A = sp.csr_matrix(c.A)
+        self.A.sort_indices()
+        pos = lambda M: sp.csr_matrix((np.arange(1, M.nnz + 1), M.indices, M.indptr), shape=M.shape)  # noqa: E731
+        Pp, Ap = pos(self.P_full), pos(self.A)
+        idx = lambda M, r, k: (np.asarray(M[r, k]).ravel().astype(int) - 1 if r.size  # noqa: E731
+                               else np.zeros(0, dtype=int))
+        self.P_ij = idx(Pp, c.P_up.row, c.P_up.col)
+        self.P_ji = idx(Pp, c.P_up.col, c.P_up.row)
+        self.P_off = c.P_up.row != c.P_up.col
+        self.A_pos = idx(Ap, c.A.row, c.A.col)
+        self.nnz_P, self.nnz_A = self.P_full.nnz, self.A.nnz
+
+    def to_ours(self, g: np.ndarray) -> np.ndarray:
+        """`DeviceQCP` gradient (per stored entry of the symmetric P, CSR order) -> ours (stored upper values)."""
+        gP, gA, rest = g[: self.nnz_P], g[self.nnz_P: self.nnz_P + self.nnz_A], g[self.nnz_P + self.nnz_A:]
+        gP_up = gP[self.P_ij] + np.where(self.P_off, gP[self.P_ji], 0.0) if self.P_ij.size else gP[:0]
+        return np.concatenate([gP_up, gA[self.A_pos], rest])
+
+
+def build_device_qcp(c: Canon, layout: DeviceLayout, x, y, s) -> DeviceQCP:
+    bcsr = lambda M: BCSR((jnp.asarray(M.data), jnp.asarray(M.indices), jnp.asarray(M.indptr)),  # noqa: E731
+                          shape=M.shape)
+    P, A = bcsr(layout.P_full), bcsr(layout.A)
+    structure = QCPStructureGPU(P, A, c.scs_cones)
+    return DeviceQCP(P, A, jnp.asarray(c.q), jnp.asarray(c.b), jnp.asarray(x), jnp.asarray(y), jnp.asarray(s),
+                     structure)
+
+
+def _timed(fn, *args) -> tuple[np.ndarray, float]:
+    g = np.asarray(jax.block_until_ready(fn(*args)))  # compile + warm up
     ts = []
     for _ in range(REPS):
         t0 = time.perf_counter()
-        jax.block_until_ready(_vjp(*args))
+        jax.block_until_ready(fn(*args))
         ts.append(time.perf_counter() - t0)
     return g, float(np.median(ts))
 
 
+def diffqcp_vjp(c: Canon, point, cot, solver) -> tuple[np.ndarray, float]:
+    """The VJP with `solver`, as `HostQCP` or (`DIFFQCP_BENCH_DEVICE=device`) `DeviceQCP`, in our order."""
+    if QCP_KIND == "host":
+        return _timed(_vjp, build_qcp(c, *point), *map(jnp.asarray, cot), solver)
+    layout = DeviceLayout(c)
+    g, t = _timed(_vjp, build_device_qcp(c, layout, *point), *map(jnp.asarray, cot), solver)
+    return layout.to_ours(g), t
+
+
+def diffqcp_nvmath_vjp(c: Canon, point, cot) -> tuple[np.ndarray, float]:
+    """`DeviceQCP.vjp(..., solve_method="nvmath-direct")` (cuDSS on the dense augmented system; not jittable)."""
+    layout = DeviceLayout(c)
+    qcp = build_device_qcp(c, layout, *point)
+
+    def fn(dx, dy, ds):
+        dP, dA, dq, db = qcp.vjp(dx, dy, ds, solve_method="nvmath-direct")
+        return jnp.concatenate([dP.data, dA.data, dq, db])
+
+    g, t = _timed(fn, *map(jnp.asarray, cot))
+    return layout.to_ours(g), t
+
+
 def reference_vjp(c: Canon, point, cot) -> np.ndarray:
-    return np.asarray(_vjp(build_qcp(c, *point), *map(jnp.asarray, cot), SVDSolver()))
+    """Dense SVD reference, always on the CPU with `HostQCP`."""
+    with jax.default_device(CPU):
+        return np.asarray(_vjp(build_qcp(c, *point), *map(jnp.asarray, cot), SVDSolver()))
+
+
+def _nvmath_available() -> bool:
+    if QCP_KIND != "device":
+        return False
+    try:
+        from nvmath.sparse.advanced import DirectSolver  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 # ─── diffcp ───────────────────────────────────────────────────────────────
@@ -249,7 +340,7 @@ def moreau_vjp(c: Canon, cot):
                          so_cone_dims=list(sc.get("q", [])), num_exp_cones=sc.get("ep", 0),
                          power_alphas=list(sc.get("p", [])))
     ipm = moreau.IPMSettings(tol_gap_abs=1e-10, tol_gap_rel=1e-10, tol_feas=1e-10, diff_method="exact")
-    settings = moreau.Settings(device="cpu", enable_grad=True, ipm_settings=ipm, max_iter=400)
+    settings = moreau.Settings(device=MOREAU_DEVICE, enable_grad=True, ipm_settings=ipm, max_iter=400)
     solver = moreau.jax.Solver(n=n, m=m, P_row_offsets=P_full.indptr, P_col_indices=P_full.indices,
                                A_row_offsets=A.indptr, A_col_indices=A.indices, cones=cones, settings=settings)
 
@@ -297,12 +388,15 @@ def run_case(family: str, size: str) -> dict:
     rng = np.random.default_rng(1)
     cot = (rng.standard_normal(c.n), rng.standard_normal(c.m), rng.standard_normal(c.m))
     dense_ok = c.N <= DENSE_MAX_N
-    out = dict(family=family, size=size, n=c.n, m=c.m, N=c.N, clarabel_status=status, methods={})
+    out = dict(family=family, size=size, n=c.n, m=c.m, N=c.N, clarabel_status=status, methods={},
+               diffqcp_qcp=QCP_KIND, diffqcp_device=str(jax.devices()[0]), moreau_device=MOREAU_DEVICE)
     print(f"{family}/{size}: N={c.N} clarabel {status}", flush=True)
     g_ref = reference_vjp(c, point, cot) if dense_ok else None
     if dense_ok:
-        _, F, _ = build_qcp(c, *point)._form_atoms()
-        sv = np.linalg.svd(np.asarray(materialise_gauge_operator(gauge_fixed(F))), compute_uv=False)
+        with jax.default_device(CPU):
+            _, F, _ = build_qcp(c, *point)._form_atoms()
+            Fp_dense = materialise_gauge_operator(gauge_fixed(F))
+        sv = np.linalg.svd(np.asarray(Fp_dense), compute_uv=False)
         out["cond_Fp"] = float(sv[0] / sv[-1])
         print(f"   cond(F') = {out['cond_Fp']:.1e}", flush=True)
 
@@ -321,8 +415,19 @@ def run_case(family: str, size: str) -> dict:
     if dense_ok:
         solvers |= {"diffqcp-augmented-lu": DenseDirectSolver(), "diffqcp-reduced-lu": ReducedDirectSolver()}
     for name, solver in solvers.items():
-        g, t = diffqcp_vjp(c, point, cot, solver)
-        record(name, g, t)
+        try:
+            g, t = diffqcp_vjp(c, point, cot, solver)
+            record(name, g, t)
+        except Exception as err:
+            out["methods"][name] = dict(error=f"{type(err).__name__}: {str(err).splitlines()[0][:200]}")
+            print(f"   {name} failed: {out['methods'][name]['error']}", flush=True)
+    if dense_ok and _nvmath_available():
+        try:
+            g, t = diffqcp_nvmath_vjp(c, point, cot)
+            record("diffqcp-nvmath-direct", g, t)
+        except Exception as err:
+            out["methods"]["diffqcp-nvmath-direct"] = dict(error=f"{type(err).__name__}: {str(err)[:200]}")
+            print(f"   diffqcp-nvmath-direct failed: {err}", flush=True)
     if family in P_ZERO_FAMILIES:
         for mode in ("lsqr", "dense") if dense_ok else ("lsqr",):
             try:
@@ -348,6 +453,11 @@ def _hp_reference(c: Canon, point, cot, dps: int = 50) -> tuple[np.ndarray, dict
     """VJP with w from a 50-digit minimum-norm solve of the float64 F'^T w = -dz[:N-1]."""
     import mpmath
 
+    with jax.default_device(CPU):
+        return _hp_reference_cpu(c, point, cot, dps, mpmath)
+
+
+def _hp_reference_cpu(c: Canon, point, cot, dps, mpmath) -> tuple[np.ndarray, dict]:
     qcp = build_qcp(c, *point)
     _, F, _ = qcp._form_atoms()
     Fp = np.asarray(materialise_gauge_operator(gauge_fixed(F)))
@@ -416,6 +526,7 @@ STYLE = {  # name -> (label, color, marker)
     "diffqcp-lsmr": ("diffqcp LSMR (default)", "#2a78d6", "o"),
     "diffqcp-augmented-lu": ("diffqcp augmented LU (K)", "#8a5cd1", "s"),
     "diffqcp-reduced-lu": ("diffqcp reduced LU (F-bar)", "#0f9fb8", "D"),
+    "diffqcp-nvmath-direct": ("diffqcp nvmath-direct (cuDSS, K)", "#b8890f", "*"),
     "diffcp-lsqr": ("diffcp lsqr", "#eb6834", "^"),
     "diffcp-dense": ("diffcp dense", "#c2410c", "v"),
     "moreau": ("Moreau (exact)", "#1f9e74", "P"),
@@ -486,7 +597,9 @@ def report(run_path: str, cond_path: str, out_png: str) -> None:
                 handles.append(h)
                 labels.append(lab)
     fig.legend(handles, labels, loc="upper center", ncol=7, frameon=False, fontsize=9, bbox_to_anchor=(0.5, 0.985))
-    fig.suptitle("QCP derivative (VJP): accuracy and speed, CPU float64", fontsize=12, color=ink, y=0.998)
+    where = f"diffqcp: {runs[0].get('diffqcp_qcp', 'host')} on {runs[0].get('diffqcp_device', 'cpu')}, " \
+            f"Moreau on {runs[0].get('moreau_device', 'cpu')}, diffcp on cpu"
+    fig.suptitle(f"QCP derivative (VJP): accuracy and speed, float64 ({where})", fontsize=12, color=ink, y=0.998)
     fig.tight_layout(rect=(0, 0, 1, 0.95))
     fig.savefig(out_png, dpi=140, facecolor=bg)
 

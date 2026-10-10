@@ -3,14 +3,21 @@
 Checks, all reported as PASS/FAIL lines in a plain-text report:
 1. Environment: devices, library versions, `nvidia-smi`.
 2. Solver agreement: `DeviceQCP` on the GPU, with every solve method
-   ("jax-lsmr", "jax-lu", "nvmath-direct" if installed), against a CPU
+   ("jax-lsmr", "jax-lu", "jax-lu-reduced", "nvmath-direct" if installed), against a CPU
    `HostQCP` reference, on a dense-P QP, an SDP and a simplex least-squares
    problem. Compares JVPs, the VJP's dq/db, and the VJP's directional
    derivative along a random data perturbation (which also covers dP and dA).
 3. Learning curves: `experiments/learning_curves.py` on the GPU for every
    problem and both `HostQCP` / `DeviceQCP`, final loss vs. the CPU result.
+4. Derivative benchmark: `experiments/derivative_benchmark.py` with
+   `DeviceQCP` on the GPU (and Moreau on CUDA if available): accuracy and
+   speed of every derivative solver vs. diffcp and Moreau, plus the
+   conditioning sweep. Writes JSON + PNG to the results directory for
+   comparison with `experiments/results/derivative_benchmark_*` (CPU).
+   With DIFFQCP_GPU_BENCH_CPU_BASELINE=1 it also runs the CPU (`HostQCP`)
+   benchmark on the same machine, for a same-hardware CPU-vs-GPU comparison.
 
-Usage: python scripts/gpu_checks.py [report_path]
+Usage: python scripts/gpu_checks.py [report_path] [results_dir]
 """
 from __future__ import annotations
 
@@ -112,10 +119,10 @@ def solver_agreement() -> None:
     try:
         from nvmath.sparse.advanced import DirectSolver  # noqa: F401
 
-        methods = ["jax-lsmr", "jax-lu", "nvmath-direct"]
+        methods = ["jax-lsmr", "jax-lu", "jax-lu-reduced", "nvmath-direct"]
     except ImportError:
         out("  nvmath-python not importable: skipping 'nvmath-direct'")
-        methods = ["jax-lsmr", "jax-lu"]
+        methods = ["jax-lsmr", "jax-lu", "jax-lu-reduced"]
 
     cpu = jax.devices("cpu")[0]
     for name, generator in PROBLEMS.items():
@@ -225,11 +232,78 @@ def learning_curves() -> None:
                       f"(CPU {expected:.4e}), {elapsed:.0f}s, statuses {sorted(set(r['statuses'].tolist()))}")
 
 
+# ─── 4. derivative benchmark ──────────────────────────────────────────────
+
+
+BENCH_TIMEOUT_S = 3 * 3600
+
+
+def _bench(args: list[str], env: dict, log_path: str, name: str) -> bool:
+    script = os.path.join(ROOT, "experiments", "derivative_benchmark.py")
+    t0 = time.perf_counter()
+    with open(log_path, "w") as log:
+        try:
+            proc = subprocess.run([sys.executable, script, *args], stdout=log, stderr=subprocess.STDOUT,
+                                  env=env, timeout=BENCH_TIMEOUT_S)
+            code = proc.returncode
+        except subprocess.TimeoutExpired:
+            code = "timeout"
+    ok = code == 0
+    check(name, ok, f"exit {code}, {time.perf_counter() - t0:.0f}s (log: {log_path})")
+    return ok
+
+
+def derivative_benchmark(results_dir: str) -> None:
+    out("\n== 4. Derivative benchmark (experiments/derivative_benchmark.py)")
+    try:
+        import moreau
+
+        out(f"  moreau {metadata.version('moreau')}, CUDA available: {moreau.device_available('cuda')}")
+    except Exception as err:
+        out(f"  moreau not importable ({err}); the Moreau rows will be missing")
+    dry = bool(os.environ.get("DIFFQCP_GPU_CHECK_DRY_RUN"))
+    os.makedirs(results_dir, exist_ok=True)
+    variants = [("gpu", "device", "cpu" if dry else "cuda,cpu")]
+    if os.environ.get("DIFFQCP_GPU_BENCH_CPU_BASELINE"):
+        variants.append(("cpu", "host", "cpu"))
+    for tag, kind, platforms in variants:
+        env = dict(os.environ, DIFFQCP_PLATFORM=platforms, DIFFQCP_BENCH_DEVICE=kind, PYTHONPATH=ROOT)
+        base = os.path.join(results_dir, f"derivative_benchmark_{tag}")
+        run_args = ["run", f"{base}_run.json"]
+        if dry:  # small sizes only, to exercise the plumbing
+            run_args += ["lp,qp", "S"]
+        ok_run = _bench(run_args, env, f"{base}_run.log", f"benchmark {tag} run")
+        ok_cond = _bench(["conditioning", f"{base}_conditioning.json"], env, f"{base}_conditioning.log",
+                         f"benchmark {tag} conditioning sweep")
+        if ok_run and ok_cond:
+            _bench(["report", f"{base}_run.json", f"{base}_conditioning.json", f"{base}.png"], env,
+                   f"{base}_report.log", f"benchmark {tag} figure")
+            _summarize(f"{base}_run.json")
+
+
+def _summarize(run_json: str) -> None:
+    import json
+
+    with open(run_json) as f:
+        rows = json.load(f)
+    for r in rows:
+        cells = []
+        for name, m in r["methods"].items():
+            if "error" in m:
+                cells.append(f"{name}=FAILED")
+            else:
+                err = m.get("grad_err")
+                cells.append(f"{name}={1e3 * m['time']:.1f}ms" + (f"/{err:.0e}" if err is not None else ""))
+        out(f"    {r['family']}/{r['size']} N={r['N']}: " + "  ".join(cells))
+
+
 if __name__ == "__main__":
     report_path = sys.argv[1] if len(sys.argv) > 1 else "gpu_report.txt"
+    results_dir = sys.argv[2] if len(sys.argv) > 2 else os.path.dirname(os.path.abspath(report_path))
     if environment():
         solver_agreement()
         learning_curves()
+        derivative_benchmark(results_dir)
     out("\n== Summary")
     out(f"  {len(failures)} failed check(s)" + (f": {', '.join(failures)}" if failures else ""))
     with open(report_path, "a") as f:

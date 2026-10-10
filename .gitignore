@@ -23,3 +23,5 @@ build/
 gpu_report.txt
 gpu_pytest.log
 gpu_pytest.log.sync
+gpu_results/
+gpu_results.tar.gz

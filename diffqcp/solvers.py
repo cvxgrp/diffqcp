@@ -110,9 +110,13 @@ def augmented_system(Fp: Float[Array, "N N-1"]) -> Float[Array, "2N-1 2N-1"]:
     - JVP: `K [res; d] = [r; 0]` gives the least-squares `d` (and `res = r - F' d`).
     - VJP: `K [w; t] = [0; g]` gives the minimum-norm `w` with `F'^T w = g`.
 
-    One factorization of K serves both. Its condition number is roughly that of
-    F', not its square (unlike the normal equations), and it is the form a
-    sparse symmetric-indefinite direct solver (LDL^T, e.g. cuDSS) would factor.
+    One factorization of K serves both, and it is the form a sparse
+    symmetric-indefinite direct solver (LDL^T, e.g. cuDSS) would factor. With
+    sigma_i the singular values of F', the eigenvalues of K are 1 and
+    (1 +- sqrt(1 + 4 sigma_i^2)) / 2, so cond(K) ~ max(sigma_1, 1) / sigma_min^2:
+    between cond(F') and cond(F')^2, better than the normal equations when
+    sigma_1 > 1. Scaling the identity block by ~sigma_min would bring it to
+    ~sqrt(2) cond(F') (Bjorck); not done yet.
     """
     N, Nm1 = Fp.shape
     top = jnp.concatenate([jnp.eye(N, dtype=Fp.dtype), Fp], axis=1)
